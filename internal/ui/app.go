@@ -68,12 +68,13 @@ type Controller struct {
 	allAudio      *widget.Check
 	subtitles     *widget.Select
 	command       *widget.Entry
-	warnings      *widget.Label
 	progress      *widget.ProgressBar
 	progressInfo  *widget.Label
 	log           *widget.Entry
 	start         *widget.Button
 	cancel        *widget.Button
+	tabs          *container.AppTabs
+	runTab        *container.TabItem
 }
 
 func New(a fyne.App, initialInput string) (*Controller, error) {
@@ -166,13 +167,13 @@ func (c *Controller) createWidgets() {
 
 	c.command = widget.NewMultiLineEntry()
 	c.command.Disable()
-	c.command.SetMinRowsVisible(4)
-	c.warnings = widget.NewLabel("")
-	c.warnings.Wrapping = fyne.TextWrapWord
+	c.command.Wrapping = fyne.TextWrapWord
+	c.command.SetMinRowsVisible(3)
 	c.progress = widget.NewProgressBar()
 	c.progressInfo = widget.NewLabel("")
 	c.log = widget.NewMultiLineEntry()
 	c.log.Disable()
+	c.log.Wrapping = fyne.TextWrapWord
 	c.log.SetMinRowsVisible(12)
 	c.start = widget.NewButton("Start", c.startConversion)
 	c.cancel = widget.NewButton("Cancel", c.cancelConversion)
@@ -227,30 +228,24 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		widget.NewFormItem("Subtitles", c.subtitles),
 	))
 
-	copyButton := widget.NewButton("Copy command", func() {
-		c.app.Clipboard().SetContent(c.command.Text)
-	})
-	commandTab := container.NewBorder(
-		container.NewVBox(c.warnings, copyButton),
-		nil, nil, nil,
-		container.NewVScroll(c.command),
-	)
 	runTab := container.NewBorder(
-		container.NewVBox(c.status, c.progress, c.progressInfo),
-		container.NewHBox(c.start, c.cancel),
-		nil, nil,
-		container.NewVScroll(c.log),
+		container.NewVBox(widget.NewLabel("Command"), c.command, widget.NewLabel("Output")),
+		nil, nil, nil,
+		c.log,
 	)
 
-	tabs := container.NewAppTabs(
+	c.runTab = container.NewTabItem("Run", runTab)
+	c.tabs = container.NewAppTabs(
 		container.NewTabItem("Input", inputTab),
 		container.NewTabItem("Output", outputTab),
 		container.NewTabItem("Video", videoTab),
 		container.NewTabItem("Audio & Subtitles", audioTab),
-		container.NewTabItem("Command", commandTab),
-		container.NewTabItem("Run", runTab),
+		c.runTab,
 	)
-	return container.NewBorder(c.profileBar(), nil, nil, nil, tabs)
+	status := container.NewHBox(c.status, c.progressInfo)
+	actions := container.NewHBox(c.start, c.cancel)
+	statusBar := container.NewBorder(nil, nil, status, actions, c.progress)
+	return container.NewBorder(c.profileBar(), statusBar, nil, nil, c.tabs)
 }
 
 func (c *Controller) outputTemplateHelpButton() *widget.Button {
@@ -378,6 +373,7 @@ func (c *Controller) changed(string) {
 func (c *Controller) refresh() {
 	p := c.profileFromWidgets()
 	c.outputPath = ""
+	c.command.SetText("")
 	if c.inputPath != "" {
 		width, height := dimensions(p, c.media)
 		resolved, err := templates.Resolve(p.OutputTemplate, templates.Request{
@@ -394,30 +390,19 @@ func (c *Controller) refresh() {
 		} else {
 			c.outputPath = resolved
 			c.outputPreview.SetText(resolved)
+			plan, buildErr := ffmpeg.BuildCommand(ffmpeg.BuildRequest{
+				FFmpegPath: c.config.FFmpeg.FFmpegPath,
+				InputPath:  c.inputPath,
+				OutputPath: c.outputPath,
+				Profile:    p,
+				Media:      c.media,
+			})
+			if buildErr == nil {
+				c.command.SetText(plan.Preview)
+			}
 		}
 	}
-
-	result := validation.Validate(p, &c.media, c.caps, c.inputPath, c.outputPath)
-	messages := issueMessages(result)
-	if c.outputPath != "" && result.Valid() {
-		plan, err := ffmpeg.BuildCommand(ffmpeg.BuildRequest{
-			FFmpegPath: c.config.FFmpeg.FFmpegPath,
-			InputPath:  c.inputPath,
-			OutputPath: c.outputPath,
-			Profile:    p,
-			Media:      c.media,
-		})
-		if err != nil {
-			messages = append(messages, "Error: "+err.Error())
-		} else {
-			c.command.SetText(plan.Preview)
-			messages = append(messages, plan.Warnings...)
-		}
-	} else {
-		c.command.SetText("")
-	}
-	c.warnings.SetText(strings.Join(messages, "\n"))
-	if result.Valid() && c.outputPath != "" && c.runCancel == nil {
+	if c.runCancel == nil {
 		c.start.Enable()
 	} else {
 		c.start.Disable()
@@ -426,9 +411,14 @@ func (c *Controller) refresh() {
 
 func (c *Controller) startConversion() {
 	p := c.profileFromWidgets()
-	resolved, err := c.resolveOutput(p, time.Now())
-	if err != nil {
-		dialog.ShowError(err, c.window)
+	resolved, resolveErr := c.resolveOutput(p, time.Now())
+	result := validation.Validate(p, &c.media, c.caps, c.inputPath, resolved)
+	messages := issueMessages(result)
+	if resolveErr != nil {
+		messages = append([]string{"Error: " + resolveErr.Error()}, messages...)
+	}
+	if resolveErr != nil || !result.Valid() {
+		c.showRunError("Validation failed", strings.Join(messages, "\n"))
 		return
 	}
 	start := func(overwrite bool) {
@@ -438,10 +428,10 @@ func (c *Controller) startConversion() {
 			Profile: p, Media: c.media, Overwrite: overwrite,
 		})
 		if buildErr != nil {
-			dialog.ShowError(buildErr, c.window)
+			c.showRunError("Command generation failed", buildErr.Error())
 			return
 		}
-		c.run(plan)
+		c.run(plan, messages)
 	}
 	if _, statErr := os.Stat(resolved); statErr == nil {
 		dialog.NewConfirm("Overwrite output?",
@@ -456,15 +446,31 @@ func (c *Controller) startConversion() {
 	start(false)
 }
 
-func (c *Controller) run(plan model.RunPlan) {
+func (c *Controller) showRunError(status, message string) {
+	c.status.SetText(status)
+	c.progressInfo.SetText("")
+	c.progress.SetValue(0)
+	c.log.SetText(message)
+	c.tabs.Select(c.runTab)
+}
+
+func (c *Controller) run(plan model.RunPlan, messages []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.runCancel = cancel
 	c.start.Disable()
 	c.cancel.Enable()
 	c.status.SetText("Running")
 	c.progress.SetValue(0)
-	c.log.SetText("")
+	c.progressInfo.SetText("")
 	c.command.SetText(plan.Preview)
+	for _, warning := range plan.Warnings {
+		messages = append(messages, "Warning: "+warning)
+	}
+	if len(messages) == 0 {
+		c.log.SetText("")
+	} else {
+		c.log.SetText(strings.Join(messages, "\n") + "\n\n")
+	}
 	go func() {
 		err := (transcode.Runner{}).Run(ctx, plan, c.media.Duration, transcode.Callbacks{
 			OnLog: func(line string) {
