@@ -96,6 +96,48 @@ func TestVideoCopyDoesNotFilter(t *testing.T) {
 	}
 }
 
+func TestBuildCommandUsesIntegerBoundaryValues(t *testing.T) {
+	t.Parallel()
+
+	profile := model.BuiltinProfiles()[0]
+	profile.Video.Encoder = "av1_vaapi"
+	profile.Video.RateControl = "CQP"
+	profile.Video.QP = 255
+	profile.Audio.Mode = model.AudioEncode
+	profile.Audio.Encoder = "flac"
+	profile.Audio.Compression = 12
+	request := BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+	}
+	plan, err := BuildCommand(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]string{{"-qp", "255"}, {"-compression_level", "12"}} {
+		if !containsPair(plan.Args, pair[0], pair[1]) {
+			t.Errorf("missing %q %q in %#v", pair[0], pair[1], plan.Args)
+		}
+	}
+
+	profile.Video.Encoder = "libsvtav1"
+	profile.Video.RateControl = "CRF"
+	profile.Video.CRF = 63
+	profile.Video.Preset = "13"
+	request.Profile = profile
+	plan, err = BuildCommand(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]string{{"-crf", "63"}, {"-preset", "13"}} {
+		if !containsPair(plan.Args, pair[0], pair[1]) {
+			t.Errorf("missing %q %q in %#v", pair[0], pair[1], plan.Args)
+		}
+	}
+}
+
 func containsPair(args []string, key, value string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == key && args[i+1] == value {

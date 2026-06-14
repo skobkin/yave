@@ -155,25 +155,26 @@ func validateVideo(result *Result, video model.VideoSettings, encoder string) {
 
 	switch {
 	case strings.HasSuffix(encoder, "_vaapi"):
-		validateVAAPI(result, video)
+		validateVAAPI(result, video, encoder)
 	case encoder == "libx264" || encoder == "libx265":
 		if !strings.EqualFold(strings.TrimSpace(video.RateControl), "CRF") {
 			result.error("profile.video.rate_control", "%s supports CRF rate control only", encoder)
 		}
-		if video.CRF < 0 || video.CRF > 51 {
-			result.error("profile.video.crf", "CRF for %s must be between 0 and 51", encoder)
+		if r, ok := CRFRange(encoder); ok && !r.Contains(video.CRF) {
+			result.error("profile.video.crf", "CRF for %s must be between %d and %d", encoder, r.Min, r.Max)
 		}
 	case encoder == "libsvtav1":
-		validateCRFOrBitrate(result, video, encoder, 63)
-		if preset, err := strconv.Atoi(strings.TrimSpace(video.Preset)); err != nil || preset < 0 || preset > 13 {
-			result.error("profile.video.preset", "SVT-AV1 preset must be an integer between 0 and 13")
+		validateCRFOrBitrate(result, video, encoder)
+		r, _ := PresetRange(encoder)
+		if preset, err := strconv.Atoi(strings.TrimSpace(video.Preset)); err != nil || !r.Contains(preset) {
+			result.error("profile.video.preset", "SVT-AV1 preset must be an integer between %d and %d", r.Min, r.Max)
 		}
 	case encoder == "libvpx-vp9":
-		validateCRFOrBitrate(result, video, encoder, 63)
+		validateCRFOrBitrate(result, video, encoder)
 	}
 }
 
-func validateVAAPI(result *Result, video model.VideoSettings) {
+func validateVAAPI(result *Result, video model.VideoSettings, encoder string) {
 	mode := strings.ToUpper(strings.TrimSpace(video.RateControl))
 	if !oneOf(mode, "AUTO", "CQP", "VBR", "CBR") {
 		result.error("profile.video.rate_control", "VAAPI rate control must be Auto, CQP, VBR, or CBR")
@@ -185,8 +186,8 @@ func validateVAAPI(result *Result, video model.VideoSettings) {
 
 	switch mode {
 	case "CQP":
-		if video.QP < 1 || video.QP > 51 {
-			result.error("profile.video.qp", "VAAPI QP must be between 1 and 51")
+		if r, ok := QPRange(encoder); ok && !r.Contains(video.QP) {
+			result.error("profile.video.qp", "VAAPI QP for %s must be between %d and %d", encoder, r.Min, r.Max)
 		}
 	case "VBR", "CBR":
 		validateRequiredBitrate(result, "profile.video.bitrate", video.Bitrate, mode+" target bitrate")
@@ -197,12 +198,12 @@ func validateVAAPI(result *Result, video model.VideoSettings) {
 	validateOptionalBitrate(result, "profile.video.bufsize", video.Bufsize)
 }
 
-func validateCRFOrBitrate(result *Result, video model.VideoSettings, encoder string, maxCRF int) {
+func validateCRFOrBitrate(result *Result, video model.VideoSettings, encoder string) {
 	mode := strings.ToUpper(strings.TrimSpace(video.RateControl))
 	switch mode {
 	case "CRF":
-		if video.CRF < 0 || video.CRF > maxCRF {
-			result.error("profile.video.crf", "CRF for %s must be between 0 and %d", encoder, maxCRF)
+		if r, ok := CRFRange(encoder); ok && !r.Contains(video.CRF) {
+			result.error("profile.video.crf", "CRF for %s must be between %d and %d", encoder, r.Min, r.Max)
 		}
 		validateOptionalBitrate(result, "profile.video.bitrate", video.Bitrate)
 	case "VBR", "BITRATE":
@@ -248,8 +249,9 @@ func validateAudio(result *Result, audio model.AudioSettings, capabilities model
 	case "libmp3lame", "mp3":
 		validateChoice(result, "profile.audio.bitrate", audio.Bitrate, "128k", "192k", "256k", "320k")
 	case "flac":
-		if audio.Compression < 0 || audio.Compression > 12 {
-			result.error("profile.audio.compression", "FLAC compression level must be between 0 and 12")
+		r, _ := AudioCompressionRange(encoder)
+		if !r.Contains(audio.Compression) {
+			result.error("profile.audio.compression", "FLAC compression level must be between %d and %d", r.Min, r.Max)
 		}
 	}
 }

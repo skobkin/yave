@@ -9,6 +9,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
 func TestRunFieldsUseWordWrapping(t *testing.T) {
@@ -100,5 +101,134 @@ func TestShowRunErrorSelectsRunTab(t *testing.T) {
 	}
 	if c.log.Text != "Error: input path is required" {
 		t.Fatalf("output = %q", c.log.Text)
+	}
+}
+
+func TestEncoderSwitchUpdatesIntegerRangesAndClamps(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	c.videoEncoder.SetSelected("av1_vaapi")
+	c.rateControl.SetSelected("CQP")
+	c.qp.SetValue(255)
+	c.videoEncoder.SetSelected("h264_vaapi")
+
+	if c.qp.Value() != 51 {
+		t.Fatalf("QP = %d, want clamped value 51", c.qp.Value())
+	}
+	if c.qp.slider.Min != 1 || c.qp.slider.Max != 51 {
+		t.Fatalf("QP range = %.0f-%.0f, want 1-51", c.qp.slider.Min, c.qp.slider.Max)
+	}
+
+	c.videoEncoder.SetSelected("libsvtav1")
+	c.rateControl.SetSelected("CRF")
+	c.crf.SetValue(63)
+	c.videoEncoder.SetSelected("libx264")
+
+	if c.crf.Value() != 51 {
+		t.Fatalf("CRF = %d, want clamped value 51", c.crf.Value())
+	}
+	if c.crf.slider.Min != 0 || c.crf.slider.Max != 51 {
+		t.Fatalf("CRF range = %.0f-%.0f, want 0-51", c.crf.slider.Min, c.crf.slider.Max)
+	}
+}
+
+func TestIntegerSliderDisplaysRangeValueAndEnabledState(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	changes := 0
+	slider := newIntegerSlider(validation.IntegerRange{Min: 0, Max: 63}, 28, func(string) {
+		changes++
+	})
+
+	if _, ok := slider.Object().(*fyne.Container); !ok {
+		t.Fatalf("slider object type = %T, want *fyne.Container", slider.Object())
+	}
+	if slider.minLabel.Text != "0" || slider.value.Text != "28" || slider.maxLabel.Text != "63" {
+		t.Fatalf("labels = %q %q %q, want 0 28 63", slider.minLabel.Text, slider.value.Text, slider.maxLabel.Text)
+	}
+	slider.SetValue(64)
+	if slider.Value() != 63 || slider.value.Text != "63" {
+		t.Fatalf("value = %d (%q), want clamped 63", slider.Value(), slider.value.Text)
+	}
+	if changes != 1 {
+		t.Fatalf("change callbacks = %d, want 1", changes)
+	}
+
+	slider.Disable()
+	if !slider.slider.Disabled() {
+		t.Fatal("slider should be disabled")
+	}
+	slider.Enable()
+	if slider.slider.Disabled() {
+		t.Fatal("slider should be enabled")
+	}
+}
+
+func TestSliderValuesRoundTripThroughProfile(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	profile := c.config.Profiles[0]
+	profile.Video.Encoder = "av1_vaapi"
+	profile.Video.RateControl = "CQP"
+	profile.Video.QP = 255
+	profile.Audio.Mode = model.AudioEncode
+	profile.Audio.Encoder = "flac"
+	profile.Audio.Compression = 12
+
+	c.loadProfile(profile)
+	got := c.profileFromWidgets()
+
+	if got.Video.QP != 255 {
+		t.Fatalf("QP = %d, want 255", got.Video.QP)
+	}
+	if got.Audio.Compression != 12 {
+		t.Fatalf("compression = %d, want 12", got.Audio.Compression)
+	}
+}
+
+func TestSVTPresetSwitchesControlsAndPreservesCategoricalValue(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("libx264")
+	c.preset.SetText("slow")
+
+	c.videoEncoder.SetSelected("libsvtav1")
+	if c.preset.Visible() || !c.presetSlider.Visible() {
+		t.Fatal("SVT-AV1 should show only the integer preset slider")
+	}
+	c.presetSlider.SetValue(13)
+	if got := c.profileFromWidgets().Video.Preset; got != "13" {
+		t.Fatalf("SVT preset = %q, want 13", got)
+	}
+
+	c.videoEncoder.SetSelected("libx265")
+	if !c.preset.Visible() || c.presetSlider.Visible() {
+		t.Fatal("x265 should show only the categorical preset entry")
+	}
+	if got := c.profileFromWidgets().Video.Preset; got != "slow" {
+		t.Fatalf("categorical preset = %q, want slow", got)
+	}
+}
+
+func testController() *Controller {
+	return &Controller{
+		config: model.Config{
+			Profiles: []model.Profile{{
+				Name:           "test",
+				Container:      model.ContainerMKV,
+				OutputTemplate: "{dir}/{name}.{ext}",
+			}},
+		},
 	}
 }

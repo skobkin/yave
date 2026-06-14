@@ -46,12 +46,14 @@ type Controller struct {
 	outputPreview *widget.Label
 	videoEncoder  *widget.Select
 	rateControl   *widget.Select
-	qp            *widget.Entry
-	crf           *widget.Entry
+	qp            *integerSlider
+	crf           *integerSlider
 	bitrate       *widget.Entry
 	maxrate       *widget.Entry
 	bufsize       *widget.Entry
 	preset        *widget.Entry
+	presetSlider  *integerSlider
+	presetControl *fyne.Container
 	tune          *widget.Entry
 	videoProfile  *widget.Entry
 	frameMode     *widget.Select
@@ -64,7 +66,7 @@ type Controller struct {
 	audioMode     *widget.Select
 	audioEncoder  *widget.Select
 	audioBitrate  *widget.Select
-	compression   *widget.Entry
+	compression   *integerSlider
 	allAudio      *widget.Check
 	subtitles     *widget.Select
 	command       *widget.Entry
@@ -142,12 +144,15 @@ func (c *Controller) createWidgets() {
 		"libx265", "libx264", "libsvtav1", "libvpx-vp9",
 	}, c.changed)
 	c.rateControl = widget.NewSelect([]string{"Auto", "CQP", "VBR", "CBR", "CRF", "bitrate"}, c.changed)
-	c.qp = numericEntry(c.changed)
-	c.crf = numericEntry(c.changed)
+	c.qp = newIntegerSlider(mustQPRange("hevc_vaapi"), 30, c.changed)
+	c.crf = newIntegerSlider(mustCRFRange("libx265"), 28, c.changed)
 	c.bitrate = entry(c.changed)
 	c.maxrate = entry(c.changed)
 	c.bufsize = entry(c.changed)
 	c.preset = entry(c.changed)
+	c.presetSlider = newIntegerSlider(mustPresetRange("libsvtav1"), 6, c.changed)
+	c.presetSlider.Hide()
+	c.presetControl = container.NewStack(c.preset, c.presetSlider.Object())
 	c.tune = entry(c.changed)
 	c.videoProfile = entry(c.changed)
 	c.frameMode = widget.NewSelect([]string{"keep", "convert"}, c.changed)
@@ -161,7 +166,7 @@ func (c *Controller) createWidgets() {
 	c.audioMode = widget.NewSelect([]string{model.AudioCopy, model.AudioEncode}, c.changed)
 	c.audioEncoder = widget.NewSelect([]string{"copy", "libopus", "opus", "aac", "libmp3lame", "mp3", "flac"}, c.changed)
 	c.audioBitrate = widget.NewSelect([]string{"96k", "128k", "160k", "192k", "256k", "320k"}, c.changed)
-	c.compression = numericEntry(c.changed)
+	c.compression = newIntegerSlider(mustAudioCompressionRange("flac"), 8, c.changed)
 	c.allAudio = widget.NewCheck("Process all audio streams", func(bool) { c.changed("") })
 	c.subtitles = widget.NewSelect([]string{model.SubtitleNone, model.SubtitleCopy}, c.changed)
 
@@ -202,12 +207,12 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		widget.NewForm(
 			widget.NewFormItem("Encoder", c.videoEncoder),
 			widget.NewFormItem("Rate control", c.rateControl),
-			widget.NewFormItem("QP", c.qp),
-			widget.NewFormItem("CRF", c.crf),
+			widget.NewFormItem("QP", c.qp.Object()),
+			widget.NewFormItem("CRF", c.crf.Object()),
 			widget.NewFormItem("Target bitrate", c.bitrate),
 			widget.NewFormItem("Maximum bitrate", c.maxrate),
 			widget.NewFormItem("Buffer size", c.bufsize),
-			widget.NewFormItem("Preset", c.preset),
+			widget.NewFormItem("Preset", c.presetControl),
 			widget.NewFormItem("Tune", c.tune),
 			widget.NewFormItem("Profile", c.videoProfile),
 			widget.NewFormItem("Frame rate mode", c.frameMode),
@@ -223,7 +228,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		widget.NewFormItem("Mode", c.audioMode),
 		widget.NewFormItem("Encoder", c.audioEncoder),
 		widget.NewFormItem("Bitrate", c.audioBitrate),
-		widget.NewFormItem("FLAC compression", c.compression),
+		widget.NewFormItem("FLAC compression", c.compression.Object()),
 		widget.NewFormItem("", c.allAudio),
 		widget.NewFormItem("Subtitles", c.subtitles),
 	))
@@ -521,8 +526,9 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.output.SetText(p.OutputTemplate)
 	c.videoEncoder.SetSelected(p.Video.Encoder)
 	c.rateControl.SetSelected(p.Video.RateControl)
-	c.qp.SetText(strconv.Itoa(p.Video.QP))
-	c.crf.SetText(strconv.Itoa(p.Video.CRF))
+	c.updateIntegerRanges()
+	c.qp.SetValue(p.Video.QP)
+	c.crf.SetValue(p.Video.CRF)
 	c.bitrate.SetText(p.Video.Bitrate)
 	c.maxrate.SetText(p.Video.Maxrate)
 	c.bufsize.SetText(p.Video.Bufsize)
@@ -539,7 +545,7 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.audioMode.SetSelected(p.Audio.Mode)
 	c.audioEncoder.SetSelected(p.Audio.Encoder)
 	c.audioBitrate.SetSelected(p.Audio.Bitrate)
-	c.compression.SetText(strconv.Itoa(p.Audio.Compression))
+	c.compression.SetValue(p.Audio.Compression)
 	c.allAudio.SetChecked(p.Audio.CopyAllStreams)
 	c.subtitles.SetSelected(p.Subtitles.Mode)
 }
@@ -549,8 +555,8 @@ func (c *Controller) profileFromWidgets() model.Profile {
 		Name: c.profile.Selected, Container: c.container.Selected, OutputTemplate: c.output.Text,
 		Video: model.VideoSettings{
 			Encoder: c.videoEncoder.Selected, RateControl: c.rateControl.Selected,
-			QP: atoi(c.qp.Text), CRF: atoi(c.crf.Text), Bitrate: c.bitrate.Text,
-			Maxrate: c.maxrate.Text, Bufsize: c.bufsize.Text, Preset: c.preset.Text,
+			QP: c.qp.Value(), CRF: c.crf.Value(), Bitrate: c.bitrate.Text,
+			Maxrate: c.maxrate.Text, Bufsize: c.bufsize.Text, Preset: c.presetValue(),
 			Tune: c.tune.Text, Profile: c.videoProfile.Text,
 			FrameRateMode: c.frameMode.Selected, FrameRate: c.frameRate.Text,
 			MaxWidth: atoi(c.maxWidth.Text), MaxHeight: atoi(c.maxHeight.Text),
@@ -559,7 +565,7 @@ func (c *Controller) profileFromWidgets() model.Profile {
 		},
 		Audio: model.AudioSettings{
 			Mode: c.audioMode.Selected, Encoder: c.audioEncoder.Selected,
-			Bitrate: c.audioBitrate.Selected, Compression: atoi(c.compression.Text),
+			Bitrate: c.audioBitrate.Selected, Compression: c.compression.Value(),
 			CopyAllStreams: c.allAudio.Checked,
 		},
 		Subtitles: model.SubtitleSettings{Mode: c.subtitles.Selected},
@@ -568,6 +574,7 @@ func (c *Controller) profileFromWidgets() model.Profile {
 
 func (c *Controller) updateControlState() {
 	encoder := c.videoEncoder.Selected
+	c.updateIntegerRanges()
 	copyVideo := encoder == "copy"
 	vaapi := strings.HasSuffix(encoder, "_vaapi")
 	setEnabled(c.rateControl, !copyVideo)
@@ -580,7 +587,19 @@ func (c *Controller) updateControlState() {
 	setEnabled(c.bitrate, !copyVideo && bitrateMode)
 	setEnabled(c.maxrate, vaapi && (strings.EqualFold(c.rateControl.Selected, "VBR") || strings.EqualFold(c.rateControl.Selected, "CBR")))
 	setEnabled(c.bufsize, vaapi && (strings.EqualFold(c.rateControl.Selected, "VBR") || strings.EqualFold(c.rateControl.Selected, "CBR")))
-	setEnabled(c.preset, encoder == "libx264" || encoder == "libx265" || encoder == "libsvtav1" || encoder == "libvpx-vp9")
+	svtPreset := encoder == "libsvtav1"
+	if svtPreset {
+		if value, err := strconv.Atoi(strings.TrimSpace(c.preset.Text)); err == nil {
+			c.presetSlider.SetValue(value)
+		}
+		c.preset.Hide()
+		c.presetSlider.Show()
+	} else {
+		c.presetSlider.Hide()
+		c.preset.Show()
+	}
+	setEnabled(c.preset, encoder == "libx264" || encoder == "libx265" || encoder == "libvpx-vp9")
+	setEnabled(c.presetSlider, svtPreset)
 	setEnabled(c.tune, encoder == "libx264" || encoder == "libx265")
 	setEnabled(c.videoProfile, vaapi || encoder == "libx264" || encoder == "libx265")
 	setEnabled(c.frameMode, !copyVideo)
@@ -595,6 +614,22 @@ func (c *Controller) updateControlState() {
 	setEnabled(c.audioEncoder, !copyAudio)
 	setEnabled(c.audioBitrate, !copyAudio && c.audioEncoder.Selected != "flac")
 	setEnabled(c.compression, !copyAudio && c.audioEncoder.Selected == "flac")
+}
+
+func (c *Controller) updateIntegerRanges() {
+	if r, ok := validation.QPRange(c.videoEncoder.Selected); ok {
+		c.qp.SetRange(r)
+	}
+	if r, ok := validation.CRFRange(c.videoEncoder.Selected); ok {
+		c.crf.SetRange(r)
+	}
+}
+
+func (c *Controller) presetValue() string {
+	if c.videoEncoder.Selected == "libsvtav1" {
+		return strconv.Itoa(c.presetSlider.Value())
+	}
+	return c.preset.Text
 }
 
 func (c *Controller) updateEncoderOptions() {
@@ -767,6 +802,26 @@ func numericEntry(changed func(string)) *widget.Entry {
 		return err
 	}
 	return e
+}
+
+func mustQPRange(encoder string) validation.IntegerRange {
+	r, _ := validation.QPRange(encoder)
+	return r
+}
+
+func mustCRFRange(encoder string) validation.IntegerRange {
+	r, _ := validation.CRFRange(encoder)
+	return r
+}
+
+func mustPresetRange(encoder string) validation.IntegerRange {
+	r, _ := validation.PresetRange(encoder)
+	return r
+}
+
+func mustAudioCompressionRange(encoder string) validation.IntegerRange {
+	r, _ := validation.AudioCompressionRange(encoder)
+	return r
 }
 
 type disableable interface {

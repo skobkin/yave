@@ -3,6 +3,7 @@ package validation_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -256,6 +257,62 @@ func TestVideoRateControlValidation(t *testing.T) {
 	}
 }
 
+func TestCodecSpecificIntegerRangeValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		encoder string
+		field   string
+		min     int
+		max     int
+		apply   func(*model.Profile, int)
+	}{
+		{name: "H.264 VAAPI QP", encoder: "h264_vaapi", field: "profile.video.qp", min: 1, max: 51, apply: applyQP},
+		{name: "HEVC VAAPI QP", encoder: "hevc_vaapi", field: "profile.video.qp", min: 1, max: 51, apply: applyQP},
+		{name: "AV1 VAAPI QP", encoder: "av1_vaapi", field: "profile.video.qp", min: 0, max: 255, apply: applyQP},
+		{name: "VP9 VAAPI QP", encoder: "vp9_vaapi", field: "profile.video.qp", min: 0, max: 255, apply: applyQP},
+		{name: "x264 CRF", encoder: "libx264", field: "profile.video.crf", min: 0, max: 51, apply: applyCRF},
+		{name: "x265 CRF", encoder: "libx265", field: "profile.video.crf", min: 0, max: 51, apply: applyCRF},
+		{name: "SVT-AV1 CRF", encoder: "libsvtav1", field: "profile.video.crf", min: 0, max: 63, apply: applyCRF},
+		{name: "VP9 CRF", encoder: "libvpx-vp9", field: "profile.video.crf", min: 0, max: 63, apply: applyCRF},
+		{name: "SVT-AV1 preset", encoder: "libsvtav1", field: "profile.video.preset", min: 0, max: 13, apply: applyPreset},
+		{name: "FLAC compression", encoder: "libx265", field: "profile.audio.compression", min: 0, max: 12, apply: applyCompression},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, value := range []struct {
+				name  string
+				value int
+				valid bool
+			}{
+				{name: "below", value: tt.min - 1, valid: false},
+				{name: "minimum", value: tt.min, valid: true},
+				{name: "maximum", value: tt.max, valid: true},
+				{name: "above", value: tt.max + 1, valid: false},
+			} {
+				t.Run(value.name, func(t *testing.T) {
+					profile := validProfile()
+					profile.Video.Encoder = tt.encoder
+					profile.Video.VAAPIDevice = "/dev/dri/renderD128"
+					tt.apply(&profile, value.value)
+
+					result := validation.ValidateProfile(profile, capabilities(), nil)
+					hasFieldError := false
+					for _, issue := range result.Errors {
+						if issue.Field == tt.field {
+							hasFieldError = true
+							break
+						}
+					}
+					if hasFieldError == value.valid {
+						t.Fatalf("field error = %v, want %v; errors: %#v", hasFieldError, !value.valid, result.Errors)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestAudioRanges(t *testing.T) {
 	profile := validProfile()
 	profile.Audio.Mode = model.AudioEncode
@@ -269,6 +326,31 @@ func TestAudioRanges(t *testing.T) {
 	profile.Audio.Compression = 13
 	result = validation.ValidateProfile(profile, capabilities(), nil)
 	assertErrorContains(t, result, "profile.audio.compression", "between 0 and 12")
+}
+
+func applyQP(profile *model.Profile, value int) {
+	profile.Video.RateControl = "CQP"
+	profile.Video.QP = value
+}
+
+func applyCRF(profile *model.Profile, value int) {
+	profile.Video.RateControl = "CRF"
+	profile.Video.CRF = value
+	if profile.Video.Encoder == "libsvtav1" {
+		profile.Video.Preset = "6"
+	}
+}
+
+func applyPreset(profile *model.Profile, value int) {
+	profile.Video.RateControl = "CRF"
+	profile.Video.CRF = 30
+	profile.Video.Preset = strconv.Itoa(value)
+}
+
+func applyCompression(profile *model.Profile, value int) {
+	profile.Audio.Mode = model.AudioEncode
+	profile.Audio.Encoder = "flac"
+	profile.Audio.Compression = value
 }
 
 func TestVideoCopyForbidsTransforms(t *testing.T) {
