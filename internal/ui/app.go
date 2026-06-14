@@ -288,8 +288,7 @@ Result:
 }
 
 func (c *Controller) profileBar() fyne.CanvasObject {
-	return container.NewHBox(
-		widget.NewLabel("Profile:"), c.profile,
+	actions := container.NewHBox(
 		widget.NewButton("Save", c.saveCurrentProfile),
 		widget.NewButton("Save as", func() { c.askProfileName("Save profile as", "", c.saveAs) }),
 		widget.NewButton("Duplicate", func() { c.askProfileName("Duplicate profile", c.profile.Selected+" copy", c.saveAs) }),
@@ -298,6 +297,7 @@ func (c *Controller) profileBar() fyne.CanvasObject {
 		widget.NewButton("Set default", c.setDefault),
 		widget.NewButton("Settings", c.showSettings),
 	)
+	return container.NewBorder(nil, nil, widget.NewLabel("Profile:"), actions, c.profile)
 }
 
 func (c *Controller) chooseInput() {

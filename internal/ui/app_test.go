@@ -31,6 +31,44 @@ func TestRunFieldsUseWordWrapping(t *testing.T) {
 	}
 }
 
+func TestProfileBarExpandsSelectorAndRightAlignsActions(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := &Controller{
+		config: model.Config{
+			Profiles: []model.Profile{{Name: "test"}},
+		},
+	}
+	c.createWidgets()
+
+	bar := c.profileBar()
+	bar.Resize(fyne.NewSize(1050, bar.MinSize().Height))
+
+	if c.profile.Size().Width <= c.profile.MinSize().Width {
+		t.Fatalf("profile selector width = %v, want wider than minimum %v", c.profile.Size().Width, c.profile.MinSize().Width)
+	}
+
+	barContainer, ok := bar.(*fyne.Container)
+	if !ok {
+		t.Fatalf("profile bar type = %T, want *fyne.Container", bar)
+	}
+	var actions *fyne.Container
+	for _, object := range barContainer.Objects {
+		candidate, ok := object.(*fyne.Container)
+		if ok {
+			actions = candidate
+			break
+		}
+	}
+	if actions == nil {
+		t.Fatal("profile action container not found")
+	}
+	if got := actions.Position().X + actions.Size().Width; got != bar.Size().Width {
+		t.Fatalf("profile actions right edge = %v, want %v", got, bar.Size().Width)
+	}
+}
+
 func TestShowRunErrorSelectsRunTab(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
