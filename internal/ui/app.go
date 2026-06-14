@@ -190,7 +190,9 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	outputTab := container.NewVBox(
 		widget.NewForm(
 			widget.NewFormItem("Container", c.container),
-			widget.NewFormItem("Output template", c.output),
+			widget.NewFormItem("Output template", container.NewBorder(
+				nil, nil, nil, c.outputTemplateHelpButton(), c.output,
+			)),
 		),
 		widget.NewCard("Resolved output", "", c.outputPreview),
 	)
@@ -249,6 +251,45 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		container.NewTabItem("Run", runTab),
 	)
 	return container.NewBorder(c.profileBar(), nil, nil, nil, tabs)
+}
+
+func (c *Controller) outputTemplateHelpButton() *widget.Button {
+	button := widget.NewButton("?", c.showOutputTemplateHelp)
+	button.Importance = widget.LowImportance
+	return button
+}
+
+func (c *Controller) showOutputTemplateHelp() {
+	const help = `{dir}       Input directory, for example /home/user/Videos
+{name}      Input filename without extension, for example movie
+{ext}       Output extension without dot, for example mkv
+{input_ext} Input extension without dot, for example mp4
+{datetime}  Local date and time, for example 20260614-153045
+{date}      Local date, for example 20260614
+{time}      Local time, for example 153045
+{profile}   Selected profile name, for example HEVC_720p
+{codec}     Selected video encoder, for example libx265
+{width}     Output maximum or source width, for example 1280
+{height}    Output maximum or source height, for example 720
+
+Template:
+{dir}/{name}_{profile}.{ext}
+
+Result:
+/home/user/Videos/movie_HEVC_720p.mkv`
+
+	text := widget.NewMultiLineEntry()
+	text.SetText(help)
+	text.SetMinRowsVisible(16)
+	text.Disable()
+
+	copyButton := widget.NewButton("Copy all", func() {
+		c.app.Clipboard().SetContent(help)
+	})
+	content := container.NewBorder(nil, copyButton, nil, nil, text)
+	helpDialog := dialog.NewCustom("Output template placeholders", "Close", content, c.window)
+	helpDialog.Resize(fyne.NewSize(760, 600))
+	helpDialog.Show()
 }
 
 func (c *Controller) profileBar() fyne.CanvasObject {
