@@ -2,7 +2,9 @@ package ui
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -12,6 +14,45 @@ import (
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
+
+func TestFormatProgressInfoIncludesOnlyRoundedTimeAndSpeed(t *testing.T) {
+	progress := model.Progress{
+		Frame:      1234,
+		OutTime:    80*time.Second + 400*time.Millisecond,
+		Speed:      "1.5x",
+		Percentage: 0.625,
+	}
+
+	got := formatProgressInfo(progress)
+
+	if got != "1m20s | 1.5x" {
+		t.Fatalf("progress info = %q, want %q", got, "1m20s | 1.5x")
+	}
+	if strings.Contains(got, "1234") || strings.Contains(got, "62.5") {
+		t.Fatalf("progress info includes frame count or percentage: %q", got)
+	}
+}
+
+func TestProgressInfoHasFixedWidthAndDoesNotResizeProgressBar(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	statusBar := c.buildStatusBar()
+	statusBar.Resize(fyne.NewSize(1050, statusBar.MinSize().Height))
+	initialWidth := c.progress.Size().Width
+
+	c.progressInfo.SetText(strings.Repeat("unexpectedly long progress text ", 5))
+	statusBar.Layout.Layout(statusBar.Objects, statusBar.Size())
+
+	if c.progressInfo.Truncation != fyne.TextTruncateEllipsis {
+		t.Fatalf("progress info truncation = %v, want ellipsis", c.progressInfo.Truncation)
+	}
+	if c.progress.Size().Width != initialWidth {
+		t.Fatalf("progress width = %v after update, want %v", c.progress.Size().Width, initialWidth)
+	}
+}
 
 func TestRunFieldsUseWordWrapping(t *testing.T) {
 	app := fynetest.NewApp()

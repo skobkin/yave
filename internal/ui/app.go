@@ -24,6 +24,8 @@ import (
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
+const progressInfoWidthSample = "999h59m59s | 999.9x"
+
 type Controller struct {
 	app        fyne.App
 	window     fyne.Window
@@ -176,6 +178,7 @@ func (c *Controller) createWidgets() {
 	c.command.SetMinRowsVisible(3)
 	c.progress = widget.NewProgressBar()
 	c.progressInfo = widget.NewLabel("")
+	c.progressInfo.Truncation = fyne.TextTruncateEllipsis
 	c.log = widget.NewMultiLineEntry()
 	c.log.Disable()
 	c.log.Wrapping = fyne.TextWrapWord
@@ -247,10 +250,16 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		container.NewTabItem("Audio & Subtitles", audioTab),
 		c.runTab,
 	)
-	status := container.NewHBox(c.status, c.progressInfo)
+	return container.NewBorder(c.profileBar(), c.buildStatusBar(), nil, nil, c.tabs)
+}
+
+func (c *Controller) buildStatusBar() *fyne.Container {
+	progressInfoSize := widget.NewLabel(progressInfoWidthSample).MinSize()
+	progressInfo := container.NewGridWrap(progressInfoSize, c.progressInfo)
+	status := container.NewHBox(c.status, progressInfo)
 	actions := container.NewHBox(c.start, c.cancel)
-	statusBar := container.NewBorder(nil, nil, status, actions, c.progress)
-	return container.NewBorder(c.profileBar(), statusBar, nil, nil, c.tabs)
+
+	return container.NewBorder(nil, nil, status, actions, c.progress)
 }
 
 func (c *Controller) outputTemplateHelpButton() *widget.Button {
@@ -486,8 +495,7 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 			OnProgress: func(p model.Progress) {
 				fyne.Do(func() {
 					c.progress.SetValue(p.Percentage)
-					c.progressInfo.SetText(fmt.Sprintf("Frame %d | %s | %s | %.1f%%",
-						p.Frame, p.OutTime.Round(time.Second), p.Speed, p.Percentage*100))
+					c.progressInfo.SetText(formatProgressInfo(p))
 				})
 			},
 		})
@@ -498,6 +506,10 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 			c.refresh()
 		})
 	}()
+}
+
+func formatProgressInfo(progress model.Progress) string {
+	return fmt.Sprintf("%s | %s", progress.OutTime.Round(time.Second), progress.Speed)
 }
 
 func (c *Controller) setRunResult(err error) {
