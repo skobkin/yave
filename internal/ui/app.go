@@ -678,6 +678,7 @@ func (c *Controller) askProfileName(title, initial string, callback func(string)
 		}
 	}, c.window)
 	d.SetText(initial)
+	d.Resize(fyne.NewSize(560, 180))
 	d.Show()
 }
 
