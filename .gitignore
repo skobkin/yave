@@ -1,0 +1,6 @@
+# Ignoring any temporary Markdown except README
+/*.md
+!/README.md
+
+# Ignoring IDE files
+/.idea
