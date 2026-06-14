@@ -7,7 +7,7 @@ FFmpeg commands, progress reporting, logs, and cancellation.
 
 ## Requirements
 
-- Go 1.24 or newer
+- Go 1.26 or newer
 - FFmpeg and ffprobe available in `PATH`, or configured in the application
 - Linux desktop development libraries required by Fyne:
   - OpenGL development files
