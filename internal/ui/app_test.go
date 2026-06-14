@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"testing"
 
 	"fyne.io/fyne/v2"
@@ -101,6 +102,28 @@ func TestShowRunErrorSelectsRunTab(t *testing.T) {
 	}
 	if c.log.Text != "Error: input path is required" {
 		t.Fatalf("output = %q", c.log.Text)
+	}
+}
+
+func TestSetRunResultSelectsRunTabOnFailure(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := &Controller{
+		status:   widget.NewLabel("Running"),
+		progress: widget.NewProgressBar(),
+	}
+	otherTab := container.NewTabItem("Input", widget.NewLabel("input"))
+	c.runTab = container.NewTabItem("Run", widget.NewLabel("run"))
+	c.tabs = container.NewAppTabs(otherTab, c.runTab)
+
+	c.setRunResult(errors.New("FFmpeg failed: exit status 1"))
+
+	if c.tabs.Selected() != c.runTab {
+		t.Fatal("Run tab was not selected")
+	}
+	if c.status.Text != "Failed: FFmpeg failed: exit status 1" {
+		t.Fatalf("status = %q", c.status.Text)
 	}
 }
 

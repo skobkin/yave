@@ -494,18 +494,23 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 		fyne.Do(func() {
 			c.runCancel = nil
 			c.cancel.Disable()
-			switch {
-			case err == nil:
-				c.status.SetText("Completed")
-				c.progress.SetValue(1)
-			case err == context.Canceled:
-				c.status.SetText("Canceled")
-			default:
-				c.status.SetText("Failed: " + err.Error())
-			}
+			c.setRunResult(err)
 			c.refresh()
 		})
 	}()
+}
+
+func (c *Controller) setRunResult(err error) {
+	switch {
+	case err == nil:
+		c.status.SetText("Completed")
+		c.progress.SetValue(1)
+	case err == context.Canceled:
+		c.status.SetText("Canceled")
+	default:
+		c.status.SetText("Failed: " + err.Error())
+		c.tabs.Select(c.runTab)
+	}
 }
 
 func (c *Controller) cancelConversion() {
