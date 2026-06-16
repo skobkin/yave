@@ -83,6 +83,7 @@ When summarizing completed work, also provide a recommended commit message.
 - List the exact automated checks and manual GUI/media workflows performed.
 - Include screenshots for material UI changes.
 - Call out changes to profile schema, defaults, generated FFmpeg commands, stream mapping, or output paths because they may affect existing users.
+- If asked to do a full work on an issue, do fetch and work in a separate branch based on latest `origin/master`.
 
 ## Configuration and Runtime Data
 
