@@ -200,6 +200,72 @@ func TestEncoderSwitchUpdatesIntegerRangesAndClamps(t *testing.T) {
 	}
 }
 
+func TestEncoderSwitchProportionallyRemapsQPLargerRange(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// h264_vaapi QP is 1-51; switching to av1_vaapi (0-255) should remap
+	// value 30 to ~148 instead of leaving it at 30.
+	c.videoEncoder.SetSelected("h264_vaapi")
+	c.rateControl.SetSelected("CQP")
+	c.qp.SetValue(30)
+
+	c.videoEncoder.SetSelected("av1_vaapi")
+
+	if c.qp.Value() != 148 {
+		t.Fatalf("QP = %d, want proportional remap 148", c.qp.Value())
+	}
+	if c.qp.slider.Min != 0 || c.qp.slider.Max != 255 {
+		t.Fatalf("QP range = %.0f-%.0f, want 0-255", c.qp.slider.Min, c.qp.slider.Max)
+	}
+}
+
+func TestEncoderSwitchProportionallyRemapsCRFLargerRange(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// libx264 CRF is 0-51; switching to libsvtav1 (0-63) should remap
+	// value 30 to 37 (30/51 * 63 = 37.06 -> 37).
+	c.videoEncoder.SetSelected("libx264")
+	c.rateControl.SetSelected("CRF")
+	c.crf.SetValue(30)
+
+	c.videoEncoder.SetSelected("libsvtav1")
+
+	if c.crf.Value() != 37 {
+		t.Fatalf("CRF = %d, want proportional remap 37", c.crf.Value())
+	}
+	if c.crf.slider.Min != 0 || c.crf.slider.Max != 63 {
+		t.Fatalf("CRF range = %.0f-%.0f, want 0-63", c.crf.slider.Min, c.crf.slider.Max)
+	}
+}
+
+func TestEncoderSwitchSameRangeKeepsValue(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// h264_vaapi and hevc_vaapi share QP 1-51, so the value should be
+	// preserved exactly on a switch.
+	c.videoEncoder.SetSelected("h264_vaapi")
+	c.rateControl.SetSelected("CQP")
+	c.qp.SetValue(28)
+
+	c.videoEncoder.SetSelected("hevc_vaapi")
+
+	if c.qp.Value() != 28 {
+		t.Fatalf("QP = %d, want unchanged 28 on same-range switch", c.qp.Value())
+	}
+}
+
 func TestIntegerSliderDisplaysRangeValueAndEnabledState(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()

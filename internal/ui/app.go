@@ -635,10 +635,26 @@ func (c *Controller) updateControlState() {
 
 func (c *Controller) updateIntegerRanges() {
 	if r, ok := validation.QPRange(c.videoEncoder.Selected); ok {
-		c.qp.SetRange(r)
+		if old := c.qp.Range(); old != r {
+			// Capture the value before mutating the slider. SetRange
+			// internally clamps the value, so reading c.qp.Value()
+			// after SetRange would remap the already-clamped value
+			// rather than the original.
+			oldValue := c.qp.Value()
+			c.qp.SetRange(r)
+			c.qp.SetValue(validation.ProportionalConvert(oldValue, old, r))
+		} else {
+			c.qp.SetRange(r)
+		}
 	}
 	if r, ok := validation.CRFRange(c.videoEncoder.Selected); ok {
-		c.crf.SetRange(r)
+		if old := c.crf.Range(); old != r {
+			oldValue := c.crf.Value()
+			c.crf.SetRange(r)
+			c.crf.SetValue(validation.ProportionalConvert(oldValue, old, r))
+		} else {
+			c.crf.SetRange(r)
+		}
 	}
 }
 

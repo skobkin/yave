@@ -22,6 +22,30 @@ func (r IntegerRange) Clamp(value int) int {
 	return value
 }
 
+// ProportionalConvert maps a value from one inclusive integer range into
+// another using a best-effort linear remap and clamping to the new bounds.
+//
+// It is intended for codec switches where the same conceptual setting (QP or
+// CRF) has a different numeric range. The mapping is purely positional:
+// value == from.Min -> to.Min, value == from.Max -> to.Max, with linear
+// interpolation in between and Clamp applied to the result. A degenerate
+// from-range (Min == Max) is treated as "keep value, clamp to to".
+func ProportionalConvert(value int, from, to IntegerRange) int {
+	if from.Max == from.Min {
+		return to.Clamp(value)
+	}
+	if from == to {
+		return to.Clamp(value)
+	}
+	// Integer linear remap: preserve endpoints, avoid floating-point drift
+	// for the common equal-spread case. numerator and denominator are both
+	// non-negative when from is a valid range and value is in it.
+	spread := from.Max - from.Min
+	offset := value - from.Min
+	mapped := to.Min + (offset*(to.Max-to.Min)+spread/2)/spread
+	return to.Clamp(mapped)
+}
+
 func QPRange(encoder string) (IntegerRange, bool) {
 	switch strings.ToLower(strings.TrimSpace(encoder)) {
 	case "h264_vaapi", "hevc_vaapi":

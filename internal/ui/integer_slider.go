@@ -47,6 +47,10 @@ func (s *integerSlider) Object() fyne.CanvasObject {
 	return s.object
 }
 
+func (s *integerSlider) Range() validation.IntegerRange {
+	return validation.IntegerRange{Min: int(s.slider.Min), Max: int(s.slider.Max)}
+}
+
 func (s *integerSlider) SetRange(r validation.IntegerRange) {
 	s.slider.Min = float64(r.Min)
 	s.slider.Max = float64(r.Max)
