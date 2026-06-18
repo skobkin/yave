@@ -58,34 +58,34 @@ type Controller struct {
 	qpRangeEncoder  string
 	crfRangeEncoder string
 	bitrate         *widget.Entry
-	maxrate       *widget.Entry
-	bufsize       *widget.Entry
-	preset        *widget.Entry
-	presetSlider  *integerSlider
-	presetControl *fyne.Container
-	tune          *widget.Entry
-	videoProfile  *widget.Entry
-	frameMode     *widget.Select
-	frameRate     *widget.Entry
-	maxWidth      *widget.Entry
-	maxHeight     *widget.Entry
-	keepAspect    *widget.Check
-	noUpscale     *widget.Check
-	vaapiDevice   *widget.Entry
-	audioMode     *widget.Select
-	audioEncoder  *widget.Select
-	audioBitrate  *widget.Select
-	compression   *integerSlider
-	allAudio      *widget.Check
-	subtitles     *widget.Select
-	command       *widget.Entry
-	progress      *widget.ProgressBar
-	progressInfo  *widget.Label
-	log           *widget.Entry
-	start         *widget.Button
-	cancel        *widget.Button
-	tabs          *container.AppTabs
-	runTab        *container.TabItem
+	maxrate         *widget.Entry
+	bufsize         *widget.Entry
+	preset          *widget.Entry
+	presetSlider    *integerSlider
+	presetControl   *fyne.Container
+	tune            *widget.Entry
+	videoProfile    *widget.Entry
+	frameMode       *widget.Select
+	frameRate       *widget.Entry
+	maxWidth        *widget.Entry
+	maxHeight       *widget.Entry
+	keepAspect      *widget.Check
+	noUpscale       *widget.Check
+	vaapiDevice     *widget.Entry
+	audioMode       *widget.Select
+	audioEncoder    *widget.Select
+	audioBitrate    *widget.Select
+	compression     *integerSlider
+	allAudio        *widget.Check
+	subtitles       *widget.Select
+	command         *widget.Entry
+	progress        *widget.ProgressBar
+	progressInfo    *widget.Label
+	log             *widget.Entry
+	start           *widget.Button
+	cancel          *widget.Button
+	tabs            *container.AppTabs
+	runTab          *container.TabItem
 }
 
 func New(a fyne.App, initialInput string) (*Controller, error) {
