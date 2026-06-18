@@ -92,7 +92,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	}
 	c := &Controller{
 		app:        a,
-		window:     a.NewWindow("YAVE - Yet Another Video Encoder"),
+		window:     a.NewWindow(windowTitle()),
 		configPath: configPath,
 		config:     cfg,
 		inputPath:  initialInput,

@@ -5,3 +5,6 @@
 
 # Ignoring IDE files
 /.idea
+
+# Build artefacts (local development and goreleaser output)
+/dist
