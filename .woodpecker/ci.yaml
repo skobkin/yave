@@ -1,7 +1,7 @@
 when:
   - event: push
     branch:
-      exclude: [master]
+      include: [master]
   - event: pull_request
   - event: tag
 
@@ -69,7 +69,6 @@ steps:
     image: golang:1.26-alpine
     depends_on: []
     when:
-      - event: push
       - event: pull_request
     commands:
       - export PATH=/usr/local/go/bin:/go/bin:$PATH
