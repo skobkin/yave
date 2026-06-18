@@ -63,7 +63,7 @@ func TestSaveFileRoundTripAndPermissions(t *testing.T) {
 	if err := SaveFile(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path comes from t.TempDir, safe by construction
 	if err != nil {
 		t.Fatal(err)
 	}

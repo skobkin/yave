@@ -92,7 +92,7 @@ func TestInspectRunsExpectedCommand(t *testing.T) {
 	argsPath := filepath.Join(dir, "args")
 	scriptPath := filepath.Join(dir, "ffprobe")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellQuote(argsPath) + "\nprintf '%s\\n' '{\"format\":{\"format_name\":\"matroska\"}}'\n"
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil { //nolint:gosec // G306: test helper script must be executable
 		t.Fatal(err)
 	}
 
@@ -104,7 +104,7 @@ func TestInspectRunsExpectedCommand(t *testing.T) {
 	if got.Path != input || got.Format != "matroska" {
 		t.Fatalf("unexpected media info: %#v", got)
 	}
-	args, err := os.ReadFile(argsPath)
+	args, err := os.ReadFile(argsPath) //nolint:gosec // G304: path comes from t.TempDir, safe by construction
 	if err != nil {
 		t.Fatal(err)
 	}

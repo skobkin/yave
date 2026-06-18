@@ -23,7 +23,7 @@ type Callbacks struct {
 type Runner struct{}
 
 func (Runner) Run(ctx context.Context, plan model.RunPlan, duration time.Duration, cb Callbacks) error {
-	cmd := exec.CommandContext(ctx, plan.Executable, plan.Args...)
+	cmd := exec.CommandContext(ctx, plan.Executable, plan.Args...) //nolint:gosec // G204: executable path validated by ffmpeg.ResolveExecutable
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("open FFmpeg progress pipe: %w", err)

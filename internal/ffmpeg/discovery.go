@@ -173,7 +173,7 @@ func ParseHWAccels(output string) []string {
 }
 
 func commandOutput(ctx context.Context, executable string, args ...string) (string, error) {
-	output, err := exec.CommandContext(ctx, executable, args...).CombinedOutput()
+	output, err := exec.CommandContext(ctx, executable, args...).CombinedOutput() //nolint:gosec // G204: executable resolved via exec.LookPath
 	if err != nil {
 		detail := strings.TrimSpace(string(output))
 		if detail == "" {

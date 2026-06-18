@@ -71,7 +71,7 @@ func Inspect(ctx context.Context, executable, inputPath string) (model.MediaInfo
 		"-show_chapters",
 		inputPath,
 	}
-	output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput()
+	output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput() //nolint:gosec // G204: resolved via exec.LookPath
 	if err != nil {
 		if ctx.Err() != nil {
 			return model.MediaInfo{}, ctx.Err()

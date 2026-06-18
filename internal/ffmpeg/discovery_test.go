@@ -100,7 +100,7 @@ printf 'ffprobe version test-2\n'
 func writeExecutable(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil { //nolint:gosec // G306: test helper script must be executable
 		t.Fatal(err)
 	}
 	return path

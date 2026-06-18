@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -64,11 +65,12 @@ func validateProfile(profile model.Profile, capabilities model.Capabilities, med
 	}
 
 	videoEncoder := strings.ToLower(strings.TrimSpace(profile.Video.Encoder))
-	if videoEncoder == "" {
+	switch {
+	case videoEncoder == "":
 		result.error("profile.video.encoder", "video encoder is required")
-	} else if !supportedVideoEncoder(videoEncoder) {
+	case !supportedVideoEncoder(videoEncoder):
 		result.error("profile.video.encoder", "unsupported video encoder %q", profile.Video.Encoder)
-	} else if videoEncoder != "copy" && !encoderAvailable(capabilities, videoEncoder) {
+	case videoEncoder != "copy" && !encoderAvailable(capabilities, videoEncoder):
 		result.error("profile.video.encoder", "video encoder %q is not available in the detected FFmpeg build", profile.Video.Encoder)
 	}
 
@@ -278,12 +280,7 @@ func (r *Result) warning(field, format string, args ...any) {
 }
 
 func oneOf(value string, choices ...string) bool {
-	for _, choice := range choices {
-		if value == choice {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(choices, value)
 }
 
 func encoderAvailable(capabilities model.Capabilities, encoder string) bool {

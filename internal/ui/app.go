@@ -513,11 +513,11 @@ func formatProgressInfo(progress model.Progress) string {
 }
 
 func (c *Controller) setRunResult(err error) {
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		c.status.SetText("Completed")
 		c.progress.SetValue(1)
-	case err == context.Canceled:
+	case context.Canceled: //nolint:errorlint // context.Canceled is a sentinel; == comparison is intentional
 		c.status.SetText("Canceled")
 	default:
 		c.status.SetText("Failed: " + err.Error())
@@ -729,13 +729,20 @@ func (c *Controller) setDefault() {
 }
 
 func (c *Controller) askProfileName(title, initial string, callback func(string)) {
-	d := dialog.NewEntryDialog(title, "Profile name", func(name string) {
-		name = strings.TrimSpace(name)
+	entry := widget.NewEntry()
+	entry.SetText(initial)
+	items := []*widget.FormItem{
+		widget.NewFormItem("Profile name", entry),
+	}
+	d := dialog.NewForm(title, "OK", "Cancel", items, func(ok bool) {
+		if !ok {
+			return
+		}
+		name := strings.TrimSpace(entry.Text)
 		if name != "" {
 			callback(name)
 		}
 	}, c.window)
-	d.SetText(initial)
 	d.Resize(fyne.NewSize(560, 180))
 	d.Show()
 }

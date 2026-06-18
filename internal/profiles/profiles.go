@@ -18,7 +18,11 @@ const (
 )
 
 var (
-	ErrProfileNotFound  = errors.New("profile not found")
+	// ErrProfileNotFound is returned when a profile lookup or mutation targets a
+	// name that does not exist in the configuration.
+	ErrProfileNotFound = errors.New("profile not found")
+	// ErrDuplicateProfile is returned when a profile name already exists in
+	// the configuration.
 	ErrDuplicateProfile = errors.New("profile name already exists")
 )
 
@@ -53,7 +57,7 @@ func Load(path string) (model.Config, error) {
 	}
 	cfg := model.DefaultConfig()
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path comes from user-controlled config, expected behaviour
 	if errors.Is(err, os.ErrNotExist) {
 		return cfg, nil
 	}
@@ -107,18 +111,18 @@ func Save(path string, cfg model.Config) error {
 		return fmt.Errorf("create temporary config: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("set temporary config permissions: %w", err)
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("write temporary config: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("sync temporary config: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -130,7 +134,7 @@ func Save(path string, cfg model.Config) error {
 
 	// Best effort: the file is already safely replaced even on platforms that
 	// do not support syncing directories.
-	if d, err := os.Open(dir); err == nil {
+	if d, err := os.Open(dir); err == nil { //nolint:gosec // G304: dir comes from filepath.Dir of config path
 		_ = d.Sync()
 		_ = d.Close()
 	}
