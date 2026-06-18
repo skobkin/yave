@@ -50,7 +50,14 @@ type Controller struct {
 	rateControl   *widget.Select
 	qp            *integerSlider
 	crf           *integerSlider
-	bitrate       *widget.Entry
+	// qpRangeEncoder and crfRangeEncoder record which encoder's range is
+	// currently set on the QP and CRF sliders. An empty string means the
+	// slider's range is stale (the prior encoder did not expose the control),
+	// so updateIntegerRanges should not remap the stored value — it would
+	// silently rewrite defaults that the user never touched.
+	qpRangeEncoder  string
+	crfRangeEncoder string
+	bitrate         *widget.Entry
 	maxrate       *widget.Entry
 	bufsize       *widget.Entry
 	preset        *widget.Entry
@@ -635,26 +642,39 @@ func (c *Controller) updateControlState() {
 
 func (c *Controller) updateIntegerRanges() {
 	if r, ok := validation.QPRange(c.videoEncoder.Selected); ok {
-		if old := c.qp.Range(); old != r {
+		// Only remap when the slider's range was actually set by a previous
+		// encoder that supported QP. If qpRangeEncoder is empty (initial state
+		// or the prior encoder did not expose QP) or matches the current
+		// encoder, the range is either unset or already in sync — just set
+		// it and let SetRange's Clamp keep the stored value sensible.
+		if c.qpRangeEncoder != "" && c.qpRangeEncoder != c.videoEncoder.Selected {
 			// Capture the value before mutating the slider. SetRange
 			// internally clamps the value, so reading c.qp.Value()
 			// after SetRange would remap the already-clamped value
 			// rather than the original.
+			old := c.qp.Range()
 			oldValue := c.qp.Value()
 			c.qp.SetRange(r)
 			c.qp.SetValue(validation.ProportionalConvert(oldValue, old, r))
 		} else {
 			c.qp.SetRange(r)
 		}
+		c.qpRangeEncoder = c.videoEncoder.Selected
+	} else {
+		c.qpRangeEncoder = ""
 	}
 	if r, ok := validation.CRFRange(c.videoEncoder.Selected); ok {
-		if old := c.crf.Range(); old != r {
+		if c.crfRangeEncoder != "" && c.crfRangeEncoder != c.videoEncoder.Selected {
+			old := c.crf.Range()
 			oldValue := c.crf.Value()
 			c.crf.SetRange(r)
 			c.crf.SetValue(validation.ProportionalConvert(oldValue, old, r))
 		} else {
 			c.crf.SetRange(r)
 		}
+		c.crfRangeEncoder = c.videoEncoder.Selected
+	} else {
+		c.crfRangeEncoder = ""
 	}
 }
 

@@ -351,6 +351,66 @@ func TestSVTPresetSwitchesControlsAndPreservesCategoricalValue(t *testing.T) {
 	}
 }
 
+func TestCRFAndQPRemapOnlyWhenPriorEncoderSupportedTheControl(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	// 1. Starting on hevc_vaapi (does not expose CRF) and then switching to
+	//    libsvtav1 must not rewrite the stored CRF: the prior encoder never
+	//    owned a CRF range, so its {0, 51} default would silently remap 28
+	//    to ~35 even though the user never touched CRF.
+	c := testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	c.updateIntegerRanges()
+	if got := c.crf.Value(); got != 28 {
+		t.Fatalf("CRF after hevc_vaapi = %d, want 28", got)
+	}
+	c.videoEncoder.SetSelected("libsvtav1")
+	if got := c.crf.Value(); got != 28 {
+		t.Fatalf("CRF after hevc_vaapi->libsvtav1 = %d, want 28 (no remap from stale range)", got)
+	}
+
+	// 2. Symmetric case: libx264 owns CRF {0,51}, switching to libsvtav1
+	//    {0,63} with CRF=23 should remap, not just clamp.
+	c = testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("libx264")
+	c.updateIntegerRanges()
+	c.crf.SetValue(23)
+	c.videoEncoder.SetSelected("libsvtav1")
+	if got := c.crf.Value(); got == 23 {
+		t.Fatalf("CRF after libx264(23)->libsvtav1 = %d, want remapped (not 23)", got)
+	}
+
+	// 3. QP: starting on libx265 (does not expose QP) and switching to
+	//    av1_vaapi must keep the stored QP value instead of remapping from
+	//    the stale {1, 51} initial range.
+	c = testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("libx265")
+	c.updateIntegerRanges()
+	if got := c.qp.Value(); got != 30 {
+		t.Fatalf("QP after libx265 = %d, want 30", got)
+	}
+	c.videoEncoder.SetSelected("av1_vaapi")
+	if got := c.qp.Value(); got != 30 {
+		t.Fatalf("QP after libx265->av1_vaapi = %d, want 30 (no remap from stale range)", got)
+	}
+
+	// 4. QP between two VAAPI encoders that own the range: hevc_vaapi
+	//    {1, 51} -> av1_vaapi {0, 255} with QP=30 should remap.
+	c = testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	c.updateIntegerRanges()
+	c.qp.SetValue(30)
+	c.videoEncoder.SetSelected("av1_vaapi")
+	if got := c.qp.Value(); got == 30 {
+		t.Fatalf("QP after hevc_vaapi(30)->av1_vaapi = %d, want remapped (not 30)", got)
+	}
+}
+
 func testController() *Controller {
 	return &Controller{
 		config: model.Config{
