@@ -1,5 +1,4 @@
-# YAVE [![status-badge](https://ci.skobk.in/api/badges/13/status.svg?events=push%2Ctag)](https://ci.skobk.in/repos/13)
-[![latest release](https://git.skobk.in/skobkin/yave/badges/release.svg)](https://git.skobk.in/skobkin/yave/releases)
+# YAVE [![status-badge](https://ci.skobk.in/api/badges/13/status.svg?events=push%2Ctag)](https://ci.skobk.in/repos/13)[![latest release](https://git.skobk.in/skobkin/yave/badges/release.svg)](https://git.skobk.in/skobkin/yave/releases)
 
 YAVE (Yet Another Video Encoder) is a focused desktop FFmpeg transcoding
 frontend written in Go and Fyne. It exposes a curated set of modern software
