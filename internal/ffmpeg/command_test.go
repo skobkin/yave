@@ -156,8 +156,10 @@ func TestBuildCommandNVENC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// -gpu 1 must be emitted before -i, the filter chain and
-	// encoder flags must appear after -i.
+	// -gpu 1 must be emitted alongside the nvenc encoder args
+	// (after -c:v hevc_nvenc) because ffmpeg only exposes it as a
+	// per-output encoder option; emitting it before -i fails with
+	// "Unrecognized option 'gpu'".
 	if !containsPair(plan.Args, "-gpu", "1") {
 		t.Errorf("missing -gpu 1 in %#v", plan.Args)
 	}

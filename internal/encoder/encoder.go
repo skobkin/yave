@@ -105,9 +105,9 @@ func ProportionalConvert(value int, from, to IntegerRange) int {
 }
 
 // BuildResult is what VideoEncoder.BuildVideoArgs returns for a single
-// video stream. PreInputArgs go before -i (e.g. -init_hw_device,
-// -gpu N, or -vaapi_device). Args is everything after -c:v (rate
-// control, preset, profile, ...).
+// video stream. PreInputArgs go before -i (e.g. -init_hw_device or
+// -vaapi_device). Args is everything after -c:v (rate control, preset,
+// profile, per-encoder options such as NVENC's -gpu, ...).
 type BuildResult struct {
 	PreInputArgs []string
 	Args         []string

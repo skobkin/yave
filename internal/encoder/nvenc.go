@@ -12,13 +12,15 @@ import (
 // encoders: h264_nvenc, hevc_nvenc, av1_nvenc. The three encoders
 // differ only in codec family, QP range, the supported preset set, and
 // whether they accept -profile:v (av1_nvenc does not). Everything
-// else — filter chain, pre-input args, rate-control mapping — is
+// else — filter chain, rate-control mapping, multi-GPU selector — is
 // shared.
 //
-// The pre-input global is -gpu N (only when GPUIndex > 0). The filter
-// chain is the modern CUDA path: format=yuv420p,format=nv12,hwupload_cuda
-// followed by an optional scale_cuda. AV1 VBR is available from
-// FFmpeg 5.0+ via the av1_nvenc encoder.
+// The multi-GPU selector -gpu N is emitted alongside the encoder args
+// (after -c:v) because ffmpeg only exposes it as an nvenc encoder
+// option; -gpu before -i fails with "Unrecognized option 'gpu'". The
+// filter chain is the modern CUDA path: format=yuv420p,format=nv12,
+// hwupload_cuda followed by an optional scale_cuda. AV1 VBR is
+// available from FFmpeg 5.0+ via the av1_nvenc encoder.
 type nvencEncoder struct {
 	name            string
 	label           string
@@ -76,9 +78,12 @@ func (e *nvencEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo)
 	return strings.Join(filters, ","), nil
 }
 
-// BuildVideoArgs emits the pre-input -gpu N flag (when the user has
-// picked a non-default GPU) plus the per-stream NVENC args. The
-// rate-control mapping is -rc constqp/vbr/cbr with the matching
+// BuildVideoArgs emits the per-stream NVENC args. The -gpu N flag
+// (when the user has picked a non-default GPU) is folded into the
+// output encoder args rather than PreInputArgs because ffmpeg only
+// recognises it as an nvenc encoder option.
+//
+// The rate-control mapping is -rc constqp/vbr/cbr with the matching
 // -qp / -b:v / -maxrate flags. CBR forces -maxrate = -b:v when the
 // user did not specify a maxrate, matching the ffmpeg requirement
 // that CBR targets must equal the maximum rate.
@@ -87,10 +92,10 @@ func (e *nvencEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error
 		return BuildResult{}, fmt.Errorf("video encoder is empty")
 	}
 	res := BuildResult{}
-	if v.GPUIndex > 0 {
-		res.PreInputArgs = []string{"-gpu", strconv.Itoa(v.GPUIndex)}
-	}
 	args := []string{"-c:v", e.name}
+	if v.GPUIndex > 0 {
+		args = append(args, "-gpu", strconv.Itoa(v.GPUIndex))
+	}
 	preset := defaultString(v.Preset, e.presetDefault)
 	if preset != "" {
 		args = append(args, e.presetFlag, preset)

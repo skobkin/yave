@@ -269,8 +269,13 @@ func TestNVENCOptionalGPUIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(res.PreInputArgs, []string{"-gpu", "1"}) {
-		t.Errorf("PreInputArgs = %v, want [-gpu 1]", res.PreInputArgs)
+	// -gpu is an nvenc encoder option, so it lives with the rest of the
+	// per-stream args (after -c:v) rather than in PreInputArgs.
+	if len(res.PreInputArgs) != 0 {
+		t.Errorf("PreInputArgs = %v, want empty (gpu is a per-output option)", res.PreInputArgs)
+	}
+	if !slices.Equal(res.Args, []string{"-c:v", "hevc_nvenc", "-gpu", "1", "-preset", "p4", "-rc", "constqp", "-qp", "28"}) {
+		t.Errorf("Args = %v", res.Args)
 	}
 }
 
