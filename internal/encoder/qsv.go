@@ -59,6 +59,7 @@ func (e *qsvEncoder) PresetRange() (IntegerRange, bool) {
 }
 func (e *qsvEncoder) SupportsTune() bool    { return false }
 func (e *qsvEncoder) SupportsProfile() bool { return e.supportsProfile }
+func (e *qsvEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *qsvEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }
@@ -173,6 +174,11 @@ func (e *qsvEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) 
 
 // Validate checks the categorical preset set. The QSV presets mirror
 // x264's "veryfast..veryslow" plus the slow/fast/medium aliases.
+//
+// QSV's CBR mode requires -b:v == -maxrate (ffmpeg silently ignores
+// the maxrate otherwise, producing a VBR-ish stream). The builder
+// auto-promotes Maxrate when it is blank, but does not catch a
+// user-supplied mismatch, so we surface it here.
 func (e *qsvEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 	var issues []Issue
 	if len(e.presets) > 0 && strings.TrimSpace(v.Preset) != "" {
@@ -191,6 +197,16 @@ func (e *qsvEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 				Message: fmt.Sprintf("%s preset must be one of: %s", e.name, strings.Join(e.presets, ", ")),
 			})
 		}
+	}
+	if strings.EqualFold(strings.TrimSpace(v.RateControl), "CBR") &&
+		strings.TrimSpace(v.Maxrate) != "" &&
+		strings.TrimSpace(v.Bitrate) != "" &&
+		!strings.EqualFold(strings.TrimSpace(v.Bitrate), strings.TrimSpace(v.Maxrate)) {
+		issues = append(issues, Issue{
+			Level:   IssueError,
+			Field:   "profile.video.maxrate",
+			Message: fmt.Sprintf("%s CBR requires maxrate to equal bitrate (%s); got %s", e.name, v.Bitrate, v.Maxrate),
+		})
 	}
 	return issues, nil
 }

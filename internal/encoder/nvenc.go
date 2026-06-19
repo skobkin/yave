@@ -57,6 +57,7 @@ func (e *nvencEncoder) PresetRange() (IntegerRange, bool) {
 }
 func (e *nvencEncoder) SupportsTune() bool    { return false }
 func (e *nvencEncoder) SupportsProfile() bool { return e.supportsProfile }
+func (e *nvencEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *nvencEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }
@@ -163,6 +164,12 @@ func (e *nvencEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error
 // Validate checks the categorical preset set. av1_nvenc rejects
 // -profile:v before BuildVideoArgs can be reached (av1 has no
 // profile flag in ffmpeg) so we surface it as a hard error here.
+//
+// NVENC's CBR mode requires -b:v == -maxrate (ffmpeg silently
+// ignores the value otherwise, producing a VBR-ish stream). The
+// builder auto-promotes Maxrate when it is blank, but rejects
+// nothing when the user provides a mismatched value, so we catch
+// the mismatch here rather than emitting a broken command.
 func (e *nvencEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 	var issues []Issue
 	if len(e.presets) > 0 && strings.TrimSpace(v.Preset) != "" {
@@ -187,6 +194,16 @@ func (e *nvencEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 			Level:   IssueError,
 			Field:   "profile.video.profile",
 			Message: fmt.Sprintf("%s does not support -profile:v", e.name),
+		})
+	}
+	if strings.EqualFold(strings.TrimSpace(v.RateControl), "CBR") &&
+		strings.TrimSpace(v.Maxrate) != "" &&
+		strings.TrimSpace(v.Bitrate) != "" &&
+		!strings.EqualFold(strings.TrimSpace(v.Bitrate), strings.TrimSpace(v.Maxrate)) {
+		issues = append(issues, Issue{
+			Level:   IssueError,
+			Field:   "profile.video.maxrate",
+			Message: fmt.Sprintf("%s CBR requires maxrate to equal bitrate (%s); got %s", e.name, v.Bitrate, v.Maxrate),
 		})
 	}
 	return issues, nil

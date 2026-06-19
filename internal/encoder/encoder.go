@@ -175,6 +175,17 @@ type VideoEncoder interface {
 	// SupportsTune reports whether -tune is meaningful for this encoder.
 	SupportsTune() bool
 
+	// SupportsPreset reports whether this encoder actually consumes
+	// the categorical preset field the UI exposes. Encoders that have
+	// no preset flag in ffmpeg (e.g. the VAAPI encoders) must return
+	// false so the UI disables the field; an enabled-but-ignored
+	// field lets users save settings that silently have no effect.
+	// PresetRange is the integer-range counterpart; the two are
+	// independent: SupportsPreset is true for both integer-preset
+	// encoders (SVT-AV1, libaom-av1) and categorical-preset encoders
+	// (libx264, libx265, NVENC, QSV).
+	SupportsPreset() bool
+
 	// SupportsProfile reports whether -profile:v is meaningful for this
 	// encoder. Most encoders accept profile; some (e.g. av1_nvenc) do not.
 	SupportsProfile() bool

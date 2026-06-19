@@ -353,6 +353,39 @@ func TestSVTPresetSwitchesControlsAndPreservesCategoricalValue(t *testing.T) {
 	}
 }
 
+// TestVAAPIPresetFieldHidden verifies that encoders without a preset
+// flag in ffmpeg (the VAAPI encoders) do not expose the preset widget.
+// An enabled-but-ignored field would let users save a value that has
+// no effect on the generated command, which is a silent footgun.
+func TestVAAPIPresetFieldHidden(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	if c.preset.Visible() {
+		t.Errorf("hevc_vaapi must not show the categorical preset entry (it has no preset flag)")
+	}
+	if c.presetSlider.Visible() {
+		t.Errorf("hevc_vaapi must not show the integer preset slider")
+	}
+	// Either hidden (our path) or disabled is acceptable. The bug
+	// we're guarding against is the previous behaviour: enabled and
+	// visible despite the encoder doing nothing with the value.
+	if !c.preset.Hidden && c.preset.Disabled() == false {
+		t.Errorf("hevc_vaapi preset must be hidden or disabled, not enabled")
+	}
+
+	// Switching to a categorical-preset encoder (libx264) must
+	// re-show the field.
+	c.videoEncoder.SetSelected("libx264")
+	if !c.preset.Visible() || c.presetSlider.Visible() {
+		t.Errorf("libx264 must show the categorical preset entry after VAAPI")
+	}
+}
+
 func TestCRFAndQPRemapOnlyWhenPriorEncoderSupportedTheControl(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()

@@ -73,6 +73,14 @@ func TestSoftwareVideoEncoderMetadata(t *testing.T) {
 		{name: "libvpx-vp9", family: "vp9", hw: HWNone, media: MediaVideo, kind: KindSoftware, supportsTune: false, supportsProf: false},
 		{name: "libaom-av1", family: "av1", hw: HWNone, media: MediaVideo, kind: KindSoftware, supportsTune: false, supportsProf: true},
 	}
+	// Every software video encoder in the curated set consumes a
+	// preset flag (-preset for libx264/libx265/libsvtav1/libaom-av1,
+	// -deadline for libvpx-vp9, -cpu-used for libaom-av1). If a new
+	// software encoder is added that does not, add it to this map.
+	wantSupportsPreset := map[string]bool{
+		"libx264": true, "libx265": true, "libsvtav1": true,
+		"libvpx-vp9": true, "libaom-av1": true,
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ve := findVideo(t, tt.name)
@@ -90,6 +98,9 @@ func TestSoftwareVideoEncoderMetadata(t *testing.T) {
 			}
 			if ve.SupportsTune() != tt.supportsTune {
 				t.Errorf("SupportsTune() = %v, want %v", ve.SupportsTune(), tt.supportsTune)
+			}
+			if got, want := ve.SupportsPreset(), wantSupportsPreset[tt.name]; got != want {
+				t.Errorf("SupportsPreset() = %v, want %v", got, want)
 			}
 			if ve.SupportsProfile() != tt.supportsProf {
 				t.Errorf("SupportsProfile() = %v, want %v", ve.SupportsProfile(), tt.supportsProf)

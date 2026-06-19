@@ -52,6 +52,9 @@ func TestNVENCVideoEncoderMetadata(t *testing.T) {
 			if ve.SupportsTune() {
 				t.Errorf("SupportsTune() = true, want false")
 			}
+			if !ve.SupportsPreset() {
+				t.Errorf("SupportsPreset() = false, want true (NVENC always reads -preset)")
+			}
 			if ve.SupportsProfile() != tt.supportsProf {
 				t.Errorf("SupportsProfile() = %v, want %v", ve.SupportsProfile(), tt.supportsProf)
 			}
@@ -352,5 +355,88 @@ func TestNVENCValidateH264AcceptsProfile(t *testing.T) {
 	}
 	if len(issues) != 0 {
 		t.Errorf("issues = %v, want none for h264_nvenc + profile", issues)
+	}
+}
+
+func TestNVENCValidateCBRMatchingMaxrate(t *testing.T) {
+	ve := findVideo(t, "hevc_nvenc")
+	issues, err := ve.Validate(model.VideoSettings{
+		Encoder:     "hevc_nvenc",
+		RateControl: "CBR",
+		Bitrate:     "6M",
+		Maxrate:     "6M",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, issue := range issues {
+		if issue.Field == "profile.video.maxrate" {
+			t.Errorf("unexpected maxrate issue for matching values: %v", issue)
+		}
+	}
+}
+
+func TestNVENCValidateCBRBlankMaxrateOK(t *testing.T) {
+	ve := findVideo(t, "hevc_nvenc")
+	issues, err := ve.Validate(model.VideoSettings{
+		Encoder:     "hevc_nvenc",
+		RateControl: "CBR",
+		Bitrate:     "6M",
+		Maxrate:     "", // builder auto-promotes
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, issue := range issues {
+		if issue.Field == "profile.video.maxrate" {
+			t.Errorf("unexpected maxrate issue when Maxrate is blank: %v", issue)
+		}
+	}
+}
+
+func TestNVENCValidateCBRMismatchedMaxrate(t *testing.T) {
+	ve := findVideo(t, "hevc_nvenc")
+	issues, err := ve.Validate(model.VideoSettings{
+		Encoder:     "hevc_nvenc",
+		RateControl: "CBR",
+		Bitrate:     "6M",
+		Maxrate:     "9M",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, issue := range issues {
+		if issue.Field == "profile.video.maxrate" {
+			found = true
+			if !strings.Contains(issue.Message, "CBR requires maxrate to equal bitrate") {
+				t.Errorf("issue message = %q, want it to explain the requirement", issue.Message)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a maxrate issue, got %#v", issues)
+	}
+}
+
+func TestNVENCValidateCBRMismatchedMaxrateIsCaseInsensitive(t *testing.T) {
+	ve := findVideo(t, "h264_nvenc")
+	issues, err := ve.Validate(model.VideoSettings{
+		Encoder:     "h264_nvenc",
+		RateControl: "cbr",
+		Bitrate:     "6M",
+		Maxrate:     "9M",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, issue := range issues {
+		if issue.Field == "profile.video.maxrate" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a maxrate issue for lowercase cbr, got %#v", issues)
 	}
 }

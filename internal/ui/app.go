@@ -711,7 +711,7 @@ func (c *Controller) updateControlState() {
 
 	mode := c.rateControl.Selected
 	var hw = encoder.HWNone
-	var qpOK, crfOK, presetOK bool
+	var qpOK, crfOK, presetOK, supportsPreset bool
 	var presetR encoder.IntegerRange
 	var supportsTune, supportsProfile bool
 	if ve != nil {
@@ -721,6 +721,7 @@ func (c *Controller) updateControlState() {
 		presetR, presetOK = ve.PresetRange()
 		supportsTune = ve.SupportsTune()
 		supportsProfile = ve.SupportsProfile()
+		supportsPreset = ve.SupportsPreset()
 	}
 	integerPreset := presetOK && presetR.Max >= presetR.Min
 
@@ -741,18 +742,27 @@ func (c *Controller) updateControlState() {
 	// Preset: toggle between text entry and integer slider. When
 	// switching to an integer-preset encoder, sync the slider from the
 	// text field if the user had a numeric value there.
-	if integerPreset {
+	//
+	// Both the text field and the slider are gated on SupportsPreset
+	// (i.e. the encoder actually emits a preset flag). Encoders like
+	// VAAPI that have no preset flag must not expose a writable field
+	// here, because the saved value would never reach ffmpeg.
+	switch {
+	case !supportsPreset:
+		c.presetSlider.Hide()
+		c.preset.Hide()
+	case integerPreset:
 		if value, err := strconv.Atoi(strings.TrimSpace(c.preset.Text)); err == nil {
 			c.presetSlider.SetValue(value)
 		}
 		c.preset.Hide()
 		c.presetSlider.Show()
-	} else {
+	default:
 		c.presetSlider.Hide()
 		c.preset.Show()
 	}
-	setEnabled(c.preset, ve != nil && !integerPreset)
-	setEnabled(c.presetSlider, ve != nil && integerPreset)
+	setEnabled(c.preset, ve != nil && supportsPreset && !integerPreset)
+	setEnabled(c.presetSlider, ve != nil && supportsPreset && integerPreset)
 
 	setEnabled(c.tune, supportsTune)
 	setEnabled(c.videoProfile, supportsProfile)

@@ -35,6 +35,7 @@ func (e *vaapiEncoder) CRFRange() (IntegerRange, bool)    { return IntegerRange{
 func (e *vaapiEncoder) PresetRange() (IntegerRange, bool) { return IntegerRange{}, false }
 func (e *vaapiEncoder) SupportsTune() bool                { return false }
 func (e *vaapiEncoder) SupportsProfile() bool             { return true }
+func (e *vaapiEncoder) SupportsPreset() bool              { return false }
 func (e *vaapiEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCAuto, RCCQP, RCVBR, RCCBR}
 }

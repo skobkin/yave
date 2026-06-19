@@ -51,6 +51,9 @@ func TestQSVVideoEncoderMetadata(t *testing.T) {
 			if ve.SupportsTune() {
 				t.Errorf("SupportsTune() = true, want false")
 			}
+			if !ve.SupportsPreset() {
+				t.Errorf("SupportsPreset() = false, want true (QSV always reads -preset)")
+			}
 			if ve.SupportsProfile() != tt.supportsProf {
 				t.Errorf("SupportsProfile() = %v, want %v", ve.SupportsProfile(), tt.supportsProf)
 			}
@@ -327,5 +330,66 @@ func TestQSVValidateRejectsInvalidPreset(t *testing.T) {
 	}
 	if len(issues) != 1 || issues[0].Field != "profile.video.preset" {
 		t.Errorf("issues = %v, want one preset error", issues)
+	}
+}
+
+func TestQSVValidateCBRMatchingMaxrate(t *testing.T) {
+	ve := findVideo(t, "hevc_qsv")
+	issues, err := ve.Validate(model.VideoSettings{
+		Encoder:     "hevc_qsv",
+		RateControl: "CBR",
+		Bitrate:     "6M",
+		Maxrate:     "6M",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, issue := range issues {
+		if issue.Field == "profile.video.maxrate" {
+			t.Errorf("unexpected maxrate issue for matching values: %v", issue)
+		}
+	}
+}
+
+func TestQSVValidateCBRBlankMaxrateOK(t *testing.T) {
+	ve := findVideo(t, "hevc_qsv")
+	issues, err := ve.Validate(model.VideoSettings{
+		Encoder:     "hevc_qsv",
+		RateControl: "CBR",
+		Bitrate:     "6M",
+		Maxrate:     "", // builder auto-promotes
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, issue := range issues {
+		if issue.Field == "profile.video.maxrate" {
+			t.Errorf("unexpected maxrate issue when Maxrate is blank: %v", issue)
+		}
+	}
+}
+
+func TestQSVValidateCBRMismatchedMaxrate(t *testing.T) {
+	ve := findVideo(t, "hevc_qsv")
+	issues, err := ve.Validate(model.VideoSettings{
+		Encoder:     "hevc_qsv",
+		RateControl: "CBR",
+		Bitrate:     "6M",
+		Maxrate:     "9M",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, issue := range issues {
+		if issue.Field == "profile.video.maxrate" {
+			found = true
+			if !strings.Contains(issue.Message, "CBR requires maxrate to equal bitrate") {
+				t.Errorf("issue message = %q, want it to explain the requirement", issue.Message)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a maxrate issue, got %#v", issues)
 	}
 }
