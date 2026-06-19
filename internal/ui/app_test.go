@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	fynetest "fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 
+	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
@@ -420,5 +422,263 @@ func testController() *Controller {
 				OutputTemplate: "{dir}/{name}.{ext}",
 			}},
 		},
+	}
+}
+
+// TestEncoderSwitchToNVENCHidesVAAPIDevice verifies the dispatch gates
+// the hardware-device widgets by HWBackend: NVENC enables gpuIndex,
+// disables vaapiDevice and qsvDevice.
+func TestEncoderSwitchToNVENCHidesVAAPIDevice(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// VAAPI on first: vaapiDevice enabled, qsvDevice/gpuIndex disabled.
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	if c.vaapiDevice.Disabled() {
+		t.Errorf("vaapiDevice should be enabled for hevc_vaapi")
+	}
+	if !c.qsvDevice.Disabled() {
+		t.Errorf("qsvDevice should be disabled for hevc_vaapi")
+	}
+	if !c.gpuIndex.Disabled() {
+		t.Errorf("gpuIndex should be disabled for hevc_vaapi")
+	}
+
+	// Switch to NVENC: gpuIndex enabled, the other two disabled.
+	c.videoEncoder.SetSelected("hevc_nvenc")
+	if !c.vaapiDevice.Disabled() {
+		t.Errorf("vaapiDevice should be disabled for hevc_nvenc")
+	}
+	if !c.qsvDevice.Disabled() {
+		t.Errorf("qsvDevice should be disabled for hevc_nvenc")
+	}
+	if c.gpuIndex.Disabled() {
+		t.Errorf("gpuIndex should be enabled for hevc_nvenc")
+	}
+}
+
+// TestEncoderSwitchToQSVEnablesQSVDevice verifies QSV enables only the
+// qsvDevice widget.
+func TestEncoderSwitchToQSVEnablesQSVDevice(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	c.videoEncoder.SetSelected("hevc_qsv")
+	if !c.vaapiDevice.Disabled() {
+		t.Errorf("vaapiDevice should be disabled for hevc_qsv")
+	}
+	if c.qsvDevice.Disabled() {
+		t.Errorf("qsvDevice should be enabled for hevc_qsv")
+	}
+	if !c.gpuIndex.Disabled() {
+		t.Errorf("gpuIndex should be disabled for hevc_qsv")
+	}
+
+	// Software encoder: every device widget disabled.
+	c.videoEncoder.SetSelected("libx265")
+	if !c.vaapiDevice.Disabled() {
+		t.Errorf("vaapiDevice should be disabled for libx265")
+	}
+	if !c.qsvDevice.Disabled() {
+		t.Errorf("qsvDevice should be disabled for libx265")
+	}
+	if !c.gpuIndex.Disabled() {
+		t.Errorf("gpuIndex should be disabled for libx265")
+	}
+
+	// Copy: every device widget disabled.
+	c.videoEncoder.SetSelected("copy")
+	if !c.vaapiDevice.Disabled() {
+		t.Errorf("vaapiDevice should be disabled for copy")
+	}
+	if !c.qsvDevice.Disabled() {
+		t.Errorf("qsvDevice should be disabled for copy")
+	}
+	if !c.gpuIndex.Disabled() {
+		t.Errorf("gpuIndex should be disabled for copy")
+	}
+}
+
+// TestRateControlOptionsFollowEncoder verifies the rate-control dropdown
+// is repopulated per encoder from RateControlModes() and the existing
+// selection is preserved when supported (or falls back to default).
+func TestRateControlOptionsFollowEncoder(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// libx264 only supports CRF — matches the prior buildVideoArgs
+	// behaviour which never emitted -b:v for libx264.
+	c.videoEncoder.SetSelected("libx264")
+	want := []string{"CRF"}
+	if !slices.Equal(c.rateControl.Options, want) {
+		t.Errorf("libx264 rate-control options = %v, want %v", c.rateControl.Options, want)
+	}
+
+	// libsvtav1 advertises {CRF, bitrate}.
+	c.videoEncoder.SetSelected("libsvtav1")
+	want = []string{"CRF", "bitrate"}
+	if !slices.Equal(c.rateControl.Options, want) {
+		t.Errorf("libsvtav1 rate-control options = %v, want %v", c.rateControl.Options, want)
+	}
+
+	// libaom-av1 advertises {CRF, bitrate}.
+	c.videoEncoder.SetSelected("libaom-av1")
+	want = []string{"CRF", "bitrate"}
+	if !slices.Equal(c.rateControl.Options, want) {
+		t.Errorf("libaom-av1 rate-control options = %v, want %v", c.rateControl.Options, want)
+	}
+
+	// hevc_vaapi advertises {AUTO, CQP, VBR, CBR}.
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	want = []string{"Auto", "CQP", "VBR", "CBR"}
+	if !slices.Equal(c.rateControl.Options, want) {
+		t.Errorf("hevc_vaapi rate-control options = %v, want %v", c.rateControl.Options, want)
+	}
+
+	// hevc_nvenc advertises {CQP, VBR, CBR}.
+	c.videoEncoder.SetSelected("hevc_nvenc")
+	want = []string{"CQP", "VBR", "CBR"}
+	if !slices.Equal(c.rateControl.Options, want) {
+		t.Errorf("hevc_nvenc rate-control options = %v, want %v", c.rateControl.Options, want)
+	}
+
+	// hevc_qsv advertises {CQP, VBR, CBR}.
+	c.videoEncoder.SetSelected("hevc_qsv")
+	want = []string{"CQP", "VBR", "CBR"}
+	if !slices.Equal(c.rateControl.Options, want) {
+		t.Errorf("hevc_qsv rate-control options = %v, want %v", c.rateControl.Options, want)
+	}
+}
+
+// TestRateControlFallsBackToDefaultWhenUnsupported verifies the
+// dispatch resets the rate-control selection to the encoder's default
+// when the prior selection is no longer supported.
+func TestRateControlFallsBackToDefaultWhenUnsupported(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// VAAPI has AUTO mode; setting it explicitly so we can verify the
+	// fallback path.
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	c.rateControl.SetSelected("Auto")
+	if c.rateControl.Selected != "Auto" {
+		t.Fatalf("setup: rate control = %q, want Auto", c.rateControl.Selected)
+	}
+
+	// NVENC does not support AUTO; selecting it must fall back to CQP
+	// (NVENC's default) so the user never sees a stale mode that the
+	// encoder cannot accept.
+	c.videoEncoder.SetSelected("hevc_nvenc")
+	if c.rateControl.Selected != "CQP" {
+		t.Errorf("rate control = %q, want CQP (NVENC default)", c.rateControl.Selected)
+	}
+}
+
+// TestEncoderSwitchFromLibsvtav1ToLibaomPreservesCPUUsed verifies the
+// integer preset slider remaps proportionally between two integer-preset
+// encoders (libsvtav1 {0,13} -> libaom-av1 {0,8}). 6 on SVT-AV1 maps to
+// roughly 4 on libaom-av1 (mid-quality in both scales).
+func TestEncoderSwitchFromLibsvtav1ToLibaomPreservesCPUUsed(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	c.videoEncoder.SetSelected("libsvtav1")
+	c.presetSlider.SetValue(6)
+	if got := c.profileFromWidgets().Video.Preset; got != "6" {
+		t.Fatalf("SVT preset = %q, want 6", got)
+	}
+
+	c.videoEncoder.SetSelected("libaom-av1")
+	if got := c.presetSlider.Value(); got != 4 {
+		t.Errorf("libaom-av1 preset = %d, want 4 (proportional remap of SVT 6/13 -> libaom 4/8)", got)
+	}
+	if got := c.profileFromWidgets().Video.Preset; got != "4" {
+		t.Errorf("profile preset = %q, want 4", got)
+	}
+}
+
+// TestInitialEncoderListIncludesNVENCAndQSV verifies the createWidgets
+// initial list is seeded from the registry so new encoders appear even
+// before ffmpeg detection completes.
+func TestInitialEncoderListIncludesNVENCAndQSV(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	want := []string{"hevc_nvenc", "hevc_qsv", "libaom-av1"}
+	for _, name := range want {
+		if !slices.Contains(c.videoEncoder.Options, name) {
+			t.Errorf("initial video encoder list missing %q (got %v)", name, c.videoEncoder.Options)
+		}
+	}
+	// "copy" must always be the first option so it is the default selection.
+	if len(c.videoEncoder.Options) == 0 || c.videoEncoder.Options[0] != "copy" {
+		t.Errorf("initial video encoder list must start with 'copy' (got %v)", c.videoEncoder.Options)
+	}
+}
+
+// TestProfileFromWidgetsIncludesQSVDeviceAndGPUIndex verifies the new
+// fields round-trip through loadProfile / profileFromWidgets, which is
+// what serialization to the profile YAML depends on.
+func TestProfileFromWidgetsIncludesQSVDeviceAndGPUIndex(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	profile := c.config.Profiles[0]
+	profile.Video.Encoder = "hevc_qsv"
+	profile.Video.QSVDevice = "/dev/dri/renderD128"
+	profile.Video.GPUIndex = 2
+
+	c.loadProfile(profile)
+	got := c.profileFromWidgets()
+
+	if got.Video.QSVDevice != "/dev/dri/renderD128" {
+		t.Errorf("QSVDevice = %q, want /dev/dri/renderD128", got.Video.QSVDevice)
+	}
+	if got.Video.GPUIndex != 2 {
+		t.Errorf("GPUIndex = %d, want 2", got.Video.GPUIndex)
+	}
+}
+
+// TestEncoderRegistryInterfacesForCuratedSet sanity-checks the encoder
+// registry exposes the full curated set the UI assumes — every name the
+// tests above touch must be present. This guards against accidental
+// removal during future refactors.
+func TestEncoderRegistryInterfacesForCuratedSet(t *testing.T) {
+	want := []string{
+		"libx264", "libx265", "libsvtav1", "libvpx-vp9", "libaom-av1",
+		"h264_vaapi", "hevc_vaapi", "av1_vaapi", "vp9_vaapi",
+		"h264_nvenc", "hevc_nvenc", "av1_nvenc",
+		"h264_qsv", "hevc_qsv", "av1_qsv", "vp9_qsv",
+	}
+	reg := encoder.DefaultRegistry()
+	for _, name := range want {
+		e, ok := reg.Get(name)
+		if !ok {
+			t.Errorf("registry missing %q", name)
+			continue
+		}
+		if _, ok := e.(encoder.VideoEncoder); !ok {
+			t.Errorf("%q is registered but does not implement VideoEncoder", name)
+		}
 	}
 }

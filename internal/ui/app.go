@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"fyne.io/systray"
 
+	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/ffmpeg"
 	"git.skobk.in/skobkin/yave/internal/ffprobe"
 	"git.skobk.in/skobkin/yave/internal/model"
@@ -66,35 +67,46 @@ type Controller struct {
 	// silently rewrite defaults that the user never touched.
 	qpRangeEncoder  string
 	crfRangeEncoder string
-	bitrate         *widget.Entry
-	maxrate         *widget.Entry
-	bufsize         *widget.Entry
-	preset          *widget.Entry
-	presetSlider    *integerSlider
-	presetControl   *fyne.Container
-	tune            *widget.Entry
-	videoProfile    *widget.Entry
-	frameMode       *widget.Select
-	frameRate       *widget.Entry
-	maxWidth        *widget.Entry
-	maxHeight       *widget.Entry
-	keepAspect      *widget.Check
-	noUpscale       *widget.Check
-	vaapiDevice     *widget.Entry
-	audioMode       *widget.Select
-	audioEncoder    *widget.Select
-	audioBitrate    *widget.Select
-	compression     *integerSlider
-	allAudio        *widget.Check
-	subtitles       *widget.Select
-	command         *widget.Entry
-	progress        *widget.ProgressBar
-	progressInfo    *widget.Label
-	log             *widget.Entry
-	start           *widget.Button
-	cancel          *widget.Button
-	tabs            *container.AppTabs
-	runTab          *container.TabItem
+	// presetRangeEncoder tracks which encoder's PresetRange is currently
+	// set on the preset slider. An empty value means the slider has no
+	// range yet (initial state or the prior encoder used a categorical
+	// preset). Tracking the prior encoder allows a proportional remap
+	// when switching between two integer-preset encoders with different
+	// ranges (e.g. libsvtav1 {0,13} -> libaom-av1 {0,8}) while
+	// preserving the categorical value when switching to a slider for
+	// the first time (e.g. libx264 "slow" -> libsvtav1).
+	presetRangeEncoder string
+	bitrate            *widget.Entry
+	maxrate            *widget.Entry
+	bufsize            *widget.Entry
+	preset             *widget.Entry
+	presetSlider       *integerSlider
+	presetControl      *fyne.Container
+	tune               *widget.Entry
+	videoProfile       *widget.Entry
+	frameMode          *widget.Select
+	frameRate          *widget.Entry
+	maxWidth           *widget.Entry
+	maxHeight          *widget.Entry
+	keepAspect         *widget.Check
+	noUpscale          *widget.Check
+	vaapiDevice        *widget.Entry
+	qsvDevice          *widget.Entry
+	gpuIndex           *widget.Entry
+	audioMode          *widget.Select
+	audioEncoder       *widget.Select
+	audioBitrate       *widget.Select
+	compression        *integerSlider
+	allAudio           *widget.Check
+	subtitles          *widget.Select
+	command            *widget.Entry
+	progress           *widget.ProgressBar
+	progressInfo       *widget.Label
+	log                *widget.Entry
+	start              *widget.Button
+	cancel             *widget.Button
+	tabs               *container.AppTabs
+	runTab             *container.TabItem
 }
 
 func New(a fyne.App, initialInput string) (*Controller, error) {
@@ -198,11 +210,10 @@ func (c *Controller) createWidgets() {
 	c.outputPreview = widget.NewLabel("")
 	c.outputPreview.Wrapping = fyne.TextWrapWord
 
-	c.videoEncoder = widget.NewSelect([]string{
-		"copy", "hevc_vaapi", "h264_vaapi", "av1_vaapi", "vp9_vaapi",
-		"libx265", "libx264", "libsvtav1", "libvpx-vp9",
-	}, c.changed)
-	c.rateControl = widget.NewSelect([]string{"Auto", "CQP", "VBR", "CBR", "CRF", "bitrate"}, c.changed)
+	videoOpts := append([]string{"copy"}, encoder.DefaultRegistry().VideoNames()...)
+	c.videoEncoder = widget.NewSelect(videoOpts, c.changed)
+	// rateControl options are populated per-encoder by updateControlState.
+	c.rateControl = widget.NewSelect([]string{}, c.changed)
 	c.qp = newIntegerSlider(mustQPRange("hevc_vaapi"), 30, c.changed)
 	c.crf = newIntegerSlider(mustCRFRange("libx265"), 28, c.changed)
 	c.bitrate = entry(c.changed)
@@ -221,9 +232,12 @@ func (c *Controller) createWidgets() {
 	c.keepAspect = widget.NewCheck("Keep aspect ratio", func(bool) { c.changed("") })
 	c.noUpscale = widget.NewCheck("Prevent upscaling", func(bool) { c.changed("") })
 	c.vaapiDevice = entry(c.changed)
+	c.qsvDevice = entry(c.changed)
+	c.gpuIndex = numericEntry(c.changed)
 
 	c.audioMode = widget.NewSelect([]string{model.AudioCopy, model.AudioEncode}, c.changed)
-	c.audioEncoder = widget.NewSelect([]string{"copy", "libopus", "opus", "aac", "libmp3lame", "mp3", "flac"}, c.changed)
+	audioOpts := append([]string{"copy"}, encoder.DefaultRegistry().AudioNames()...)
+	c.audioEncoder = widget.NewSelect(audioOpts, c.changed)
 	c.audioBitrate = widget.NewSelect([]string{"96k", "128k", "160k", "192k", "256k", "320k"}, c.changed)
 	c.compression = newIntegerSlider(mustAudioCompressionRange("flac"), 8, c.changed)
 	c.allAudio = widget.NewCheck("Process all audio streams", func(bool) { c.changed("") })
@@ -280,6 +294,8 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 			widget.NewFormItem("Maximum width", c.maxWidth),
 			widget.NewFormItem("Maximum height", c.maxHeight),
 			widget.NewFormItem("VAAPI device", c.vaapiDevice),
+			widget.NewFormItem("QSV device", c.qsvDevice),
+			widget.NewFormItem("GPU index", c.gpuIndex),
 		),
 		container.NewHBox(c.keepAspect, c.noUpscale),
 	))
@@ -616,6 +632,8 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.keepAspect.SetChecked(p.Video.KeepAspectRatio)
 	c.noUpscale.SetChecked(p.Video.PreventUpscaling)
 	c.vaapiDevice.SetText(p.Video.VAAPIDevice)
+	c.qsvDevice.SetText(p.Video.QSVDevice)
+	c.gpuIndex.SetText(intText(p.Video.GPUIndex))
 	c.audioMode.SetSelected(p.Audio.Mode)
 	c.audioEncoder.SetSelected(p.Audio.Encoder)
 	c.audioBitrate.SetSelected(p.Audio.Bitrate)
@@ -635,7 +653,8 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			FrameRateMode: c.frameMode.Selected, FrameRate: c.frameRate.Text,
 			MaxWidth: atoi(c.maxWidth.Text), MaxHeight: atoi(c.maxHeight.Text),
 			KeepAspectRatio: c.keepAspect.Checked, PreventUpscaling: c.noUpscale.Checked,
-			VAAPIDevice: c.vaapiDevice.Text,
+			VAAPIDevice: c.vaapiDevice.Text, QSVDevice: c.qsvDevice.Text,
+			GPUIndex: atoi(c.gpuIndex.Text),
 		},
 		Audio: model.AudioSettings{
 			Mode: c.audioMode.Selected, Encoder: c.audioEncoder.Selected,
@@ -647,22 +666,82 @@ func (c *Controller) profileFromWidgets() model.Profile {
 }
 
 func (c *Controller) updateControlState() {
-	encoder := c.videoEncoder.Selected
+	encoderName := c.videoEncoder.Selected
+	copyVideo := encoderName == "copy"
+
+	// Look up the encoder from the registry. Unknown names (e.g. before
+	// detection completes, or a name stripped by ParseEncoders) leave ve
+	// nil and every video control disabled — the dropdown still updates
+	// so the user can pick another.
+	var ve encoder.VideoEncoder
+	if !copyVideo {
+		if e, ok := encoder.DefaultRegistry().Get(encoderName); ok {
+			ve, _ = e.(encoder.VideoEncoder)
+		}
+	}
+
 	c.updateIntegerRanges()
-	copyVideo := encoder == "copy"
-	vaapi := strings.HasSuffix(encoder, "_vaapi")
-	setEnabled(c.rateControl, !copyVideo)
-	setEnabled(c.qp, vaapi && strings.EqualFold(c.rateControl.Selected, "CQP"))
-	setEnabled(c.crf, !copyVideo && !vaapi && !strings.EqualFold(c.rateControl.Selected, "bitrate"))
-	bitrateMode := strings.EqualFold(c.rateControl.Selected, "VBR") ||
-		strings.EqualFold(c.rateControl.Selected, "CBR") ||
-		strings.EqualFold(c.rateControl.Selected, "bitrate") ||
-		strings.EqualFold(c.rateControl.Selected, "Auto")
-	setEnabled(c.bitrate, !copyVideo && bitrateMode)
-	setEnabled(c.maxrate, vaapi && (strings.EqualFold(c.rateControl.Selected, "VBR") || strings.EqualFold(c.rateControl.Selected, "CBR")))
-	setEnabled(c.bufsize, vaapi && (strings.EqualFold(c.rateControl.Selected, "VBR") || strings.EqualFold(c.rateControl.Selected, "CBR")))
-	svtPreset := encoder == "libsvtav1"
-	if svtPreset {
+
+	// Populate the rate-control dropdown from the encoder's advertised
+	// modes. Preserve the current selection if it remains supported;
+	// otherwise fall back to the encoder's default so a stale mode
+	// (e.g. "Auto" left over from VAAPI after the user picks NVENC)
+	// never lingers.
+	if ve != nil {
+		modes := ve.RateControlModes()
+		options := make([]string, len(modes))
+		supported := false
+		current := c.rateControl.Selected
+		for i, m := range modes {
+			label := rateControlLabel(m)
+			options[i] = label
+			if label == current {
+				supported = true
+			}
+		}
+		c.rateControl.Options = options
+		if !supported {
+			c.rateControl.SetSelected(rateControlLabel(ve.DefaultRateControl()))
+		} else {
+			c.rateControl.Refresh()
+		}
+	} else {
+		c.rateControl.Options = []string{}
+	}
+
+	mode := c.rateControl.Selected
+	var hw encoder.HWBackend = encoder.HWNone
+	var qpOK, crfOK, presetOK bool
+	var presetR encoder.IntegerRange
+	var supportsTune, supportsProfile bool
+	if ve != nil {
+		hw = ve.HWBackend()
+		_, qpOK = ve.QPRange()
+		_, crfOK = ve.CRFRange()
+		presetR, presetOK = ve.PresetRange()
+		supportsTune = ve.SupportsTune()
+		supportsProfile = ve.SupportsProfile()
+	}
+	integerPreset := presetOK && presetR.Max >= presetR.Min
+
+	setEnabled(c.rateControl, ve != nil)
+	setEnabled(c.qp, qpOK && strings.EqualFold(mode, "CQP"))
+	setEnabled(c.crf, crfOK && !strings.EqualFold(mode, "bitrate"))
+
+	bitrateMode := strings.EqualFold(mode, "VBR") ||
+		strings.EqualFold(mode, "CBR") ||
+		strings.EqualFold(mode, "bitrate") ||
+		strings.EqualFold(mode, "Auto")
+	setEnabled(c.bitrate, ve != nil && bitrateMode)
+
+	rateCapped := strings.EqualFold(mode, "VBR") || strings.EqualFold(mode, "CBR")
+	setEnabled(c.maxrate, ve != nil && rateCapped)
+	setEnabled(c.bufsize, ve != nil && rateCapped)
+
+	// Preset: toggle between text entry and integer slider. When
+	// switching to an integer-preset encoder, sync the slider from the
+	// text field if the user had a numeric value there.
+	if integerPreset {
 		if value, err := strconv.Atoi(strings.TrimSpace(c.preset.Text)); err == nil {
 			c.presetSlider.SetValue(value)
 		}
@@ -672,17 +751,24 @@ func (c *Controller) updateControlState() {
 		c.presetSlider.Hide()
 		c.preset.Show()
 	}
-	setEnabled(c.preset, encoder == "libx264" || encoder == "libx265" || encoder == "libvpx-vp9")
-	setEnabled(c.presetSlider, svtPreset)
-	setEnabled(c.tune, encoder == "libx264" || encoder == "libx265")
-	setEnabled(c.videoProfile, vaapi || encoder == "libx264" || encoder == "libx265")
-	setEnabled(c.frameMode, !copyVideo)
-	setEnabled(c.frameRate, !copyVideo && c.frameMode.Selected == "convert")
-	setEnabled(c.maxWidth, !copyVideo)
-	setEnabled(c.maxHeight, !copyVideo)
-	setEnabled(c.keepAspect, !copyVideo)
-	setEnabled(c.noUpscale, !copyVideo)
-	setEnabled(c.vaapiDevice, vaapi)
+	setEnabled(c.preset, ve != nil && !integerPreset)
+	setEnabled(c.presetSlider, ve != nil && integerPreset)
+
+	setEnabled(c.tune, supportsTune)
+	setEnabled(c.videoProfile, supportsProfile)
+	setEnabled(c.frameMode, ve != nil)
+	setEnabled(c.frameRate, ve != nil && c.frameMode.Selected == "convert")
+	setEnabled(c.maxWidth, ve != nil)
+	setEnabled(c.maxHeight, ve != nil)
+	setEnabled(c.keepAspect, ve != nil)
+	setEnabled(c.noUpscale, ve != nil)
+
+	// Hardware-device widgets are gated by the encoder's HWBackend.
+	// Each backend gets exactly one device widget enabled; copy and
+	// software encoders disable all three.
+	setEnabled(c.vaapiDevice, hw == encoder.HWVAAPI)
+	setEnabled(c.qsvDevice, hw == encoder.HWQSV)
+	setEnabled(c.gpuIndex, hw == encoder.HWNVENC)
 
 	copyAudio := c.audioMode.Selected == model.AudioCopy
 	setEnabled(c.audioEncoder, !copyAudio)
@@ -726,10 +812,29 @@ func (c *Controller) updateIntegerRanges() {
 	} else {
 		c.crfRangeEncoder = ""
 	}
+	// Preset slider: only integer-preset encoders own this range.
+	// libsvtav1 {0,13} -> libaom-av1 {0,8} should remap 6 -> 4, while
+	// categorical->integer (e.g. libx264 "slow" -> libsvtav1) must NOT
+	// remap a stale "6" left over from a default; an empty
+	// presetRangeEncoder signals the slider has never been owned by an
+	// integer encoder and we should just clamp without remap.
+	if r, ok := validation.PresetRange(c.videoEncoder.Selected); ok && r.Max >= r.Min {
+		if c.presetRangeEncoder != "" && c.presetRangeEncoder != c.videoEncoder.Selected {
+			old := c.presetSlider.Range()
+			oldValue := c.presetSlider.Value()
+			c.presetSlider.SetRange(r)
+			c.presetSlider.SetValue(validation.ProportionalConvert(oldValue, old, r))
+		} else {
+			c.presetSlider.SetRange(r)
+		}
+		c.presetRangeEncoder = c.videoEncoder.Selected
+	} else {
+		c.presetRangeEncoder = ""
+	}
 }
 
 func (c *Controller) presetValue() string {
-	if c.videoEncoder.Selected == "libsvtav1" {
+	if r, ok := validation.PresetRange(c.videoEncoder.Selected); ok && r.Max >= r.Min {
 		return strconv.Itoa(c.presetSlider.Value())
 	}
 	return c.preset.Text
@@ -917,6 +1022,28 @@ func numericEntry(changed func(string)) *widget.Entry {
 func mustQPRange(encoder string) validation.IntegerRange {
 	r, _ := validation.QPRange(encoder)
 	return r
+}
+
+// rateControlLabel maps the encoder package's RateControl enum to the
+// display strings the dropdown uses. Kept lower-case for "bitrate" to
+// preserve profile-file compatibility — existing profile YAML stores
+// the value verbatim as the selected dropdown label.
+func rateControlLabel(rc encoder.RateControl) string {
+	switch rc {
+	case encoder.RCAuto:
+		return "Auto"
+	case encoder.RCCQP:
+		return "CQP"
+	case encoder.RCVBR:
+		return "VBR"
+	case encoder.RCCBR:
+		return "CBR"
+	case encoder.RCCRF:
+		return "CRF"
+	case encoder.RCBitrate:
+		return "bitrate"
+	}
+	return string(rc)
 }
 
 func mustCRFRange(encoder string) validation.IntegerRange {
