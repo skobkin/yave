@@ -12,13 +12,16 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
+	"fyne.io/systray"
 
 	"git.skobk.in/skobkin/yave/internal/ffmpeg"
 	"git.skobk.in/skobkin/yave/internal/ffprobe"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/profiles"
+	"git.skobk.in/skobkin/yave/internal/resources"
 	"git.skobk.in/skobkin/yave/internal/templates"
 	"git.skobk.in/skobkin/yave/internal/transcode"
 	"git.skobk.in/skobkin/yave/internal/validation"
@@ -37,6 +40,12 @@ type Controller struct {
 	outputPath string
 	runCancel  context.CancelFunc
 	loading    bool
+	// windowVisible mirrors the Fyne window's visibility so the tray click
+	// handler can decide between Show() and Hide() without polling the
+	// driver. fyne.Window has no Visible() accessor, so we track it
+	// ourselves. It is flipped to true in ShowAndRun and toggled in
+	// configureTray's click handler.
+	windowVisible bool
 
 	status        *widget.Label
 	detection     *widget.Label
@@ -107,6 +116,8 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	c.createWidgets()
 	c.window.SetContent(c.buildLayout())
 	c.window.Resize(fyne.NewSize(1050, 760))
+	c.window.CenterOnScreen()
+	c.window.SetIcon(resources.AppIcon())
 	c.window.SetOnDropped(func(_ fyne.Position, uris []fyne.URI) {
 		if len(uris) > 0 {
 			c.setInput(uris[0].Path())
@@ -117,10 +128,49 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	if initialInput != "" {
 		c.setInput(initialInput)
 	}
+	if desk, ok := a.(desktop.App); ok {
+		c.configureTray(desk)
+	}
 	return c, nil
 }
 
+// configureTray wires up the system tray icon and a minimal click handler
+// that toggles the main window's visibility.
+//
+// The empty fyne.NewMenu("YAVE") passed to SetSystemTrayMenu is what
+// actually starts Fyne's systray goroutine — SetSystemTrayIcon on its own
+// only stores the resource and never registers with the OS D-Bus tray.
+// Fyne auto-appends a separator and a Quit item to a menu that lacks one,
+// which conveniently provides a way to exit the app from the tray.
+//
+// The systray callback runs in the systray's own goroutine, so the
+// window Show/Hide calls must be dispatched onto Fyne's UI thread via
+// fyne.Do. Wrapping the whole toggle inside fyne.Do also keeps the
+// read-modify-write of windowVisible on a single goroutine, avoiding a
+// data race with ShowAndRun.
+//
+// The window's close button still quits the app via Fyne's default
+// behaviour — the close intercept is not overridden, so X = quit while
+// tray click = toggle visibility.
+func (c *Controller) configureTray(desk desktop.App) {
+	desk.SetSystemTrayIcon(resources.TrayIcon())
+	desk.SetSystemTrayMenu(fyne.NewMenu("YAVE"))
+	systray.SetOnTapped(func() {
+		fyne.Do(func() {
+			if c.windowVisible {
+				c.window.Hide()
+				c.windowVisible = false
+				return
+			}
+			c.window.Show()
+			c.windowVisible = true
+		})
+	})
+}
+
 func (c *Controller) ShowAndRun() {
+	c.window.Show()
+	c.windowVisible = true
 	c.window.ShowAndRun()
 }
 

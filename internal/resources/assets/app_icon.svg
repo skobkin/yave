@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="512" height="512" viewBox="0 0 416 416" role="img" aria-label="Cleaned YAVE codec grid icon, 512 square centered version">
+<defs>
+  <linearGradient id="yave-bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#111827" />
+    <stop offset="55%" stop-color="#0F2233" />
+    <stop offset="100%" stop-color="#111827" />
+  </linearGradient>
+</defs>
+<rect x="0" y="0" width="416" height="416" rx="68" fill="url(#yave-bg)" />
+<g transform="translate(-48,-208)">
+  <path d="M0.0,0.0 L64.0,0.0 L64.0,64.0 L0.0,64.0 L0.0,0.0 Z" fill="#FD7E2D" transform="translate(336,520)" />
+  <path d="M0.0,0.0 L64.0,0.0 L64.0,64.0 L0.0,64.0 L0.0,0.0 Z" fill="#07A0EE" transform="translate(64,392)" />
+  <path d="M0.0,0.0 L64.0,0.0 L64.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#C3C3C1" transform="translate(224,536)" />
+  <path d="M0.0,0.0 L64.0,0.0 L64.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#C3C3C1" transform="translate(224,488)" />
+  <path d="M0.0,0.0 L64.0,0.0 L64.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#C3C3C1" transform="translate(224,440)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#19212C" transform="translate(352,536)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#07A0EE" transform="translate(56,536)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#07A0EE" transform="translate(160,520)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#07A0EE" transform="translate(96,488)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FD7E2D" transform="translate(424,472)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FD7E2D" transform="translate(336,472)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#07A0EE" transform="translate(144,440)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FD7E2D" transform="translate(368,408)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#19212C" transform="translate(80,408)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(288,392)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(240,392)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(192,392)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FD7E2D" transform="translate(416,344)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(336,344)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(288,344)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(240,344)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(192,344)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(144,344)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#07A0EE" transform="translate(56,344)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(384,296)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(336,296)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(288,296)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(192,296)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(144,296)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(96,296)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(384,248)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(336,248)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(144,248)" />
+  <path d="M0.0,0.0 L32.0,0.0 L32.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(96,248)" />
+  <path d="M0.0,0.0 L16.0,0.0 L16.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(272,536)" />
+  <path d="M0.0,0.0 L16.0,0.0 L16.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(224,536)" />
+  <path d="M0.0,0.0 L16.0,0.0 L16.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(272,488)" />
+  <path d="M0.0,0.0 L16.0,0.0 L16.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(224,488)" />
+  <path d="M0.0,0.0 L16.0,0.0 L16.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(272,440)" />
+  <path d="M0.0,0.0 L16.0,0.0 L16.0,32.0 L0.0,32.0 L0.0,0.0 Z" fill="#FFFFFF" transform="translate(224,440)" />
+</g>
+</svg>

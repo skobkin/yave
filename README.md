@@ -60,6 +60,15 @@ Supported placeholders are `{dir}`, `{name}`, `{ext}`, `{input_ext}`,
 `{height}`. Placeholder values are sanitized and templates containing unknown
 placeholders or path traversal are rejected.
 
+## Thanks
+
+Special thanks to the people who helped shape YAVE.
+
+### App icon
+
+- [@lonelyowl](https://github.com/lonelyowl13)
+- [@mychaelo](https://github.com/mychaelo)
+
 ## Verification
 
 ```bash

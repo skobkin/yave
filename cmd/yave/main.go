@@ -6,11 +6,13 @@ import (
 
 	"fyne.io/fyne/v2/app"
 
+	"git.skobk.in/skobkin/yave/internal/resources"
 	"git.skobk.in/skobkin/yave/internal/ui"
 )
 
 func main() {
 	a := app.NewWithID("in.skobk.yave")
+	a.SetIcon(resources.AppIcon())
 	initialInput := ""
 	if len(os.Args) > 1 {
 		initialInput = os.Args[1]
