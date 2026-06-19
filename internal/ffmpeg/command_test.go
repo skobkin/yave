@@ -199,8 +199,8 @@ func TestBuildCommandQSV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsPair(plan.Args, "-init_hw_device", "qsv=/dev/dri/renderD128") {
-		t.Errorf("missing -init_hw_device qsv=... in %#v", plan.Args)
+	if !containsPair(plan.Args, "-init_hw_device", "qsv:hw,child_device=/dev/dri/renderD128") {
+		t.Errorf("missing -init_hw_device qsv:hw,child_device=... in %#v", plan.Args)
 	}
 	for _, pair := range [][2]string{
 		{"-c:v", "hevc_qsv"},

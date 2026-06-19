@@ -289,7 +289,10 @@ func TestQSVInitDeviceCustomPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"-init_hw_device", "qsv=/dev/dri/renderD128"}
+	// ffmpeg's qsv:hw,child_device=<path> opens the named DRM
+	// render node; "qsv=<path>" would only set the device label
+	// and leave the child device unset.
+	want := []string{"-init_hw_device", "qsv:hw,child_device=/dev/dri/renderD128"}
 	if !slices.Equal(res.PreInputArgs, want) {
 		t.Errorf("PreInputArgs = %v, want %v", res.PreInputArgs, want)
 	}

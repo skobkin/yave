@@ -14,9 +14,11 @@ import (
 // everything else — pre-input args, filter chain, rate-control
 // mapping — is shared.
 //
-// Pre-input flags are always emitted: `-init_hw_device qsv` (or
-// `qsv=<device>` when the user has picked a render node). The
-// filter chain is the QSV hw upload path: format=qsv,hwupload
+// Pre-input flags are always emitted: `-init_hw_device qsv` by default,
+// or `-init_hw_device qsv:hw,child_device=<path>` when the user has
+// picked a render node. The `=` after `qsv` would set the device
+// label, not the child device, so it is intentionally not used here.
+// The filter chain is the QSV hw upload path: format=qsv,hwupload
 // followed by an optional scale_qsv.
 type qsvEncoder struct {
 	name            string
@@ -75,12 +77,16 @@ func (e *qsvEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (
 	return strings.Join(filters, ","), nil
 }
 
-// BuildVideoArgs emits the pre-input -init_hw_device qsv[=<device>]
-// flag plus the per-stream QSV args. The rate-control mapping is
-// -rc_mode CQP/VBR/CBR with the matching -qp / -b:v / -maxrate flags.
-// CBR forces -maxrate = -b:v when the user did not specify a maxrate,
-// matching the ffmpeg requirement that CBR targets must equal the
-// maximum rate.
+// BuildVideoArgs emits the pre-input -init_hw_device qsv flag plus
+// the per-stream QSV args. When the user picks a render node the flag
+// becomes -init_hw_device qsv:hw,child_device=<path> so ffmpeg opens
+// the underlying DRM node; using qsv=<path> would just label the
+// device and leave the child device unspecified.
+//
+// The rate-control mapping is -rc_mode CQP/VBR/CBR with the matching
+// -qp / -b:v / -maxrate flags. CBR forces -maxrate = -b:v when the
+// user did not specify a maxrate, matching the ffmpeg requirement
+// that CBR targets must equal the maximum rate.
 func (e *qsvEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) {
 	if v.Encoder == "" {
 		return BuildResult{}, fmt.Errorf("video encoder is empty")
@@ -89,7 +95,7 @@ func (e *qsvEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) 
 	if strings.TrimSpace(v.QSVDevice) == "" {
 		res.PreInputArgs = []string{"-init_hw_device", "qsv"}
 	} else {
-		res.PreInputArgs = []string{"-init_hw_device", "qsv=" + v.QSVDevice}
+		res.PreInputArgs = []string{"-init_hw_device", "qsv:hw,child_device=" + v.QSVDevice}
 	}
 	args := []string{"-c:v", e.name}
 	preset := defaultString(v.Preset, e.presetDefault)
