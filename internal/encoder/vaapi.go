@@ -49,7 +49,7 @@ func (e *vaapiEncoder) DefaultRateControl() RateControl { return RCAuto }
 //
 //	format=nv12,hwupload[,scale_vaapi=w=W:h=H[:force_original_aspect_ratio=decrease:force_divisible_by=2]]
 func (e *vaapiEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (string, error) {
-	filters, err := appendFrameRateFilter(nil, v)
+	filters, err := appendFrameRateFilter(v)
 	if err != nil {
 		return "", err
 	}

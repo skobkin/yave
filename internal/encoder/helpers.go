@@ -88,15 +88,15 @@ func rateControlMode(v model.VideoSettings) string {
 	return strings.ToUpper(strings.TrimSpace(v.RateControl))
 }
 
-// appendFrameRateFilter prepends an fps= filter when frame-rate
-// conversion is requested. The result is appended to filters (which may
-// already be empty).
-func appendFrameRateFilter(filters []string, v model.VideoSettings) ([]string, error) {
+// appendFrameRateFilter returns the leading fps= filter when frame-rate
+// conversion is requested, or nil when no conversion is configured.
+// The slice is intended to be prepended to the encoder's filter chain.
+func appendFrameRateFilter(v model.VideoSettings) ([]string, error) {
 	if !strings.EqualFold(strings.TrimSpace(v.FrameRateMode), "convert") {
-		return filters, nil
+		return nil, nil
 	}
 	if strings.TrimSpace(v.FrameRate) == "" {
-		return filters, fmt.Errorf("frame rate is required when conversion is enabled")
+		return nil, fmt.Errorf("frame rate is required when conversion is enabled")
 	}
-	return append(filters, "fps="+v.FrameRate), nil
+	return []string{"fps=" + v.FrameRate}, nil
 }

@@ -59,7 +59,7 @@ func (e *qsvEncoder) DefaultRateControl() RateControl { return RCCQP }
 //
 //	format=qsv,hwupload[,scale_qsv=w=W:h=H[:opts]]
 func (e *qsvEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (string, error) {
-	filters, err := appendFrameRateFilter(nil, v)
+	filters, err := appendFrameRateFilter(v)
 	if err != nil {
 		return "", err
 	}

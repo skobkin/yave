@@ -82,7 +82,7 @@ func (e *softwareEncoder) SupportsProfile() bool { return e.supportsProfile }
 // hw upload or pixel-format conversion because software encoders consume
 // software frames.
 func (e *softwareEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (string, error) {
-	filters, err := appendFrameRateFilter(nil, v)
+	filters, err := appendFrameRateFilter(v)
 	if err != nil {
 		return "", err
 	}

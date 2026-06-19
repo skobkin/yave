@@ -710,7 +710,7 @@ func (c *Controller) updateControlState() {
 	}
 
 	mode := c.rateControl.Selected
-	var hw encoder.HWBackend = encoder.HWNone
+	var hw = encoder.HWNone
 	var qpOK, crfOK, presetOK bool
 	var presetR encoder.IntegerRange
 	var supportsTune, supportsProfile bool

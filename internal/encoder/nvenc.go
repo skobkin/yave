@@ -60,7 +60,7 @@ func (e *nvencEncoder) DefaultRateControl() RateControl { return RCCQP }
 //
 //	format=yuv420p,format=nv12,hwupload_cuda[,scale_cuda=w=W:h=H[:opts]]
 func (e *nvencEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (string, error) {
-	filters, err := appendFrameRateFilter(nil, v)
+	filters, err := appendFrameRateFilter(v)
 	if err != nil {
 		return "", err
 	}
