@@ -239,13 +239,23 @@ func validateVideoForEncoder(result *Result, video model.VideoSettings, ve encod
 
 // videoModeAllowed reports whether mode is one of the modes the
 // encoder advertises. Empty mode is treated as the encoder's
-// default only when that default exists in the advertised set.
+// default; if that default appears in the advertised RateControlModes
+// set the empty value is accepted, because the encoder's builder
+// would substitute the default and emit a runnable command
+// (e.g. NVENC/QSV: "" -> CQP; VAAPI: "" -> Auto; libx264/libx265:
+// "" -> CRF, the builder always emits -crf regardless). Mirrors the
+// preset fix that consults DefaultPreset() to keep validation in
+// sync with the builders.
 func videoModeAllowed(ve encoder.VideoEncoder, mode string) bool {
 	modes := ve.RateControlModes()
 	if mode == "" {
-		// Empty mode is allowed if the encoder's default is "AUTO"
-		// (e.g. VAAPI), since callers commonly leave it unset.
-		return ve.DefaultRateControl() == encoder.RCAuto
+		def := string(ve.DefaultRateControl())
+		for _, m := range modes {
+			if string(m) == def {
+				return true
+			}
+		}
+		return false
 	}
 	for _, m := range modes {
 		if string(m) == mode {

@@ -240,6 +240,16 @@ func TestVideoRateControlValidation(t *testing.T) {
 		{name: "aom preset out of range", encoder: "libaom-av1", mode: "CRF", mutate: func(v *model.VideoSettings) { v.CRF = 30; v.Preset = "9" }, valid: false},
 		{name: "vp9 bitrate", encoder: "libvpx-vp9", mode: "BITRATE", mutate: func(v *model.VideoSettings) { v.Bitrate = "2400k" }, valid: true},
 		{name: "vp9 unsupported mode", encoder: "libvpx-vp9", mode: "CQP", valid: false},
+		// Empty rate_control is treated as the encoder's default; the
+		// builders substitute the default so an imported profile that
+		// omits RateControl should still validate when the default is
+		// an advertised mode. Mirrors the preset fix that consults
+		// DefaultPreset().
+		{name: "nvenc empty mode (default CQP)", encoder: "hevc_nvenc", mode: "", mutate: func(v *model.VideoSettings) { v.QP = 28; v.Preset = "p4" }, valid: true},
+		{name: "qsv empty mode (default CQP)", encoder: "hevc_qsv", mode: "", mutate: func(v *model.VideoSettings) { v.QP = 28; v.Preset = "medium" }, valid: true},
+		{name: "libx264 empty mode (default CRF)", encoder: "libx264", mode: "", mutate: func(v *model.VideoSettings) { v.CRF = 23; v.Preset = "medium" }, valid: true},
+		{name: "libx265 empty mode (default CRF)", encoder: "libx265", mode: "", mutate: func(v *model.VideoSettings) { v.CRF = 28; v.Preset = "medium" }, valid: true},
+		{name: "vaapi empty mode (default Auto)", encoder: "hevc_vaapi", mode: "", mutate: func(v *model.VideoSettings) { v.VAAPIDevice = "/dev/dri/renderD128" }, valid: true},
 	}
 
 	for _, tt := range tests {
@@ -424,6 +434,8 @@ func validMedia() model.MediaInfo {
 func capabilities() model.Capabilities {
 	names := []string{
 		"hevc_vaapi", "h264_vaapi", "av1_vaapi", "vp9_vaapi",
+		"h264_nvenc", "hevc_nvenc", "av1_nvenc",
+		"h264_qsv", "hevc_qsv", "av1_qsv", "vp9_qsv",
 		"libx265", "libx264", "libsvtav1", "libvpx-vp9", "libaom-av1",
 		"libopus", "opus", "aac", "libmp3lame", "mp3", "flac",
 	}
