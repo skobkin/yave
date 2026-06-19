@@ -41,6 +41,10 @@ func TestProgressInfoHasFixedWidthAndDoesNotResizeProgressBar(t *testing.T) {
 
 	c := testController()
 	c.createWidgets()
+	// createWidgets hides the progress widgets by default (issue #16);
+	// show them explicitly so the bar takes part in layout measurement.
+	c.progress.Show()
+	c.progressInfo.Show()
 	statusBar := c.buildStatusBar()
 	statusBar.Resize(fyne.NewSize(1050, statusBar.MinSize().Height))
 	initialWidth := c.progress.Size().Width
@@ -53,6 +57,48 @@ func TestProgressInfoHasFixedWidthAndDoesNotResizeProgressBar(t *testing.T) {
 	}
 	if c.progress.Size().Width != initialWidth {
 		t.Fatalf("progress width = %v after update, want %v", c.progress.Size().Width, initialWidth)
+	}
+}
+
+func TestProgressAndInfoAreHiddenAfterCreateWidgets(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	if c.progress.Visible() {
+		t.Fatal("progress bar should be hidden after createWidgets")
+	}
+	if c.progressInfo.Visible() {
+		t.Fatal("progress info should be hidden after createWidgets")
+	}
+}
+
+func TestProgressVisibilityFlipsAcrossRunLifecycle(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := &Controller{
+		status:       widget.NewLabel("Idle"),
+		progress:     widget.NewProgressBar(),
+		progressInfo: widget.NewLabel(""),
+		log:          widget.NewMultiLineEntry(),
+	}
+	c.createWidgets()
+
+	if c.progress.Visible() || c.progressInfo.Visible() {
+		t.Fatal("progress widgets should be hidden at idle")
+	}
+
+	c.setProgressVisible(true)
+	if !c.progress.Visible() || !c.progressInfo.Visible() {
+		t.Fatal("progress widgets should be visible after Show")
+	}
+
+	c.setProgressVisible(false)
+	if c.progress.Visible() || c.progressInfo.Visible() {
+		t.Fatal("progress widgets should be hidden after Hide")
 	}
 }
 
@@ -153,8 +199,9 @@ func TestSetRunResultSelectsRunTabOnFailure(t *testing.T) {
 	defer app.Quit()
 
 	c := &Controller{
-		status:   widget.NewLabel("Running"),
-		progress: widget.NewProgressBar(),
+		status:       widget.NewLabel("Running"),
+		progress:     widget.NewProgressBar(),
+		progressInfo: widget.NewLabel(""),
 	}
 	otherTab := container.NewTabItem("Input", widget.NewLabel("input"))
 	c.runTab = container.NewTabItem("Run", widget.NewLabel("run"))

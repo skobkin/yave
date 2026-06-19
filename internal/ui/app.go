@@ -250,6 +250,8 @@ func (c *Controller) createWidgets() {
 	c.progress = widget.NewProgressBar()
 	c.progressInfo = widget.NewLabel("")
 	c.progressInfo.Truncation = fyne.TextTruncateEllipsis
+	c.progress.Hide()
+	c.progressInfo.Hide()
 	c.log = widget.NewMultiLineEntry()
 	c.log.Disable()
 	c.log.Wrapping = fyne.TextWrapWord
@@ -539,6 +541,7 @@ func (c *Controller) showRunError(status, message string) {
 	c.progress.SetValue(0)
 	c.log.SetText(message)
 	c.tabs.Select(c.runTab)
+	c.setProgressVisible(false)
 }
 
 func (c *Controller) run(plan model.RunPlan, messages []string) {
@@ -550,6 +553,7 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 	c.progress.SetValue(0)
 	c.progressInfo.SetText("")
 	c.command.SetText(plan.Preview)
+	c.setProgressVisible(true)
 	for _, warning := range plan.Warnings {
 		messages = append(messages, "Warning: "+warning)
 	}
@@ -596,6 +600,20 @@ func (c *Controller) setRunResult(err error) {
 		c.status.SetText("Failed: " + err.Error())
 		c.tabs.Select(c.runTab)
 	}
+	c.setProgressVisible(false)
+}
+
+// setProgressVisible shows or hides the progress bar and its paired
+// progressInfo label together. They are visually coupled in buildStatusBar,
+// so the bar must never appear without its sibling.
+func (c *Controller) setProgressVisible(visible bool) {
+	if visible {
+		c.progress.Show()
+		c.progressInfo.Show()
+		return
+	}
+	c.progress.Hide()
+	c.progressInfo.Hide()
 }
 
 func (c *Controller) cancelConversion() {
