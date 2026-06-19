@@ -615,7 +615,17 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.container.SetSelected(p.Container)
 	c.output.SetText(p.OutputTemplate)
 	c.videoEncoder.SetSelected(p.Video.Encoder)
-	c.rateControl.SetSelected(p.Video.RateControl)
+	// Seed rate-control options for the just-selected encoder before
+	// SetSelected. Fyne silently drops a SetSelected call whose value
+	// isn't in Options yet, which would cause the deferred
+	// updateControlState to see an empty selection, treat it as
+	// unsupported, and fall back to the encoder default (e.g. VAAPI
+	// "Auto"). Built-in VAAPI profiles saved as CQP/VBR would then
+	// silently reload as Auto and emit different FFmpeg args.
+	// populateRateControlOptions also performs the SetSelected when
+	// preferred is non-empty, so the explicit SetSelected below is
+	// redundant and would re-fire OnChanged.
+	c.populateRateControlOptions(p.Video.RateControl)
 	c.updateIntegerRanges()
 	c.qp.SetValue(p.Video.QP)
 	c.crf.SetValue(p.Video.CRF)
@@ -665,6 +675,62 @@ func (c *Controller) profileFromWidgets() model.Profile {
 	}
 }
 
+// populateRateControlOptions rebuilds the rate-control dropdown from
+// the currently-selected encoder's advertised modes. preferred (when
+// non-empty) is the value we want the select to land on after the
+// options exist; the current selection is used when preferred is empty.
+// If the preferred/current value isn't in the new options, we fall
+// back to the encoder's default so a stale mode never lingers across
+// encoder switches.
+//
+// Callers that are about to call SetSelected (loadProfile in
+// particular) must invoke this first: Fyne silently drops a
+// SetSelected whose value isn't already in Options, so the saved
+// profile's rate control would otherwise be discarded and replaced by
+// the encoder default during the deferred updateControlState.
+func (c *Controller) populateRateControlOptions(preferred string) {
+	encoderName := c.videoEncoder.Selected
+	var ve encoder.VideoEncoder
+	if encoderName != "copy" {
+		if e, ok := encoder.DefaultRegistry().Get(encoderName); ok {
+			ve, _ = e.(encoder.VideoEncoder)
+		}
+	}
+	if ve == nil {
+		c.rateControl.Options = []string{}
+		return
+	}
+	modes := ve.RateControlModes()
+	options := make([]string, len(modes))
+	supported := false
+	target := preferred
+	if target == "" {
+		target = c.rateControl.Selected
+	}
+	for i, m := range modes {
+		label := rateControlLabel(m)
+		options[i] = label
+		if label == target {
+			supported = true
+		}
+	}
+	c.rateControl.Options = options
+	// Only SetSelected when the value actually changes; firing
+	// OnChanged from inside updateControlState would re-enter
+	// updateControlState via changed() and recurse until the
+	// goroutine stack overflows.
+	if supported {
+		if c.rateControl.Selected != target {
+			c.rateControl.SetSelected(target)
+		}
+	} else {
+		fallback := rateControlLabel(ve.DefaultRateControl())
+		if c.rateControl.Selected != fallback {
+			c.rateControl.SetSelected(fallback)
+		}
+	}
+}
+
 func (c *Controller) updateControlState() {
 	encoderName := c.videoEncoder.Selected
 	copyVideo := encoderName == "copy"
@@ -682,32 +748,7 @@ func (c *Controller) updateControlState() {
 
 	c.updateIntegerRanges()
 
-	// Populate the rate-control dropdown from the encoder's advertised
-	// modes. Preserve the current selection if it remains supported;
-	// otherwise fall back to the encoder's default so a stale mode
-	// (e.g. "Auto" left over from VAAPI after the user picks NVENC)
-	// never lingers.
-	if ve != nil {
-		modes := ve.RateControlModes()
-		options := make([]string, len(modes))
-		supported := false
-		current := c.rateControl.Selected
-		for i, m := range modes {
-			label := rateControlLabel(m)
-			options[i] = label
-			if label == current {
-				supported = true
-			}
-		}
-		c.rateControl.Options = options
-		if !supported {
-			c.rateControl.SetSelected(rateControlLabel(ve.DefaultRateControl()))
-		} else {
-			c.rateControl.Refresh()
-		}
-	} else {
-		c.rateControl.Options = []string{}
-	}
+	c.populateRateControlOptions("")
 
 	mode := c.rateControl.Selected
 	var hw = encoder.HWNone

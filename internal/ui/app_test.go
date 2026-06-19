@@ -692,6 +692,57 @@ func TestProfileFromWidgetsIncludesQSVDeviceAndGPUIndex(t *testing.T) {
 	}
 }
 
+// TestLoadProfilePreservesSavedRateControl pins the round-trip from a
+// profile with a non-default rate control (CQP, VBR) for encoders
+// whose own default differs (VAAPI defaults to Auto, NVENC/QSV to
+// CQP). Before the fix, loadProfile called SetSelected before
+// updateControlState populated the dropdown options; Fyne dropped the
+// selection silently and the deferred update fell back to the
+// encoder default, so a built-in VAAPI profile saved as CQP/VBR
+// silently reloaded as Auto and produced different FFmpeg args.
+func TestLoadProfilePreservesSavedRateControl(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	cases := []struct {
+		encoder  string
+		saved    string
+		wantOpts []string
+	}{
+		// VAAPI default is Auto — saved CQP must survive.
+		{encoder: "hevc_vaapi", saved: "CQP", wantOpts: []string{"Auto", "CQP", "VBR", "CBR"}},
+		{encoder: "hevc_vaapi", saved: "VBR", wantOpts: []string{"Auto", "CQP", "VBR", "CBR"}},
+		{encoder: "hevc_vaapi", saved: "CBR", wantOpts: []string{"Auto", "CQP", "VBR", "CBR"}},
+		// NVENC default is CQP — saved VBR/CBR must survive.
+		{encoder: "hevc_nvenc", saved: "VBR", wantOpts: []string{"CQP", "VBR", "CBR"}},
+		{encoder: "hevc_nvenc", saved: "CBR", wantOpts: []string{"CQP", "VBR", "CBR"}},
+		// QSV default is CQP — saved VBR/CBR must survive.
+		{encoder: "hevc_qsv", saved: "VBR", wantOpts: []string{"CQP", "VBR", "CBR"}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.encoder+"/"+tt.saved, func(t *testing.T) {
+			profile := c.config.Profiles[0]
+			profile.Video.Encoder = tt.encoder
+			profile.Video.RateControl = tt.saved
+
+			c.loadProfile(profile)
+
+			if !slices.Equal(c.rateControl.Options, tt.wantOpts) {
+				t.Errorf("rate-control options after load = %v, want %v", c.rateControl.Options, tt.wantOpts)
+			}
+			if c.rateControl.Selected != tt.saved {
+				t.Errorf("rate control after load = %q, want %q (saved value was lost)", c.rateControl.Selected, tt.saved)
+			}
+			if got := c.profileFromWidgets().Video.RateControl; got != tt.saved {
+				t.Errorf("profileFromWidgets rate control = %q, want %q", got, tt.saved)
+			}
+		})
+	}
+}
+
 // TestEncoderRegistryInterfacesForCuratedSet sanity-checks the encoder
 // registry exposes the full curated set the UI assumes — every name the
 // tests above touch must be present. This guards against accidental
