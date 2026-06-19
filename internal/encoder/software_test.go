@@ -399,6 +399,30 @@ func TestSoftwareVideoFilterFrameRateMissing(t *testing.T) {
 	}
 }
 
+// TestLibaomAV1FilterChainSoftware confirms libaom-av1 (a software
+// reference encoder) emits a plain software scale filter without any
+// hwupload or hwscale steps. This guards against a future refactor
+// that incorrectly applies a hw upload path to the libaom encoder.
+func TestLibaomAV1FilterChainSoftware(t *testing.T) {
+	media := model.MediaInfo{
+		VideoStreams: []model.VideoStream{{Width: 1920, Height: 1080}},
+	}
+	ve := findVideo(t, "libaom-av1")
+	got, err := ve.VideoFilter(model.VideoSettings{
+		Encoder:         "libaom-av1",
+		MaxWidth:        1280,
+		MaxHeight:       720,
+		KeepAspectRatio: true,
+	}, media)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2"
+	if got != want {
+		t.Errorf("VideoFilter = %q, want %q (no hw upload for software)", got, want)
+	}
+}
+
 func TestSoftwareVideoBuildArgsEmptyEncoder(t *testing.T) {
 	ve := findVideo(t, "libx264")
 	if _, err := ve.BuildVideoArgs(model.VideoSettings{Encoder: ""}); err == nil {

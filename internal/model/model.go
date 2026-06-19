@@ -43,6 +43,12 @@ type VideoSettings struct {
 	KeepAspectRatio  bool   `yaml:"keep_aspect_ratio"`
 	PreventUpscaling bool   `yaml:"prevent_upscaling"`
 	VAAPIDevice      string `yaml:"vaapi_device"`
+	// QSVDevice is the render-node path passed to -init_hw_device qsv=...
+	// when the selected encoder is a QSV backend. Empty means "default".
+	QSVDevice string `yaml:"qsv_device"`
+	// GPUIndex is the NVENC multi-GPU selector passed to -gpu N.
+	// Zero means "single-GPU / use the default adapter".
+	GPUIndex int `yaml:"gpu_index"`
 }
 
 type AudioSettings struct {

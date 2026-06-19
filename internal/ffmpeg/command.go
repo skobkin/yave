@@ -3,12 +3,11 @@ package ffmpeg
 import (
 	"errors"
 	"fmt"
-	"math"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 
+	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
 )
 
@@ -38,12 +37,23 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 	}
 	args = append(args, "-progress", "pipe:1", "-nostats")
 
-	if isVAAPI(p.Video.Encoder) {
-		if p.Video.VAAPIDevice == "" {
-			return model.RunPlan{}, errors.New("VAAPI device path is empty")
-		}
-		args = append(args, "-vaapi_device", p.Video.VAAPIDevice)
+	ve, err := lookupVideoEncoder(p.Video.Encoder)
+	if err != nil {
+		return model.RunPlan{}, err
 	}
+
+	// Per-encoder pre-input flags (e.g. -vaapi_device, -init_hw_device qsv,
+	// -gpu N) are emitted before -i so that ffmpeg can resolve the hw
+	// context the encoder pipeline references.
+	var preInput []string
+	if ve != nil {
+		build, err := ve.BuildVideoArgs(p.Video)
+		if err != nil {
+			return model.RunPlan{}, err
+		}
+		preInput = build.PreInputArgs
+	}
+	args = append(args, preInput...)
 
 	args = append(args, "-i", req.InputPath, "-map", "0:v:0")
 	if p.Audio.CopyAllStreams {
@@ -59,7 +69,7 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 		warnings = append(warnings, subtitleWarnings...)
 	}
 
-	videoArgs, err := buildVideoArgs(p.Video, req.Media)
+	videoArgs, err := buildVideoArgs(ve, p.Video, req.Media)
 	if err != nil {
 		return model.RunPlan{}, err
 	}
@@ -88,165 +98,65 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 	}, nil
 }
 
-func buildVideoArgs(v model.VideoSettings, media model.MediaInfo) ([]string, error) {
-	if v.Encoder == "copy" {
+// lookupVideoEncoder resolves the encoder name from a profile. The
+// "copy" pseudo-encoder returns (nil, nil) — callers handle it as a
+// passthrough. Unknown encoder names return a non-nil error.
+func lookupVideoEncoder(name string) (encoder.VideoEncoder, error) {
+	if strings.EqualFold(strings.TrimSpace(name), "copy") {
+		return nil, nil
+	}
+	raw, ok := encoder.DefaultRegistry().Get(name)
+	if !ok {
+		return nil, fmt.Errorf("unsupported video encoder %q", name)
+	}
+	ve, ok := raw.(encoder.VideoEncoder)
+	if !ok {
+		return nil, fmt.Errorf("encoder %q is not a video encoder", name)
+	}
+	return ve, nil
+}
+
+// buildVideoArgs composes the post -c:v flags for a profile. When the
+// encoder is the "copy" passthrough, no -vf is emitted and the only
+// output is `-c:v copy`. Otherwise the encoder's VideoFilter and
+// BuildVideoArgs are used to produce the filter chain and per-encoder
+// args in the same order as the prior ffmpeg.buildVideoArgs switch.
+func buildVideoArgs(ve encoder.VideoEncoder, v model.VideoSettings, media model.MediaInfo) ([]string, error) {
+	if ve == nil {
 		return []string{"-c:v", "copy"}, nil
 	}
-
-	args := make([]string, 0, 24)
-	filter, err := videoFilter(v, media)
+	filter, err := ve.VideoFilter(v, media)
 	if err != nil {
 		return nil, err
 	}
+	build, err := ve.BuildVideoArgs(v)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]string, 0, 2+len(build.Args))
 	if filter != "" {
 		args = append(args, "-vf", filter)
 	}
-	args = append(args, "-c:v", v.Encoder)
-
-	switch {
-	case isVAAPI(v.Encoder):
-		switch strings.ToUpper(v.RateControl) {
-		case "", "AUTO":
-			if v.Bitrate != "" {
-				args = append(args, "-b:v", v.Bitrate)
-			}
-		case "CQP":
-			args = append(args, "-rc_mode", "CQP", "-qp", strconv.Itoa(v.QP))
-		case "VBR", "CBR":
-			args = append(args, "-rc_mode", strings.ToUpper(v.RateControl))
-			if v.Bitrate == "" {
-				return nil, fmt.Errorf("%s rate control requires a target bitrate", v.RateControl)
-			}
-			args = append(args, "-b:v", v.Bitrate)
-			if v.Maxrate != "" {
-				args = append(args, "-maxrate", v.Maxrate)
-			}
-			if v.Bufsize != "" {
-				args = append(args, "-bufsize", v.Bufsize)
-			}
-		default:
-			return nil, fmt.Errorf("unsupported VAAPI rate control %q", v.RateControl)
-		}
-		if v.Profile != "" {
-			args = append(args, "-profile:v", v.Profile)
-		}
-
-	case v.Encoder == "libx264" || v.Encoder == "libx265":
-		args = append(args, "-crf", strconv.Itoa(v.CRF))
-		if v.Preset != "" {
-			args = append(args, "-preset", v.Preset)
-		}
-		if v.Tune != "" {
-			args = append(args, "-tune", v.Tune)
-		}
-		if v.Profile != "" {
-			args = append(args, "-profile:v", v.Profile)
-		}
-
-	case v.Encoder == "libsvtav1":
-		if strings.EqualFold(v.RateControl, "bitrate") && v.Bitrate != "" {
-			args = append(args, "-b:v", v.Bitrate)
-		} else {
-			args = append(args, "-crf", strconv.Itoa(v.CRF), "-b:v", "0")
-		}
-		args = append(args, "-preset", defaultString(v.Preset, "6"))
-
-	case v.Encoder == "libvpx-vp9":
-		if strings.EqualFold(v.RateControl, "bitrate") && v.Bitrate != "" {
-			args = append(args, "-b:v", v.Bitrate)
-		} else {
-			args = append(args, "-crf", strconv.Itoa(v.CRF), "-b:v", "0")
-		}
-		if v.Preset != "" {
-			args = append(args, "-deadline", v.Preset)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported video encoder %q", v.Encoder)
-	}
-
+	args = append(args, build.Args...)
 	return args, nil
 }
 
+// buildAudioArgs composes the post -c:a flags for a profile. The
+// "copy" mode is treated as a passthrough and dispatches to a stub
+// `-c:a copy`; every other encoder goes through the registry.
 func buildAudioArgs(a model.AudioSettings) ([]string, error) {
-	if a.Mode == model.AudioCopy || a.Encoder == "copy" {
+	if a.Mode == model.AudioCopy || strings.EqualFold(strings.TrimSpace(a.Encoder), "copy") {
 		return []string{"-c:a", "copy"}, nil
 	}
-	if a.Encoder == "" {
-		return nil, errors.New("audio encoder is empty")
-	}
-	args := []string{"-c:a", a.Encoder}
-	switch a.Encoder {
-	case "flac":
-		args = append(args, "-compression_level", strconv.Itoa(a.Compression))
-	case "libopus", "opus", "aac", "libmp3lame", "mp3":
-		if a.Bitrate != "" {
-			args = append(args, "-b:a", a.Bitrate)
-		}
-	default:
+	raw, ok := encoder.DefaultRegistry().Get(a.Encoder)
+	if !ok {
 		return nil, fmt.Errorf("unsupported audio encoder %q", a.Encoder)
 	}
-	return args, nil
-}
-
-func videoFilter(v model.VideoSettings, media model.MediaInfo) (string, error) {
-	filters := make([]string, 0, 3)
-	if strings.EqualFold(v.FrameRateMode, "convert") {
-		if v.FrameRate == "" {
-			return "", errors.New("frame rate is required when conversion is enabled")
-		}
-		filters = append(filters, "fps="+v.FrameRate)
+	ae, ok := raw.(encoder.AudioEncoder)
+	if !ok {
+		return nil, fmt.Errorf("encoder %q is not an audio encoder", a.Encoder)
 	}
-
-	width, height, scale := targetDimensions(v, media)
-	if isVAAPI(v.Encoder) {
-		filters = append(filters, "format=nv12", "hwupload")
-		if scale {
-			part := fmt.Sprintf("scale_vaapi=w=%d:h=%d", width, height)
-			if v.KeepAspectRatio {
-				part += ":force_original_aspect_ratio=decrease:force_divisible_by=2"
-			}
-			filters = append(filters, part)
-		}
-	} else if scale {
-		part := fmt.Sprintf("scale=w=%d:h=%d", width, height)
-		if v.KeepAspectRatio {
-			part += ":force_original_aspect_ratio=decrease:force_divisible_by=2"
-		}
-		filters = append(filters, part)
-	}
-	return strings.Join(filters, ","), nil
-}
-
-func targetDimensions(v model.VideoSettings, media model.MediaInfo) (int, int, bool) {
-	if v.MaxWidth <= 0 && v.MaxHeight <= 0 {
-		return 0, 0, false
-	}
-	src, ok := media.PrimaryVideo()
-	if !ok || src.Width <= 0 || src.Height <= 0 {
-		return even(v.MaxWidth), even(v.MaxHeight), v.MaxWidth > 0 && v.MaxHeight > 0
-	}
-
-	maxW, maxH := v.MaxWidth, v.MaxHeight
-	if maxW <= 0 {
-		maxW = src.Width
-	}
-	if maxH <= 0 {
-		maxH = src.Height
-	}
-	if v.PreventUpscaling && src.Width <= maxW && src.Height <= maxH {
-		return src.Width, src.Height, false
-	}
-	if !v.KeepAspectRatio {
-		return even(maxW), even(maxH), src.Width != maxW || src.Height != maxH
-	}
-
-	ratio := math.Min(float64(maxW)/float64(src.Width), float64(maxH)/float64(src.Height))
-	if v.PreventUpscaling {
-		ratio = math.Min(ratio, 1)
-	}
-	w := even(int(math.Floor(float64(src.Width) * ratio)))
-	h := even(int(math.Floor(float64(src.Height) * ratio)))
-	return w, h, w != src.Width || h != src.Height
+	return ae.BuildAudioArgs(a)
 }
 
 func subtitleMapping(container string, streams []model.SubtitleStream) ([]string, []string) {
@@ -273,24 +183,6 @@ func hasMappedSubtitles(args []string) bool {
 		}
 	}
 	return false
-}
-
-func isVAAPI(encoder string) bool {
-	return strings.HasSuffix(encoder, "_vaapi")
-}
-
-func even(v int) int {
-	if v <= 0 {
-		return v
-	}
-	return v - v%2
-}
-
-func defaultString(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
 }
 
 func ShellPreview(executable string, args []string) string {
