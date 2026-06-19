@@ -14,10 +14,16 @@ import (
 // everything else — pre-input args, filter chain, rate-control
 // mapping — is shared.
 //
-// Pre-input flags are always emitted: `-init_hw_device qsv` by default,
-// or `-init_hw_device qsv:hw,child_device=<path>` when the user has
-// picked a render node. The `=` after `qsv` would set the device
-// label, not the child device, so it is intentionally not used here.
+// Pre-input flags are always emitted: the QSV device is initialized
+// with `-init_hw_device qsv` (or `-init_hw_device qsv:hw,child_device=<path>`
+// when the user has picked a render node) under the explicit name
+// "qsv", and the filter graph is bound to that same device with
+// `-filter_hw_device qsv`. Without `-filter_hw_device`, the
+// `format=qsv,hwupload,...` filter chain has no hw context to upload
+// software-decoded frames into, so QSV profiles would fail at filter
+// initialization. The `=` after `qsv` would set the device label, not
+// the child device, so the render-node path uses `child_device=`
+// instead.
 // The filter chain is the QSV hw upload path: format=qsv,hwupload
 // followed by an optional scale_qsv.
 type qsvEncoder struct {
@@ -77,11 +83,17 @@ func (e *qsvEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (
 	return strings.Join(filters, ","), nil
 }
 
-// BuildVideoArgs emits the pre-input -init_hw_device qsv flag plus
-// the per-stream QSV args. When the user picks a render node the flag
-// becomes -init_hw_device qsv:hw,child_device=<path> so ffmpeg opens
-// the underlying DRM node; using qsv=<path> would just label the
-// device and leave the child device unspecified.
+// BuildVideoArgs emits the pre-input -init_hw_device / -filter_hw_device
+// pair plus the per-stream QSV args. The QSV device is initialised under
+// the explicit name "qsv" so the filter graph can be bound to it via
+// -filter_hw_device qsv; the hwupload filter in the QSV chain needs
+// that binding when frames arrive in software memory (e.g. decoded by
+// a software decoder).
+//
+// When the user picks a render node the init flag becomes
+// -init_hw_device qsv:hw,child_device=<path> so ffmpeg opens the
+// underlying DRM node; using qsv=<path> would just label the device
+// and leave the child device unspecified.
 //
 // The rate-control mapping is -rc_mode CQP/VBR/CBR with the matching
 // -qp / -b:v / -maxrate flags. CBR forces -maxrate = -b:v when the
@@ -92,11 +104,20 @@ func (e *qsvEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) 
 		return BuildResult{}, fmt.Errorf("video encoder is empty")
 	}
 	res := BuildResult{}
+	// Name the QSV device explicitly ("qsv") so the filter graph can
+	// bind to it via -filter_hw_device; without that, format=qsv,hwupload
+	// has no hw context and the filter chain fails to initialise. The
+	// "=name" part of `-init_hw_device type[=name][:device,...]` sets
+	// the device label, while the ":device,key=val" part picks the
+	// underlying child (render node here).
+	const deviceName = "qsv"
+	var initSpec string
 	if strings.TrimSpace(v.QSVDevice) == "" {
-		res.PreInputArgs = []string{"-init_hw_device", "qsv"}
+		initSpec = "qsv=" + deviceName
 	} else {
-		res.PreInputArgs = []string{"-init_hw_device", "qsv:hw,child_device=" + v.QSVDevice}
+		initSpec = "qsv=" + deviceName + ":hw,child_device=" + v.QSVDevice
 	}
+	res.PreInputArgs = []string{"-init_hw_device", initSpec, "-filter_hw_device", deviceName}
 	args := []string{"-c:v", e.name}
 	preset := defaultString(v.Preset, e.presetDefault)
 	if preset != "" {

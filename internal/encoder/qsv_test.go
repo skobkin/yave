@@ -82,8 +82,8 @@ func TestQSVBuildArgsCQP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(res.PreInputArgs, []string{"-init_hw_device", "qsv"}) {
-		t.Errorf("PreInputArgs = %v, want [-init_hw_device qsv]", res.PreInputArgs)
+	if !slices.Equal(res.PreInputArgs, []string{"-init_hw_device", "qsv=qsv", "-filter_hw_device", "qsv"}) {
+		t.Errorf("PreInputArgs = %v, want [-init_hw_device qsv=qsv -filter_hw_device qsv]", res.PreInputArgs)
 	}
 	want := []string{
 		"-preset", "medium",
@@ -272,8 +272,8 @@ func TestQSVInitDeviceDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(res.PreInputArgs, []string{"-init_hw_device", "qsv"}) {
-		t.Errorf("PreInputArgs = %v, want [-init_hw_device qsv]", res.PreInputArgs)
+	if !slices.Equal(res.PreInputArgs, []string{"-init_hw_device", "qsv=qsv", "-filter_hw_device", "qsv"}) {
+		t.Errorf("PreInputArgs = %v, want [-init_hw_device qsv=qsv -filter_hw_device qsv]", res.PreInputArgs)
 	}
 }
 
@@ -289,10 +289,13 @@ func TestQSVInitDeviceCustomPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// ffmpeg's qsv:hw,child_device=<path> opens the named DRM
-	// render node; "qsv=<path>" would only set the device label
-	// and leave the child device unset.
-	want := []string{"-init_hw_device", "qsv:hw,child_device=/dev/dri/renderD128"}
+	// ffmpeg's qsv=name:hw,child_device=<path> opens the named DRM
+	// render node under the explicit label "qsv" and binds the
+	// filter graph to it via -filter_hw_device so the hwupload in
+	// the QSV filter chain has a device context to upload into.
+	// "qsv=<path>" alone would only label the device and leave
+	// the child device unset.
+	want := []string{"-init_hw_device", "qsv=qsv:hw,child_device=/dev/dri/renderD128", "-filter_hw_device", "qsv"}
 	if !slices.Equal(res.PreInputArgs, want) {
 		t.Errorf("PreInputArgs = %v, want %v", res.PreInputArgs, want)
 	}
