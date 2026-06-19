@@ -83,11 +83,12 @@ func (e *qsvEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (
 	width, height, scale := targetDimensions(v, media)
 	filters = append(filters, "format=nv12", "hwupload", "format=qsv")
 	if scale {
-		part := fmt.Sprintf("scale_qsv=w=%d:h=%d", width, height)
-		if v.KeepAspectRatio {
-			part += ":force_original_aspect_ratio=decrease:force_divisible_by=2"
-		}
-		filters = append(filters, part)
+		// scale_qsv does not accept force_original_aspect_ratio or
+		// force_divisible_by (those are software-scale options).
+		// targetDimensions has already computed the aspect-fit and
+		// even-aligned width/height for us, so the plain form is
+		// correct for the common "scale + keep aspect ratio" profile.
+		filters = append(filters, fmt.Sprintf("scale_qsv=w=%d:h=%d", width, height))
 	}
 	return strings.Join(filters, ","), nil
 }

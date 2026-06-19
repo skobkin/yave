@@ -2,6 +2,7 @@ package encoder
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"git.skobk.in/skobkin/yave/internal/model"
@@ -218,9 +219,15 @@ func TestQSVFilterChainWithScale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "format=nv12,hwupload,format=qsv,scale_qsv=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2"
+	want := "format=nv12,hwupload,format=qsv,scale_qsv=w=1280:h=720"
 	if got != want {
 		t.Errorf("VideoFilter = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "force_original_aspect_ratio") {
+		t.Errorf("scale_qsv must not receive software-scale aspect options: %q", got)
+	}
+	if strings.Contains(got, "force_divisible_by") {
+		t.Errorf("scale_qsv must not receive software-scale divisible options: %q", got)
 	}
 }
 

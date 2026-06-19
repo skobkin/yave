@@ -184,8 +184,12 @@ func TestBuildCommandNVENC(t *testing.T) {
 	}
 	// The filter chain must use the NVENC hw upload path. The test
 	// profile scales to 1280x720, so the chain is
-	// format=yuv420p,format=nv12,hwupload_cuda,scale_cuda=w=1280:h=720:...
-	if !slices.Contains(plan.Args, "format=yuv420p,format=nv12,hwupload_cuda,scale_cuda=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2") {
+	// format=yuv420p,format=nv12,hwupload_cuda,scale_cuda=w=1280:h=720.
+	// scale_cuda does not accept force_original_aspect_ratio /
+	// force_divisible_by, so those software-scale options must be
+	// omitted even when KeepAspectRatio is set; targetDimensions has
+	// already computed the aspect-fit even dimensions.
+	if !slices.Contains(plan.Args, "format=yuv420p,format=nv12,hwupload_cuda,scale_cuda=w=1280:h=720") {
 		t.Errorf("missing NVENC filter in %#v", plan.Args)
 	}
 }
@@ -226,8 +230,10 @@ func TestBuildCommandQSV(t *testing.T) {
 	}
 	// The filter chain must use the QSV hw upload path. The test
 	// profile scales to 1280x720, so the chain is
-	// format=nv12,hwupload,format=qsv,scale_qsv=w=1280:h=720:...
-	if !slices.Contains(plan.Args, "format=nv12,hwupload,format=qsv,scale_qsv=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2") {
+	// format=nv12,hwupload,format=qsv,scale_qsv=w=1280:h=720. As with
+	// scale_cuda, scale_qsv does not accept the software-scale aspect
+	// options; targetDimensions pre-fitted the dimensions.
+	if !slices.Contains(plan.Args, "format=nv12,hwupload,format=qsv,scale_qsv=w=1280:h=720") {
 		t.Errorf("missing QSV filter in %#v", plan.Args)
 	}
 }

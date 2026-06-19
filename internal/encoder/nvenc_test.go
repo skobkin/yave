@@ -214,9 +214,15 @@ func TestNVENCFilterChainWithScale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "format=yuv420p,format=nv12,hwupload_cuda,scale_cuda=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2"
+	want := "format=yuv420p,format=nv12,hwupload_cuda,scale_cuda=w=1280:h=720"
 	if got != want {
 		t.Errorf("VideoFilter = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "force_original_aspect_ratio") {
+		t.Errorf("scale_cuda must not receive software-scale aspect options: %q", got)
+	}
+	if strings.Contains(got, "force_divisible_by") {
+		t.Errorf("scale_cuda must not receive software-scale divisible options: %q", got)
 	}
 }
 
