@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
 )
 
@@ -87,9 +88,9 @@ func validateSubtitleCompatibility(result *Result, subtitles model.SubtitleSetti
 	}
 }
 
-func selectedVideoCodec(encoder string, media *model.MediaInfo) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(encoder)) {
-	case "copy":
+func selectedVideoCodec(encoderName string, media *model.MediaInfo) (string, bool) {
+	name := strings.ToLower(strings.TrimSpace(encoderName))
+	if name == "copy" {
 		if media == nil {
 			return "", false
 		}
@@ -98,17 +99,18 @@ func selectedVideoCodec(encoder string, media *model.MediaInfo) (string, bool) {
 			return "", false
 		}
 		return canonicalCodec(stream.Codec), true
-	case "h264_vaapi", "libx264":
-		return "h264", true
-	case "hevc_vaapi", "libx265":
-		return "hevc", true
-	case "av1_vaapi", "libsvtav1":
-		return "av1", true
-	case "vp9_vaapi", "libvpx-vp9":
-		return "vp9", true
-	default:
-		return "", false
 	}
+	for _, e := range encoder.DefaultRegistry().All() {
+		if !strings.EqualFold(e.Name(), name) {
+			continue
+		}
+		family := strings.ToLower(strings.TrimSpace(e.CodecFamily()))
+		if family == "" {
+			return "", false
+		}
+		return family, true
+	}
+	return "", false
 }
 
 func selectedAudioCodecs(audio model.AudioSettings, media *model.MediaInfo) ([]string, bool) {

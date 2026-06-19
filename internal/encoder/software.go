@@ -127,7 +127,10 @@ func softwareVideoEncoders() []Encoder {
 			priority: 100, crfRange: IntegerRange{0, 51},
 			presetFlag: "-preset", presetKind: "categorical", presetName: "preset",
 			supportsTune: true, supportsProfile: true,
-			rateControlModes:   []RateControl{RCCRF, RCBitrate},
+			// libx264 supports CRF only — the prior buildVideoArgs switch
+			// did not emit -b:v for libx264, so any other mode must be
+			// rejected by validation.
+			rateControlModes:   []RateControl{RCCRF},
 			defaultRateControl: RCCRF,
 			buildArgs:          x264OrX265Args,
 		},
@@ -136,7 +139,8 @@ func softwareVideoEncoders() []Encoder {
 			priority: 90, crfRange: IntegerRange{0, 51},
 			presetFlag: "-preset", presetKind: "categorical", presetName: "preset",
 			supportsTune: true, supportsProfile: true,
-			rateControlModes:   []RateControl{RCCRF, RCBitrate},
+			// libx265 supports CRF only — matches prior behaviour.
+			rateControlModes:   []RateControl{RCCRF},
 			defaultRateControl: RCCRF,
 			buildArgs:          x264OrX265Args,
 		},

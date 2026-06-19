@@ -309,12 +309,22 @@ func TestSoftwareVideoQPRange(t *testing.T) {
 }
 
 func TestSoftwareVideoRateControlModes(t *testing.T) {
-	for _, name := range []string{"libx264", "libx265", "libsvtav1", "libvpx-vp9", "libaom-av1"} {
-		t.Run(name, func(t *testing.T) {
-			ve := findVideo(t, name)
-			modes := ve.RateControlModes()
-			if !slices.Equal(modes, []RateControl{RCCRF, RCBitrate}) {
-				t.Errorf("RateControlModes() = %v, want [CRF BITRATE]", modes)
+	tests := []struct {
+		name  string
+		modes []RateControl
+	}{
+		{name: "libx264", modes: []RateControl{RCCRF}},
+		{name: "libx265", modes: []RateControl{RCCRF}},
+		{name: "libsvtav1", modes: []RateControl{RCCRF, RCBitrate}},
+		{name: "libvpx-vp9", modes: []RateControl{RCCRF, RCBitrate}},
+		{name: "libaom-av1", modes: []RateControl{RCCRF, RCBitrate}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ve := findVideo(t, tt.name)
+			got := ve.RateControlModes()
+			if !slices.Equal(got, tt.modes) {
+				t.Errorf("RateControlModes() = %v, want %v", got, tt.modes)
 			}
 			if ve.DefaultRateControl() != RCCRF {
 				t.Errorf("DefaultRateControl() = %v, want CRF", ve.DefaultRateControl())

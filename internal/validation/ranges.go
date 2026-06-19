@@ -1,83 +1,87 @@
 package validation
 
-import "strings"
+import (
+	"strings"
 
-// IntegerRange defines an inclusive range for a curated integer option.
-type IntegerRange struct {
-	Min int
-	Max int
+	"git.skobk.in/skobkin/yave/internal/encoder"
+)
+
+// IntegerRange aliases encoder.IntegerRange so existing tests and
+// consumers that take validation.IntegerRange keep working unchanged
+// after the refactor.
+type IntegerRange = encoder.IntegerRange
+
+// ProportionalConvert is re-exported from the encoder package so the
+// proportional-remap helpers stay callable as validation.ProportionalConvert.
+var ProportionalConvert = encoder.ProportionalConvert
+
+// lookupVideoEncoder returns the VideoEncoder registered under name,
+// performing a case-insensitive lookup to match the pre-refactor
+// behaviour (the original code lowercased the input before switching).
+func lookupVideoEncoder(name string) (encoder.VideoEncoder, bool) {
+	want := strings.ToLower(strings.TrimSpace(name))
+	for _, e := range encoder.DefaultRegistry().All() {
+		if !strings.EqualFold(e.Name(), want) {
+			continue
+		}
+		ve, ok := e.(encoder.VideoEncoder)
+		return ve, ok
+	}
+	return nil, false
 }
 
-func (r IntegerRange) Contains(value int) bool {
-	return value >= r.Min && value <= r.Max
+// lookupAudioEncoder returns the AudioEncoder registered under name,
+// case-insensitively.
+func lookupAudioEncoder(name string) (encoder.AudioEncoder, bool) {
+	want := strings.ToLower(strings.TrimSpace(name))
+	for _, e := range encoder.DefaultRegistry().All() {
+		if !strings.EqualFold(e.Name(), want) {
+			continue
+		}
+		ae, ok := e.(encoder.AudioEncoder)
+		return ae, ok
+	}
+	return nil, false
 }
 
-func (r IntegerRange) Clamp(value int) int {
-	if value < r.Min {
-		return r.Min
-	}
-	if value > r.Max {
-		return r.Max
-	}
-	return value
-}
-
-// ProportionalConvert maps a value from one inclusive integer range into
-// another using a best-effort linear remap and clamping to the new bounds.
-//
-// It is intended for codec switches where the same conceptual setting (QP or
-// CRF) has a different numeric range. The mapping is purely positional:
-// value == from.Min -> to.Min, value == from.Max -> to.Max, with linear
-// interpolation in between and Clamp applied to the result. A degenerate
-// from-range (Min == Max) is treated as "keep value, clamp to to".
-func ProportionalConvert(value int, from, to IntegerRange) int {
-	if from.Max == from.Min {
-		return to.Clamp(value)
-	}
-	if from == to {
-		return to.Clamp(value)
-	}
-	// Integer linear remap: preserve endpoints, avoid floating-point drift
-	// for the common equal-spread case. numerator and denominator are both
-	// non-negative when from is a valid range and value is in it.
-	spread := from.Max - from.Min
-	offset := value - from.Min
-	mapped := to.Min + (offset*(to.Max-to.Min)+spread/2)/spread
-	return to.Clamp(mapped)
-}
-
-func QPRange(encoder string) (IntegerRange, bool) {
-	switch strings.ToLower(strings.TrimSpace(encoder)) {
-	case "h264_vaapi", "hevc_vaapi":
-		return IntegerRange{Min: 1, Max: 51}, true
-	case "av1_vaapi", "vp9_vaapi":
-		return IntegerRange{Min: 0, Max: 255}, true
-	default:
+// QPRange returns the QP integer range for the given video encoder name,
+// or (zero, false) if the encoder is unknown or has no QP control.
+func QPRange(encoderName string) (IntegerRange, bool) {
+	ve, ok := lookupVideoEncoder(encoderName)
+	if !ok {
 		return IntegerRange{}, false
 	}
+	return ve.QPRange()
 }
 
-func CRFRange(encoder string) (IntegerRange, bool) {
-	switch strings.ToLower(strings.TrimSpace(encoder)) {
-	case "libx264", "libx265":
-		return IntegerRange{Min: 0, Max: 51}, true
-	case "libsvtav1", "libvpx-vp9":
-		return IntegerRange{Min: 0, Max: 63}, true
-	default:
+// CRFRange returns the CRF integer range for the given video encoder
+// name, or (zero, false) if the encoder is unknown or has no CRF control.
+func CRFRange(encoderName string) (IntegerRange, bool) {
+	ve, ok := lookupVideoEncoder(encoderName)
+	if !ok {
 		return IntegerRange{}, false
 	}
+	return ve.CRFRange()
 }
 
-func PresetRange(encoder string) (IntegerRange, bool) {
-	if strings.EqualFold(strings.TrimSpace(encoder), "libsvtav1") {
-		return IntegerRange{Min: 0, Max: 13}, true
+// PresetRange returns the preset integer range for the given video
+// encoder name, or (zero, false) if the encoder is unknown or has no
+// numeric preset.
+func PresetRange(encoderName string) (IntegerRange, bool) {
+	ve, ok := lookupVideoEncoder(encoderName)
+	if !ok {
+		return IntegerRange{}, false
 	}
-	return IntegerRange{}, false
+	return ve.PresetRange()
 }
 
-func AudioCompressionRange(encoder string) (IntegerRange, bool) {
-	if strings.EqualFold(strings.TrimSpace(encoder), "flac") {
-		return IntegerRange{Min: 0, Max: 12}, true
+// AudioCompressionRange returns the audio compression integer range
+// (e.g. FLAC compression level) for the given audio encoder name, or
+// (zero, false) if the encoder is unknown or has no compression control.
+func AudioCompressionRange(encoderName string) (IntegerRange, bool) {
+	ae, ok := lookupAudioEncoder(encoderName)
+	if !ok {
+		return IntegerRange{}, false
 	}
-	return IntegerRange{}, false
+	return ae.AudioCompressionRange()
 }

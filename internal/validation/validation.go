@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
 )
 
@@ -125,7 +126,7 @@ func validatePaths(result *Result, inputPath, outputPath string) {
 	}
 }
 
-func validateVideo(result *Result, video model.VideoSettings, encoder string) {
+func validateVideo(result *Result, video model.VideoSettings, encoderName string) {
 	if video.MaxWidth < 0 {
 		result.error("profile.video.max_width", "maximum width cannot be negative")
 	}
@@ -145,7 +146,7 @@ func validateVideo(result *Result, video model.VideoSettings, encoder string) {
 		}
 	}
 
-	if encoder == "copy" {
+	if encoderName == "copy" {
 		if video.MaxWidth != 0 || video.MaxHeight != 0 {
 			result.error("profile.video.encoder", "video copy cannot be combined with scaling")
 		}
@@ -155,64 +156,100 @@ func validateVideo(result *Result, video model.VideoSettings, encoder string) {
 		return
 	}
 
-	switch {
-	case strings.HasSuffix(encoder, "_vaapi"):
-		validateVAAPI(result, video, encoder)
-	case encoder == "libx264" || encoder == "libx265":
-		if !strings.EqualFold(strings.TrimSpace(video.RateControl), "CRF") {
-			result.error("profile.video.rate_control", "%s supports CRF rate control only", encoder)
-		}
-		if r, ok := CRFRange(encoder); ok && !r.Contains(video.CRF) {
-			result.error("profile.video.crf", "CRF for %s must be between %d and %d", encoder, r.Min, r.Max)
-		}
-	case encoder == "libsvtav1":
-		validateCRFOrBitrate(result, video, encoder)
-		r, _ := PresetRange(encoder)
-		if preset, err := strconv.Atoi(strings.TrimSpace(video.Preset)); err != nil || !r.Contains(preset) {
-			result.error("profile.video.preset", "SVT-AV1 preset must be an integer between %d and %d", r.Min, r.Max)
-		}
-	case encoder == "libvpx-vp9":
-		validateCRFOrBitrate(result, video, encoder)
-	}
-}
-
-func validateVAAPI(result *Result, video model.VideoSettings, encoder string) {
-	mode := strings.ToUpper(strings.TrimSpace(video.RateControl))
-	if !oneOf(mode, "AUTO", "CQP", "VBR", "CBR") {
-		result.error("profile.video.rate_control", "VAAPI rate control must be Auto, CQP, VBR, or CBR")
+	ve, ok := lookupVideoEncoder(encoderName)
+	if !ok {
+		// Unknown encoder — supportedVideoEncoder catches this earlier.
 		return
 	}
-	if strings.TrimSpace(video.VAAPIDevice) == "" {
+	validateVideoForEncoder(result, video, ve, encoderName)
+}
+
+// validateVideoForEncoder dispatches per-encoder checks via the
+// encoder.VideoEncoder interface. It preserves the field names and
+// error messages from the prior validateVideo switch so existing tests
+// continue to match.
+func validateVideoForEncoder(result *Result, video model.VideoSettings, ve encoder.VideoEncoder, name string) {
+	mode := strings.ToUpper(strings.TrimSpace(video.RateControl))
+
+	// Rate-control mode membership. Empty mode is accepted for encoders
+	// that advertise AUTO (VAAPI) and rejected otherwise.
+	if !videoModeAllowed(ve, mode) {
+		allowed := make([]string, 0, len(ve.RateControlModes()))
+		for _, m := range ve.RateControlModes() {
+			allowed = append(allowed, string(m))
+		}
+		result.error("profile.video.rate_control",
+			"%s rate control must be one of: %s", name, strings.Join(allowed, ", "))
+		return
+	}
+
+	// VAAPI device must be present when the encoder needs one.
+	if ve.HWBackend() == encoder.HWVAAPI && strings.TrimSpace(video.VAAPIDevice) == "" {
 		result.error("profile.video.vaapi_device", "VAAPI device path is required")
 	}
 
 	switch mode {
 	case "CQP":
-		if r, ok := QPRange(encoder); ok && !r.Contains(video.QP) {
-			result.error("profile.video.qp", "VAAPI QP for %s must be between %d and %d", encoder, r.Min, r.Max)
+		if r, ok := ve.QPRange(); ok && !r.Contains(video.QP) {
+			result.error("profile.video.qp", "VAAPI QP for %s must be between %d and %d", name, r.Min, r.Max)
 		}
 	case "VBR", "CBR":
 		validateRequiredBitrate(result, "profile.video.bitrate", video.Bitrate, mode+" target bitrate")
-	case "AUTO":
-		validateOptionalBitrate(result, "profile.video.bitrate", video.Bitrate)
-	}
-	validateOptionalBitrate(result, "profile.video.maxrate", video.Maxrate)
-	validateOptionalBitrate(result, "profile.video.bufsize", video.Bufsize)
-}
-
-func validateCRFOrBitrate(result *Result, video model.VideoSettings, encoder string) {
-	mode := strings.ToUpper(strings.TrimSpace(video.RateControl))
-	switch mode {
+		validateOptionalBitrate(result, "profile.video.maxrate", video.Maxrate)
+		validateOptionalBitrate(result, "profile.video.bufsize", video.Bufsize)
+	case "BITRATE":
+		validateRequiredBitrate(result, "profile.video.bitrate", video.Bitrate, name+" target bitrate")
 	case "CRF":
-		if r, ok := CRFRange(encoder); ok && !r.Contains(video.CRF) {
-			result.error("profile.video.crf", "CRF for %s must be between %d and %d", encoder, r.Min, r.Max)
+		if r, ok := ve.CRFRange(); ok && !r.Contains(video.CRF) {
+			result.error("profile.video.crf", "CRF for %s must be between %d and %d", name, r.Min, r.Max)
 		}
 		validateOptionalBitrate(result, "profile.video.bitrate", video.Bitrate)
-	case "VBR", "BITRATE":
-		validateRequiredBitrate(result, "profile.video.bitrate", video.Bitrate, encoder+" target bitrate")
-	default:
-		result.error("profile.video.rate_control", "%s rate control must be CRF or bitrate", encoder)
+	case "AUTO", "":
+		validateOptionalBitrate(result, "profile.video.bitrate", video.Bitrate)
+		validateOptionalBitrate(result, "profile.video.maxrate", video.Maxrate)
+		validateOptionalBitrate(result, "profile.video.bufsize", video.Bufsize)
 	}
+
+	// Integer preset check (SVT-AV1, libaom-av1). The original code
+	// always called this for libsvtav1; we preserve that by checking
+	// only when PresetRange is supported, regardless of preset being
+	// empty (Atoi("") fails -> error). This matches prior behaviour
+	// for libsvtav1.
+	if r, ok := ve.PresetRange(); ok {
+		preset, err := strconv.Atoi(strings.TrimSpace(video.Preset))
+		if err != nil || !r.Contains(preset) {
+			result.error("profile.video.preset", "%s preset must be an integer between %d and %d", name, r.Min, r.Max)
+		}
+	}
+
+	// Fold encoder-specific Validate() findings into the result.
+	if issues, err := ve.Validate(video); err == nil {
+		for _, issue := range issues {
+			if issue.Level == encoder.IssueError {
+				result.error(issue.Field, "%s", issue.Message)
+			} else {
+				result.warning(issue.Field, "%s", issue.Message)
+			}
+		}
+	}
+}
+
+// videoModeAllowed reports whether mode is one of the modes the
+// encoder advertises. Empty mode is treated as the encoder's
+// default only when that default exists in the advertised set.
+func videoModeAllowed(ve encoder.VideoEncoder, mode string) bool {
+	modes := ve.RateControlModes()
+	if mode == "" {
+		// Empty mode is allowed if the encoder's default is "AUTO"
+		// (e.g. VAAPI), since callers commonly leave it unset.
+		return ve.DefaultRateControl() == encoder.RCAuto
+	}
+	for _, m := range modes {
+		if string(m) == mode {
+			return true
+		}
+	}
+	return false
 }
 
 func validateAudio(result *Result, audio model.AudioSettings, capabilities model.Capabilities) {
@@ -336,11 +373,12 @@ func validFrameRate(value string) bool {
 	return err == nil && numerator > 0
 }
 
-func supportedVideoEncoder(encoder string) bool {
-	return oneOf(encoder,
-		"hevc_vaapi", "h264_vaapi", "av1_vaapi", "vp9_vaapi",
-		"libx265", "libx264", "libsvtav1", "libvpx-vp9", "copy",
-	)
+func supportedVideoEncoder(encoderName string) bool {
+	if strings.EqualFold(strings.TrimSpace(encoderName), "copy") {
+		return true
+	}
+	_, ok := lookupVideoEncoder(encoderName)
+	return ok
 }
 
 func supportedAudioEncoder(encoder string) bool {
