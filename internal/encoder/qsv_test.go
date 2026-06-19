@@ -218,7 +218,7 @@ func TestQSVFilterChainWithScale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "format=qsv,hwupload,scale_qsv=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2"
+	want := "format=nv12,format=qsv,hwupload,scale_qsv=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2"
 	if got != want {
 		t.Errorf("VideoFilter = %q, want %q", got, want)
 	}
@@ -235,7 +235,7 @@ func TestQSVFilterChainNoScale(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "format=qsv,hwupload"
+			want := "format=nv12,format=qsv,hwupload"
 			if got != want {
 				t.Errorf("VideoFilter = %q, want %q", got, want)
 			}
@@ -255,7 +255,7 @@ func TestQSVFilterChainFrameRateConversion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "fps=30,format=qsv,hwupload,scale_qsv=w=1280:h=720"
+	want := "fps=30,format=nv12,format=qsv,hwupload,scale_qsv=w=1280:h=720"
 	if got != want {
 		t.Errorf("VideoFilter = %q, want %q", got, want)
 	}

@@ -15,17 +15,20 @@ import (
 // mapping — is shared.
 //
 // Pre-input flags are always emitted: the QSV device is initialized
-// with `-init_hw_device qsv` (or `-init_hw_device qsv:hw,child_device=<path>`
+// with `-init_hw_device qsv=qsv` (or `-init_hw_device qsv=qsv:hw,child_device=<path>`
 // when the user has picked a render node) under the explicit name
 // "qsv", and the filter graph is bound to that same device with
 // `-filter_hw_device qsv`. Without `-filter_hw_device`, the
-// `format=qsv,hwupload,...` filter chain has no hw context to upload
-// software-decoded frames into, so QSV profiles would fail at filter
-// initialization. The `=` after `qsv` would set the device label, not
-// the child device, so the render-node path uses `child_device=`
-// instead.
-// The filter chain is the QSV hw upload path: format=qsv,hwupload
-// followed by an optional scale_qsv.
+// `format=nv12,format=qsv,hwupload,...` filter chain has no hw context
+// to upload software-decoded frames into, so QSV profiles would fail at
+// filter initialization. The `=` after `qsv` would set the device
+// label, not the child device, so the render-node path uses
+// `child_device=` instead.
+// The filter chain is the QSV hw upload path:
+// format=nv12,format=qsv,hwupload followed by an optional scale_qsv.
+// `format=nv12` is required first so hwupload has a software pixel
+// format it can ingest; asking ffmpeg to format=qsv directly from CPU
+// frames typically fails filter negotiation.
 type qsvEncoder struct {
 	name            string
 	label           string
@@ -61,18 +64,23 @@ func (e *qsvEncoder) RateControlModes() []RateControl {
 }
 func (e *qsvEncoder) DefaultRateControl() RateControl { return RCCQP }
 
-// VideoFilter emits the QSV hw upload chain. The format=qsv filter is
-// required because the source frames must be tagged with the QSV
-// pixfmt before hwupload can move them to the QSV context.
+// VideoFilter emits the QSV hw upload chain. The frame first has to be
+// converted to a software YUV420 pixel format (nv12) — that is what
+// hwupload can ingest from CPU memory — then retagged with the QSV
+// hardware pixfmt via format=qsv so hwupload targets the right device,
+// then actually uploaded with hwupload. Going format=qsv,hwupload
+// directly from a software-decoded frame asks ffmpeg to do a hardware
+// format conversion on CPU-side frames and typically fails filter
+// negotiation.
 //
-//	format=qsv,hwupload[,scale_qsv=w=W:h=H[:opts]]
+//	format=nv12,format=qsv,hwupload[,scale_qsv=w=W:h=H[:opts]]
 func (e *qsvEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (string, error) {
 	filters, err := appendFrameRateFilter(v)
 	if err != nil {
 		return "", err
 	}
 	width, height, scale := targetDimensions(v, media)
-	filters = append(filters, "format=qsv", "hwupload")
+	filters = append(filters, "format=nv12", "format=qsv", "hwupload")
 	if scale {
 		part := fmt.Sprintf("scale_qsv=w=%d:h=%d", width, height)
 		if v.KeepAspectRatio {

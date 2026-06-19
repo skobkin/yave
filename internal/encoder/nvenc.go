@@ -17,10 +17,16 @@ import (
 //
 // The multi-GPU selector -gpu N is emitted alongside the encoder args
 // (after -c:v) because ffmpeg only exposes it as an nvenc encoder
-// option; -gpu before -i fails with "Unrecognized option 'gpu'". The
-// filter chain is the modern CUDA path: format=yuv420p,format=nv12,
-// hwupload_cuda followed by an optional scale_cuda. AV1 VBR is
-// available from FFmpeg 5.0+ via the av1_nvenc encoder.
+// option; -gpu before -i fails with "Unrecognized option 'gpu'". When
+// the user picks a non-default GPU, the same adapter is initialised
+// before -i with `-init_hw_device cuda=cuda:N` and the filter graph is
+// bound to it with `-filter_hw_device cuda`, so the hwupload_cuda /
+// scale_cuda steps upload onto the same adapter the encoder uses;
+// otherwise upload runs on ffmpeg's default CUDA device and the two
+// can disagree on multi-GPU hosts. The filter chain is the modern CUDA
+// path: format=yuv420p,format=nv12,hwupload_cuda followed by an
+// optional scale_cuda. AV1 VBR is available from FFmpeg 5.0+ via the
+// av1_nvenc encoder.
 type nvencEncoder struct {
 	name            string
 	label           string
@@ -78,10 +84,14 @@ func (e *nvencEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo)
 	return strings.Join(filters, ","), nil
 }
 
-// BuildVideoArgs emits the per-stream NVENC args. The -gpu N flag
-// (when the user has picked a non-default GPU) is folded into the
-// output encoder args rather than PreInputArgs because ffmpeg only
-// recognises it as an nvenc encoder option.
+// BuildVideoArgs emits the pre-input CUDA init / filter binding plus
+// the per-stream NVENC args. When the user picks a non-default GPU,
+// the encoder gets -gpu N (folded into the output args because ffmpeg
+// only recognises -gpu as an nvenc encoder option), and the matching
+// adapter is brought up before -i with
+// `-init_hw_device cuda=cuda:N -filter_hw_device cuda` so the
+// hwupload_cuda / scale_cuda steps upload onto the same GPU the
+// encoder uses.
 //
 // The rate-control mapping is -rc constqp/vbr/cbr with the matching
 // -qp / -b:v / -maxrate flags. CBR forces -maxrate = -b:v when the
@@ -92,6 +102,16 @@ func (e *nvencEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error
 		return BuildResult{}, fmt.Errorf("video encoder is empty")
 	}
 	res := BuildResult{}
+	if v.GPUIndex > 0 {
+		// Bind the filter graph's CUDA context to the same adapter
+		// the encoder targets. Without this, hwupload_cuda /
+		// scale_cuda run on ffmpeg's default CUDA device and may
+		// disagree with the -gpu N the encoder receives.
+		res.PreInputArgs = []string{
+			"-init_hw_device", "cuda=cuda:" + strconv.Itoa(v.GPUIndex),
+			"-filter_hw_device", "cuda",
+		}
+	}
 	args := []string{"-c:v", e.name}
 	if v.GPUIndex > 0 {
 		args = append(args, "-gpu", strconv.Itoa(v.GPUIndex))

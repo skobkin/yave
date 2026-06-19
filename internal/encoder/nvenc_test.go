@@ -269,10 +269,17 @@ func TestNVENCOptionalGPUIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// -gpu is an nvenc encoder option, so it lives with the rest of the
-	// per-stream args (after -c:v) rather than in PreInputArgs.
-	if len(res.PreInputArgs) != 0 {
-		t.Errorf("PreInputArgs = %v, want empty (gpu is a per-output option)", res.PreInputArgs)
+	// -gpu is an nvenc encoder option, so it lives with the rest of
+	// the per-stream args (after -c:v) rather than in PreInputArgs.
+	// The matching CUDA device is still brought up before -i so the
+	// hwupload_cuda / scale_cuda steps upload onto the same adapter
+	// the encoder targets on multi-GPU hosts.
+	wantPre := []string{
+		"-init_hw_device", "cuda=cuda:1",
+		"-filter_hw_device", "cuda",
+	}
+	if !slices.Equal(res.PreInputArgs, wantPre) {
+		t.Errorf("PreInputArgs = %v, want %v", res.PreInputArgs, wantPre)
 	}
 	if !slices.Equal(res.Args, []string{"-c:v", "hevc_nvenc", "-gpu", "1", "-preset", "p4", "-rc", "constqp", "-qp", "28"}) {
 		t.Errorf("Args = %v", res.Args)

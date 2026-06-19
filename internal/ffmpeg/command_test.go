@@ -163,6 +163,15 @@ func TestBuildCommandNVENC(t *testing.T) {
 	if !containsPair(plan.Args, "-gpu", "1") {
 		t.Errorf("missing -gpu 1 in %#v", plan.Args)
 	}
+	// The matching CUDA device must be initialised before -i and
+	// bound to the filter graph so hwupload_cuda / scale_cuda upload
+	// onto the same adapter the encoder targets on multi-GPU hosts.
+	if !containsPair(plan.Args, "-init_hw_device", "cuda=cuda:1") {
+		t.Errorf("missing -init_hw_device cuda=cuda:1 in %#v", plan.Args)
+	}
+	if !containsPair(plan.Args, "-filter_hw_device", "cuda") {
+		t.Errorf("missing -filter_hw_device cuda in %#v", plan.Args)
+	}
 	for _, pair := range [][2]string{
 		{"-c:v", "hevc_nvenc"},
 		{"-rc", "constqp"},
@@ -217,8 +226,8 @@ func TestBuildCommandQSV(t *testing.T) {
 	}
 	// The filter chain must use the QSV hw upload path. The test
 	// profile scales to 1280x720, so the chain is
-	// format=qsv,hwupload,scale_qsv=w=1280:h=720:...
-	if !slices.Contains(plan.Args, "format=qsv,hwupload,scale_qsv=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2") {
+	// format=nv12,format=qsv,hwupload,scale_qsv=w=1280:h=720:...
+	if !slices.Contains(plan.Args, "format=nv12,format=qsv,hwupload,scale_qsv=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2") {
 		t.Errorf("missing QSV filter in %#v", plan.Args)
 	}
 }
