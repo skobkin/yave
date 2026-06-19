@@ -692,6 +692,70 @@ func TestProfileFromWidgetsIncludesQSVDeviceAndGPUIndex(t *testing.T) {
 	}
 }
 
+// TestProfileClearedWhenEncoderDoesNotSupportProfile pins the fix for
+// the av1_nvenc trap: the Profile widget is disabled (because
+// av1_nvenc rejects -profile:v), so a stale value (e.g. "main" from
+// the previous encoder) cannot be edited away by the user. The
+// widget still feeds profileFromWidgets, so profileFromWidgets would
+// emit the stale profile and nvencEncoder.Validate would reject it —
+// the user is stuck. Switching encoder must clear the field so the
+// round-trip through loadProfile / profileFromWidgets does not
+// contain a value the encoder refuses.
+func TestProfileClearedWhenEncoderDoesNotSupportProfile(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// Two paths leave the Profile field populated: (a) the user
+	// typed/saved a profile on a supporting encoder (e.g. h264_nvenc
+	// "main"), then (b) the user picks av1_nvenc. Both paths must
+	// drop the value.
+	t.Run("user switch to av1_nvenc", func(t *testing.T) {
+		c.videoEncoder.SetSelected("h264_nvenc")
+		c.videoProfile.SetText("main")
+		c.videoEncoder.SetSelected("av1_nvenc")
+
+		if got := c.videoProfile.Text; got != "" {
+			t.Errorf("videoProfile.Text after switch to av1_nvenc = %q, want \"\"", got)
+		}
+		if got := c.profileFromWidgets().Video.Profile; got != "" {
+			t.Errorf("profileFromWidgets().Video.Profile after switch to av1_nvenc = %q, want \"\"", got)
+		}
+	})
+
+	t.Run("loadProfile directly into av1_nvenc with stale profile", func(t *testing.T) {
+		// loadProfile runs with c.loading=true; the clear happens in
+		// the deferred updateControlState when c.loading drops.
+		profile := c.config.Profiles[0]
+		profile.Video.Encoder = "av1_nvenc"
+		profile.Video.Profile = "main"
+		c.loadProfile(profile)
+
+		if got := c.videoProfile.Text; got != "" {
+			t.Errorf("videoProfile.Text after load = %q, want \"\"", got)
+		}
+		if got := c.profileFromWidgets().Video.Profile; got != "" {
+			t.Errorf("profileFromWidgets().Video.Profile after load = %q, want \"\"", got)
+		}
+	})
+
+	// Sanity check: switching back to a profile-supporting encoder
+	// must not invent a value where the user had none. An empty
+	// field stays empty so the encoder sees the same null state it
+	// would on first launch.
+	t.Run("switching back does not repopulate", func(t *testing.T) {
+		c.videoEncoder.SetSelected("av1_nvenc")
+		c.videoProfile.SetText("") // already empty; ensures SetText("") does not re-fire changed
+
+		c.videoEncoder.SetSelected("h264_nvenc")
+		if got := c.videoProfile.Text; got != "" {
+			t.Errorf("videoProfile.Text after switch back to h264_nvenc = %q, want \"\"", got)
+		}
+	})
+}
+
 // TestLoadProfilePreservesSavedRateControl pins the round-trip from a
 // profile with a non-default rate control (CQP, VBR) for encoders
 // whose own default differs (VAAPI defaults to Auto, NVENC/QSV to

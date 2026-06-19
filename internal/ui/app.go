@@ -807,6 +807,17 @@ func (c *Controller) updateControlState() {
 
 	setEnabled(c.tune, supportsTune)
 	setEnabled(c.videoProfile, supportsProfile)
+	// av1_nvenc (and any other encoder that does not accept -profile:v)
+	// leaves the Profile widget disabled. A stale value (e.g. "main"
+	// carried over from an h264 profile) is then invisible to the user
+	// but still read by profileFromWidgets, and nvencEncoder.Validate
+	// rejects it as a hard error — the user is stuck. Drop the field
+	// rather than trap them. The Text != "" guard prevents the SetText
+	// from re-firing OnChanged and re-entering updateControlState
+	// (mirrors the populateRateControlOptions guard).
+	if !supportsProfile && c.videoProfile.Text != "" {
+		c.videoProfile.SetText("")
+	}
 	setEnabled(c.frameMode, ve != nil)
 	setEnabled(c.frameRate, ve != nil && c.frameMode.Selected == "convert")
 	setEnabled(c.maxWidth, ve != nil)
