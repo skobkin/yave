@@ -76,6 +76,7 @@ func (e *softwareEncoder) PresetRange() (IntegerRange, bool) {
 func (e *softwareEncoder) SupportsTune() bool    { return e.supportsTune }
 func (e *softwareEncoder) SupportsProfile() bool { return e.supportsProfile }
 func (e *softwareEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
+func (e *softwareEncoder) DefaultPreset() string { return e.presetDefault }
 
 // VideoFilter returns the filter chain for software encoders. When
 // scaling is requested a scale= filter is emitted; when frame-rate

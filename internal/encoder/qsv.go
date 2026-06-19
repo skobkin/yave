@@ -60,6 +60,7 @@ func (e *qsvEncoder) PresetRange() (IntegerRange, bool) {
 func (e *qsvEncoder) SupportsTune() bool    { return false }
 func (e *qsvEncoder) SupportsProfile() bool { return e.supportsProfile }
 func (e *qsvEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
+func (e *qsvEncoder) DefaultPreset() string { return e.presetDefault }
 func (e *qsvEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }

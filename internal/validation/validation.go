@@ -210,14 +210,17 @@ func validateVideoForEncoder(result *Result, video model.VideoSettings, ve encod
 		validateOptionalBitrate(result, "profile.video.bufsize", video.Bufsize)
 	}
 
-	// Integer preset check (SVT-AV1, libaom-av1). The original code
-	// always called this for libsvtav1; we preserve that by checking
-	// only when PresetRange is supported, regardless of preset being
-	// empty (Atoi("") fails -> error). This matches prior behaviour
-	// for libsvtav1.
+	// Integer preset check (SVT-AV1, libaom-av1). We accept an empty
+	// preset when the encoder's builder has a default (libsvtav1 -> 6,
+	// libaom-av1 -> 4) so that hand-edited and imported profiles with
+	// preset="" can still validate and reach command generation. The
+	// builder substitutes the default via defaultString(...); without
+	// this allowance, those profiles would be rejected here even
+	// though BuildVideoArgs would emit a runnable command.
 	if r, ok := ve.PresetRange(); ok {
-		preset, err := strconv.Atoi(strings.TrimSpace(video.Preset))
-		if err != nil || !r.Contains(preset) {
+		if strings.TrimSpace(video.Preset) == "" && ve.DefaultPreset() != "" {
+			// builder will substitute the default; nothing to check
+		} else if preset, err := strconv.Atoi(strings.TrimSpace(video.Preset)); err != nil || !r.Contains(preset) {
 			result.error("profile.video.preset", "%s preset must be an integer between %d and %d", name, r.Min, r.Max)
 		}
 	}

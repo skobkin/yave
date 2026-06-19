@@ -70,6 +70,9 @@ func TestVAAPIVideoEncoderMetadata(t *testing.T) {
 			if ve.SupportsPreset() {
 				t.Errorf("SupportsPreset() = true, want false (VAAPI has no preset flag)")
 			}
+			if got := ve.DefaultPreset(); got != "" {
+				t.Errorf("DefaultPreset() = %q, want empty (VAAPI has no preset flag)", got)
+			}
 			if _, ok := ve.CRFRange(); ok {
 				t.Errorf("CRFRange ok=true, want false")
 			}

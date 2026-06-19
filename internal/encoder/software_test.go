@@ -308,6 +308,28 @@ func TestSoftwareVideoPresetRange(t *testing.T) {
 	}
 }
 
+// TestSoftwareVideoDefaultPreset pins the per-encoder builder default
+// for empty preset. Validation uses DefaultPreset() to decide whether
+// an empty preset is acceptable; if any encoder changes its default,
+// update the validation allowance too.
+func TestSoftwareVideoDefaultPreset(t *testing.T) {
+	tests := map[string]string{
+		"libx264":    "",
+		"libx265":    "",
+		"libsvtav1":  "6",
+		"libvpx-vp9": "",
+		"libaom-av1": "4",
+	}
+	for name, want := range tests {
+		t.Run(name, func(t *testing.T) {
+			ve := findVideo(t, name)
+			if got := ve.DefaultPreset(); got != want {
+				t.Errorf("DefaultPreset() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestSoftwareVideoQPRange(t *testing.T) {
 	for _, name := range []string{"libx264", "libx265", "libsvtav1", "libvpx-vp9", "libaom-av1"} {
 		t.Run(name, func(t *testing.T) {

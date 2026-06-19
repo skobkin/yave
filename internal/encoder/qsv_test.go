@@ -57,6 +57,9 @@ func TestQSVVideoEncoderMetadata(t *testing.T) {
 			if ve.SupportsProfile() != tt.supportsProf {
 				t.Errorf("SupportsProfile() = %v, want %v", ve.SupportsProfile(), tt.supportsProf)
 			}
+			if got, want := ve.DefaultPreset(), "medium"; got != want {
+				t.Errorf("DefaultPreset() = %q, want %q", got, want)
+			}
 			r, ok := ve.QPRange()
 			if !ok || r.Min != tt.qpMin || r.Max != tt.qpMax {
 				t.Errorf("QPRange = %v ok=%v, want %d-%d", r, ok, tt.qpMin, tt.qpMax)

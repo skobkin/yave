@@ -58,6 +58,7 @@ func (e *nvencEncoder) PresetRange() (IntegerRange, bool) {
 func (e *nvencEncoder) SupportsTune() bool    { return false }
 func (e *nvencEncoder) SupportsProfile() bool { return e.supportsProfile }
 func (e *nvencEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
+func (e *nvencEncoder) DefaultPreset() string { return e.presetDefault }
 func (e *nvencEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }

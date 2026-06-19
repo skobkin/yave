@@ -186,6 +186,17 @@ type VideoEncoder interface {
 	// (libx264, libx265, NVENC, QSV).
 	SupportsPreset() bool
 
+	// DefaultPreset returns the value the builder substitutes for an
+	// empty preset string ("6" for libsvtav1, "4" for libaom-av1,
+	// "medium" for NVENC/QSV, etc.). The empty string means the
+	// encoder has no default — in that case validation requires the
+	// user to supply a non-empty preset value. This lets validation
+	// stay in sync with the builder: a profile with preset="" is
+	// considered valid only when the encoder would still produce a
+	// runnable command, so hand-edited and imported profiles don't
+	// fail before reaching command generation.
+	DefaultPreset() string
+
 	// SupportsProfile reports whether -profile:v is meaningful for this
 	// encoder. Most encoders accept profile; some (e.g. av1_nvenc) do not.
 	SupportsProfile() bool

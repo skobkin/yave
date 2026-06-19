@@ -234,6 +234,10 @@ func TestVideoRateControlValidation(t *testing.T) {
 		{name: "x265 crf too high", encoder: "libx265", mode: "CRF", mutate: func(v *model.VideoSettings) { v.CRF = 52 }, valid: false},
 		{name: "svt crf and preset", encoder: "libsvtav1", mode: "CRF", mutate: func(v *model.VideoSettings) { v.CRF = 35; v.Preset = "6" }, valid: true},
 		{name: "svt invalid preset", encoder: "libsvtav1", mode: "CRF", mutate: func(v *model.VideoSettings) { v.CRF = 35; v.Preset = "14" }, valid: false},
+		{name: "svt empty preset (builder defaults to 6)", encoder: "libsvtav1", mode: "CRF", mutate: func(v *model.VideoSettings) { v.CRF = 35; v.Preset = "" }, valid: true},
+		{name: "aom empty preset (builder defaults to 4)", encoder: "libaom-av1", mode: "CRF", mutate: func(v *model.VideoSettings) { v.CRF = 30; v.Preset = "" }, valid: true},
+		{name: "aom explicit preset", encoder: "libaom-av1", mode: "CRF", mutate: func(v *model.VideoSettings) { v.CRF = 30; v.Preset = "3" }, valid: true},
+		{name: "aom preset out of range", encoder: "libaom-av1", mode: "CRF", mutate: func(v *model.VideoSettings) { v.CRF = 30; v.Preset = "9" }, valid: false},
 		{name: "vp9 bitrate", encoder: "libvpx-vp9", mode: "BITRATE", mutate: func(v *model.VideoSettings) { v.Bitrate = "2400k" }, valid: true},
 		{name: "vp9 unsupported mode", encoder: "libvpx-vp9", mode: "CQP", valid: false},
 	}
@@ -420,7 +424,7 @@ func validMedia() model.MediaInfo {
 func capabilities() model.Capabilities {
 	names := []string{
 		"hevc_vaapi", "h264_vaapi", "av1_vaapi", "vp9_vaapi",
-		"libx265", "libx264", "libsvtav1", "libvpx-vp9",
+		"libx265", "libx264", "libsvtav1", "libvpx-vp9", "libaom-av1",
 		"libopus", "opus", "aac", "libmp3lame", "mp3", "flac",
 	}
 	encoders := make(map[string]model.Encoder, len(names))
