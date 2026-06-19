@@ -217,6 +217,100 @@ func TestMP4OpusProducesWarning(t *testing.T) {
 	assertWarningContains(t, result, "profile.audio.encoder", "limited player compatibility")
 }
 
+// TestEmptyRateControlStillValidatesRanges guards the rate-control
+// range checks for profiles that omit rate_control. With rate_control
+// empty, validation must still apply the encoder's default range
+// checks (QP for default-CQP, CRF for default-CRF) — otherwise an
+// imported profile with an out-of-range value would pass validation
+// even though BuildVideoArgs emits the invalid -qp/-crf.
+//
+// Before the fix, validateVideoForEncoder routed an empty mode into
+// the AUTO branch, which only validates optional bitrate fields. So
+// NVENC/QSV profiles with rate_control="" could carry a QP outside
+// {0,51}/{0,255} past validation; libx264/libx265/libsvtav1 profiles
+// with rate_control="" could carry a CRF outside {0,51}/{0,63}. The
+// encoder builders substitute the default for the empty mode and emit
+// the un-checked value to ffmpeg, which then rejects it at run time
+// instead of failing the validation step.
+func TestEmptyRateControlStillValidatesRanges(t *testing.T) {
+	tests := []struct {
+		name    string
+		encoder string
+		mutate  func(*model.VideoSettings)
+		wantErr string // empty -> expect valid
+	}{
+		{
+			name:    "nvenc empty mode, qp too high",
+			encoder: "hevc_nvenc",
+			mutate:  func(v *model.VideoSettings) { v.QP = 999; v.Preset = "p4" },
+			wantErr: "profile.video.qp",
+		},
+		{
+			name:    "qsv empty mode, qp too high",
+			encoder: "hevc_qsv",
+			mutate:  func(v *model.VideoSettings) { v.QP = 999; v.Preset = "medium" },
+			wantErr: "profile.video.qp",
+		},
+		{
+			name:    "libx264 empty mode, crf too high",
+			encoder: "libx264",
+			mutate:  func(v *model.VideoSettings) { v.CRF = 999; v.Preset = "medium" },
+			wantErr: "profile.video.crf",
+		},
+		{
+			name:    "libx265 empty mode, crf too high",
+			encoder: "libx265",
+			mutate:  func(v *model.VideoSettings) { v.CRF = 999; v.Preset = "medium" },
+			wantErr: "profile.video.crf",
+		},
+		{
+			name:    "libsvtav1 empty mode, crf too high",
+			encoder: "libsvtav1",
+			mutate:  func(v *model.VideoSettings) { v.CRF = 999; v.Preset = "" },
+			wantErr: "profile.video.crf",
+		},
+		// Sanity: an in-range value still passes after the
+		// normalization.
+		{
+			name:    "nvenc empty mode, in-range qp",
+			encoder: "hevc_nvenc",
+			mutate:  func(v *model.VideoSettings) { v.QP = 28; v.Preset = "p4" },
+			wantErr: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			profile := validProfile()
+			profile.Video.Encoder = tt.encoder
+			profile.Video.RateControl = "" // the path under test
+			profile.Video.Bitrate = ""
+			profile.Video.VAAPIDevice = "/dev/dri/renderD128"
+			tt.mutate(&profile.Video)
+
+			result := validation.ValidateProfile(profile, capabilities(), nil)
+			if tt.wantErr == "" {
+				if !result.Valid() {
+					t.Fatalf("expected valid, got errors: %#v", result.Errors)
+				}
+				return
+			}
+			if result.Valid() {
+				t.Fatalf("expected error on %q, got none", tt.wantErr)
+			}
+			found := false
+			for _, e := range result.Errors {
+				if e.Field == tt.wantErr {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("missing error on %q, got: %#v", tt.wantErr, result.Errors)
+			}
+		})
+	}
+}
+
 func TestVideoRateControlValidation(t *testing.T) {
 	tests := []struct {
 		name    string

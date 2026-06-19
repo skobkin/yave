@@ -171,8 +171,9 @@ func validateVideo(result *Result, video model.VideoSettings, encoderName string
 func validateVideoForEncoder(result *Result, video model.VideoSettings, ve encoder.VideoEncoder, name string) {
 	mode := strings.ToUpper(strings.TrimSpace(video.RateControl))
 
-	// Rate-control mode membership. Empty mode is accepted for encoders
-	// that advertise AUTO (VAAPI) and rejected otherwise.
+	// Rate-control mode membership. Empty mode is accepted when the
+	// encoder's DefaultRateControl is among its advertised
+	// RateControlModes; see videoModeAllowed.
 	if !videoModeAllowed(ve, mode) {
 		allowed := make([]string, 0, len(ve.RateControlModes()))
 		for _, m := range ve.RateControlModes() {
@@ -181,6 +182,25 @@ func validateVideoForEncoder(result *Result, video model.VideoSettings, ve encod
 		result.error("profile.video.rate_control",
 			"%s rate control must be one of: %s", name, strings.Join(allowed, ", "))
 		return
+	}
+
+	// Normalize empty mode to the encoder's default before the per-mode
+	// switch. Without this, an empty rate_control on a default-CQP
+	// (NVENC/QSV) or default-CRF (libx264/libx265/libsvtav1/...)
+	// encoder would skip the QP/CRF range check: the switch falls
+	// into the AUTO branch which only validates optional bitrate
+	// fields, while BuildVideoArgs emits -qp/-crf with the un-checked
+	// value. Substituting the default routes the empty branch through
+	// the same checks an explicit selection gets. An empty encoder
+	// default (defensive — no encoder currently returns "") falls back
+	// to AUTO.
+	if mode == "" {
+		def := string(ve.DefaultRateControl())
+		if def == "" {
+			mode = string(encoder.RCAuto)
+		} else {
+			mode = def
+		}
 	}
 
 	// VAAPI device must be present when the encoder needs one.
@@ -204,7 +224,7 @@ func validateVideoForEncoder(result *Result, video model.VideoSettings, ve encod
 			result.error("profile.video.crf", "CRF for %s must be between %d and %d", name, r.Min, r.Max)
 		}
 		validateOptionalBitrate(result, "profile.video.bitrate", video.Bitrate)
-	case "AUTO", "":
+	case "AUTO":
 		validateOptionalBitrate(result, "profile.video.bitrate", video.Bitrate)
 		validateOptionalBitrate(result, "profile.video.maxrate", video.Maxrate)
 		validateOptionalBitrate(result, "profile.video.bufsize", video.Bufsize)
