@@ -138,6 +138,119 @@ func TestBuildCommandUsesIntegerBoundaryValues(t *testing.T) {
 	}
 }
 
+func TestBuildCommandNVENC(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[0]
+	profile.Video.Encoder = "hevc_nvenc"
+	profile.Video.RateControl = "CQP"
+	profile.Video.QP = 28
+	profile.Video.Preset = "p4"
+	profile.Video.GPUIndex = 1
+	plan, err := BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Media:      model.MediaInfo{VideoStreams: []model.VideoStream{{Width: 1920, Height: 1080}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// -gpu 1 must be emitted before -i, the filter chain and
+	// encoder flags must appear after -i.
+	if !containsPair(plan.Args, "-gpu", "1") {
+		t.Errorf("missing -gpu 1 in %#v", plan.Args)
+	}
+	for _, pair := range [][2]string{
+		{"-c:v", "hevc_nvenc"},
+		{"-rc", "constqp"},
+		{"-qp", "28"},
+		{"-preset", "p4"},
+	} {
+		if !containsPair(plan.Args, pair[0], pair[1]) {
+			t.Errorf("missing %q %q in %#v", pair[0], pair[1], plan.Args)
+		}
+	}
+	// The filter chain must use the NVENC hw upload path. The test
+	// profile scales to 1280x720, so the chain is
+	// format=yuv420p,format=nv12,hwupload_cuda,scale_cuda=w=1280:h=720:...
+	if !slices.Contains(plan.Args, "format=yuv420p,format=nv12,hwupload_cuda,scale_cuda=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2") {
+		t.Errorf("missing NVENC filter in %#v", plan.Args)
+	}
+}
+
+func TestBuildCommandQSV(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[0]
+	profile.Video.Encoder = "hevc_qsv"
+	profile.Video.RateControl = "VBR"
+	profile.Video.Bitrate = "6M"
+	profile.Video.Preset = "medium"
+	profile.Video.QSVDevice = "/dev/dri/renderD128"
+	plan, err := BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Media:      model.MediaInfo{VideoStreams: []model.VideoStream{{Width: 1920, Height: 1080}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPair(plan.Args, "-init_hw_device", "qsv=/dev/dri/renderD128") {
+		t.Errorf("missing -init_hw_device qsv=... in %#v", plan.Args)
+	}
+	for _, pair := range [][2]string{
+		{"-c:v", "hevc_qsv"},
+		{"-rc_mode", "VBR"},
+		{"-b:v", "6M"},
+		{"-preset", "medium"},
+	} {
+		if !containsPair(plan.Args, pair[0], pair[1]) {
+			t.Errorf("missing %q %q in %#v", pair[0], pair[1], plan.Args)
+		}
+	}
+	// The filter chain must use the QSV hw upload path. The test
+	// profile scales to 1280x720, so the chain is
+	// format=qsv,hwupload,scale_qsv=w=1280:h=720:...
+	if !slices.Contains(plan.Args, "format=qsv,hwupload,scale_qsv=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2") {
+		t.Errorf("missing QSV filter in %#v", plan.Args)
+	}
+}
+
+func TestBuildCommandLibaomAV1(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[0]
+	profile.Video.Encoder = "libaom-av1"
+	profile.Video.RateControl = "CRF"
+	profile.Video.CRF = 30
+	profile.Video.Preset = "4"
+	plan, err := BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Media:      model.MediaInfo{VideoStreams: []model.VideoStream{{Width: 1920, Height: 1080}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]string{
+		{"-c:v", "libaom-av1"},
+		{"-crf", "30"},
+		{"-b:v", "0"},
+		{"-cpu-used", "4"},
+	} {
+		if !containsPair(plan.Args, pair[0], pair[1]) {
+			t.Errorf("missing %q %q in %#v", pair[0], pair[1], plan.Args)
+		}
+	}
+	// No hw upload or pixel-format conversion for software.
+	if slices.Contains(plan.Args, "hwupload") {
+		t.Errorf("libaom-av1 unexpectedly emits hwupload: %#v", plan.Args)
+	}
+}
+
 func containsPair(args []string, key, value string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == key && args[i+1] == value {

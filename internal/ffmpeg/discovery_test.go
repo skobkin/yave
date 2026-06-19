@@ -39,6 +39,48 @@ func TestParseEncodersFiltersAndPrefers(t *testing.T) {
 	}
 }
 
+// TestParseEncodersIncludesNewFamilies confirms that the curated
+// NVENC, QSV, and libaom-av1 encoders registered with the encoder
+// registry round-trip through ParseEncoders. Adding a new encoder
+// family should require no change to discovery.go: just register the
+// encoder in defaults.go.
+func TestParseEncodersIncludesNewFamilies(t *testing.T) {
+	output := `Encoders:
+ V..... h264_nvenc           NVIDIA NVENC H.264
+ V..... hevc_nvenc           NVIDIA NVENC hevc
+ V..... av1_nvenc            NVIDIA NVENC av1
+ V..... h264_qsv             H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (Intel Quick Sync Video acceleration)
+ V..... hevc_qsv             HEVC (Intel Quick Sync Video acceleration)
+ V..... av1_qsv              AV1 (Intel Quick Sync Video acceleration)
+ V..... vp9_qsv              VP9 (Intel Quick Sync Video acceleration)
+ V..... libaom-av1           libaom AV1
+ V..... unrelated_encoder    Not curated
+`
+
+	got := ParseEncoders(output)
+	for _, name := range []string{
+		"h264_nvenc", "hevc_nvenc", "av1_nvenc",
+		"h264_qsv", "hevc_qsv", "av1_qsv", "vp9_qsv",
+		"libaom-av1",
+	} {
+		if _, ok := got[name]; !ok {
+			t.Errorf("expected encoder %q in ParseEncoders result", name)
+		}
+	}
+	if _, ok := got["unrelated_encoder"]; ok {
+		t.Errorf("unrelated_encoder should be filtered out")
+	}
+
+	// Cross-check that the registry-supplied metadata matches what
+	// was registered: h264_nvenc should be hardware / HWNVENC, etc.
+	if got["h264_nvenc"].Kind != KindHardware {
+		t.Errorf("h264_nvenc Kind = %q, want %q", got["h264_nvenc"].Kind, KindHardware)
+	}
+	if got["libaom-av1"].Kind != KindSoftware {
+		t.Errorf("libaom-av1 Kind = %q, want %q", got["libaom-av1"].Kind, KindSoftware)
+	}
+}
+
 func TestParseHWAccels(t *testing.T) {
 	got := ParseHWAccels("Hardware acceleration methods:\nvaapi\ncuda\nvaapi\n\n")
 	want := []string{"cuda", "vaapi"}

@@ -41,7 +41,7 @@ type softwareEncoder struct {
 	// supportsProfile gates the -profile:v flag.
 	supportsProfile bool
 	// rateControlModes lists the modes exposed by the UI dropdown.
-	rateControlModes  []RateControl
+	rateControlModes   []RateControl
 	defaultRateControl RateControl
 	// buildArgs is the per-encoder flag builder. It receives the parts
 	// that are common to every software encoder (-c:v <name>) and is
@@ -50,21 +50,23 @@ type softwareEncoder struct {
 	buildArgs func(v model.VideoSettings) ([]string, error)
 }
 
-func (e *softwareEncoder) Name() string             { return e.name }
-func (e *softwareEncoder) Label() string            { return e.label }
-func (e *softwareEncoder) Media() string            { return MediaVideo }
-func (e *softwareEncoder) Kind() string             { return KindSoftware }
-func (e *softwareEncoder) Priority() int            { return e.priority }
-func (e *softwareEncoder) HWBackend() HWBackend     { return HWNone }
-func (e *softwareEncoder) CodecFamily() string      { return e.codecFamily }
+func (e *softwareEncoder) Name() string         { return e.name }
+func (e *softwareEncoder) Label() string        { return e.label }
+func (e *softwareEncoder) Media() string        { return MediaVideo }
+func (e *softwareEncoder) Kind() string         { return KindSoftware }
+func (e *softwareEncoder) Priority() int        { return e.priority }
+func (e *softwareEncoder) HWBackend() HWBackend { return HWNone }
+func (e *softwareEncoder) CodecFamily() string  { return e.codecFamily }
 func (e *softwareEncoder) RateControlModes() []RateControl {
 	return e.rateControlModes
 }
 func (e *softwareEncoder) DefaultRateControl() RateControl {
 	return e.defaultRateControl
 }
-func (e *softwareEncoder) QPRange() (IntegerRange, bool)             { return IntegerRange{}, false }
-func (e *softwareEncoder) CRFRange() (IntegerRange, bool)            { return e.crfRange, e.crfRange.Max >= e.crfRange.Min }
+func (e *softwareEncoder) QPRange() (IntegerRange, bool) { return IntegerRange{}, false }
+func (e *softwareEncoder) CRFRange() (IntegerRange, bool) {
+	return e.crfRange, e.crfRange.Max >= e.crfRange.Min
+}
 func (e *softwareEncoder) PresetRange() (IntegerRange, bool) {
 	if e.presetKind == "integer" {
 		return e.presetRange, true
@@ -149,7 +151,7 @@ func softwareVideoEncoders() []Encoder {
 			priority: 80, crfRange: IntegerRange{0, 63},
 			presetRange: IntegerRange{0, 13}, presetFlag: "-preset",
 			presetKind: "integer", presetName: "preset", presetDefault: "6",
-			supportsProfile: true,
+			supportsProfile:    true,
 			rateControlModes:   []RateControl{RCCRF, RCBitrate},
 			defaultRateControl: RCCRF,
 			buildArgs:          svtAV1Args,
@@ -160,7 +162,7 @@ func softwareVideoEncoders() []Encoder {
 			presetFlag: "-deadline", presetKind: "categorical", presetName: "deadline",
 			// libvpx-vp9 has no -profile:v flag in the prior code path;
 			// SupportsProfile reports what BuildVideoArgs actually emits.
-			supportsProfile: false,
+			supportsProfile:    false,
 			rateControlModes:   []RateControl{RCCRF, RCBitrate},
 			defaultRateControl: RCCRF,
 			buildArgs:          vpxVP9Args,
@@ -170,7 +172,7 @@ func softwareVideoEncoders() []Encoder {
 			priority: 60, crfRange: IntegerRange{0, 63},
 			presetRange: IntegerRange{0, 8}, presetFlag: "-cpu-used",
 			presetKind: "integer", presetName: "cpu-used", presetDefault: "4",
-			supportsProfile: true,
+			supportsProfile:    true,
 			rateControlModes:   []RateControl{RCCRF, RCBitrate},
 			defaultRateControl: RCCRF,
 			buildArgs:          libaomAV1Args,

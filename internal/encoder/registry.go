@@ -112,8 +112,8 @@ func (r *Registry) Replace(encoders []Encoder) {
 }
 
 var (
-	defaultOnce   sync.Once
-	defaultReg    *Registry
+	defaultOnce sync.Once
+	defaultReg  *Registry
 )
 
 // DefaultRegistry returns the process-wide curated encoder set. It is

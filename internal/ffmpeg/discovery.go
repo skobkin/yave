@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
 )
 
@@ -20,23 +21,6 @@ const (
 	KindEncode      = "encode"
 	KindPassthrough = "passthrough"
 )
-
-var curatedEncoders = []model.Encoder{
-	{Name: "hevc_vaapi", Label: "H.265 / HEVC VAAPI", Media: MediaVideo, Kind: KindHardware, Priority: 100},
-	{Name: "h264_vaapi", Label: "H.264 VAAPI", Media: MediaVideo, Kind: KindHardware, Priority: 100},
-	{Name: "libx265", Label: "H.265 / HEVC x265", Media: MediaVideo, Kind: KindSoftware, Priority: 90},
-	{Name: "libx264", Label: "H.264 x264", Media: MediaVideo, Kind: KindSoftware, Priority: 90},
-	{Name: "av1_vaapi", Label: "AV1 VAAPI", Media: MediaVideo, Kind: KindHardware, Priority: 70},
-	{Name: "vp9_vaapi", Label: "VP9 VAAPI", Media: MediaVideo, Kind: KindHardware, Priority: 70},
-	{Name: "libsvtav1", Label: "AV1 SVT-AV1", Media: MediaVideo, Kind: KindSoftware, Priority: 60},
-	{Name: "libvpx-vp9", Label: "VP9 libvpx-vp9", Media: MediaVideo, Kind: KindSoftware, Priority: 60},
-	{Name: "libopus", Label: "Opus", Media: MediaAudio, Kind: KindEncode, Priority: 100},
-	{Name: "opus", Label: "Opus", Media: MediaAudio, Kind: KindEncode, Priority: 90},
-	{Name: "aac", Label: "AAC", Media: MediaAudio, Kind: KindEncode, Priority: 100},
-	{Name: "libmp3lame", Label: "MP3", Media: MediaAudio, Kind: KindEncode, Priority: 70},
-	{Name: "mp3", Label: "MP3", Media: MediaAudio, Kind: KindEncode, Priority: 60},
-	{Name: "flac", Label: "FLAC", Media: MediaAudio, Kind: KindEncode, Priority: 70},
-}
 
 // Discover resolves both programs and queries their versions and FFmpeg's
 // encoder and hardware-acceleration capabilities.
@@ -104,6 +88,12 @@ func ParseVersion(output string) string {
 
 // ParseEncoders extracts available encoder names and applies YAVE's curated
 // whitelist and native/external encoder preferences.
+//
+// The curated whitelist is the encoder.DefaultRegistry() — every
+// encoder name returned by the registry is matched against the
+// ffmpeg -encoders output. This keeps the discovery code in sync
+// with the Encoder interface: adding a new curated encoder only
+// requires registering it in defaults.go.
 func ParseEncoders(output string) map[string]model.Encoder {
 	available := make(map[string]struct{})
 	for line := range strings.SplitSeq(output, "\n") {
@@ -118,10 +108,14 @@ func ParseEncoders(output string) map[string]model.Encoder {
 		available[fields[1]] = struct{}{}
 	}
 
+	reg := encoder.DefaultRegistry()
 	result := make(map[string]model.Encoder)
-	for _, encoder := range curatedEncoders {
-		if _, ok := available[encoder.Name]; ok {
-			result[encoder.Name] = encoder
+	for _, e := range reg.All() {
+		if _, ok := available[e.Name()]; !ok {
+			continue
+		}
+		if m, ok := reg.Model(e.Name()); ok {
+			result[e.Name()] = m
 		}
 	}
 	preferEncoder(result, "libopus", "opus")

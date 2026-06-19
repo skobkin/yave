@@ -339,9 +339,9 @@ func TestSoftwareVideoFilterScaling(t *testing.T) {
 	}
 	ve := findVideo(t, "libx264")
 	got, err := ve.VideoFilter(model.VideoSettings{
-		Encoder:       "libx264",
-		MaxWidth:      1280,
-		MaxHeight:     720,
+		Encoder:         "libx264",
+		MaxWidth:        1280,
+		MaxHeight:       720,
 		KeepAspectRatio: true,
 	}, media)
 	if err != nil {

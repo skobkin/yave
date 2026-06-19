@@ -22,13 +22,13 @@ type audioEncoder struct {
 	priority         int
 }
 
-func (e *audioEncoder) Name() string             { return e.name }
-func (e *audioEncoder) Label() string            { return e.label }
-func (e *audioEncoder) Media() string            { return MediaAudio }
-func (e *audioEncoder) Kind() string             { return KindEncode }
-func (e *audioEncoder) Priority() int            { return e.priority }
-func (e *audioEncoder) HWBackend() HWBackend     { return HWNone }
-func (e *audioEncoder) CodecFamily() string      { return e.codecFamily }
+func (e *audioEncoder) Name() string         { return e.name }
+func (e *audioEncoder) Label() string        { return e.label }
+func (e *audioEncoder) Media() string        { return MediaAudio }
+func (e *audioEncoder) Kind() string         { return KindEncode }
+func (e *audioEncoder) Priority() int        { return e.priority }
+func (e *audioEncoder) HWBackend() HWBackend { return HWNone }
+func (e *audioEncoder) CodecFamily() string  { return e.codecFamily }
 func (e *audioEncoder) AudioCompressionRange() (IntegerRange, bool) {
 	if e.compressionRange == nil {
 		return IntegerRange{}, false
