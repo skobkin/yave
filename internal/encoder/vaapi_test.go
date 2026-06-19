@@ -191,20 +191,22 @@ func TestVAAPIBuildArgsUnsupportedRateControl(t *testing.T) {
 }
 
 func TestVAAPIBuildArgsEmptyDevice(t *testing.T) {
-	// An empty VAAPI device must not emit -vaapi_device in PreInputArgs.
-	// The UI surfaces this as an error in validation.
+	// An empty VAAPI device must surface as a build error, not a
+	// silently usable command. -vaapi_device is required for ffmpeg
+	// to attach a VAAPI context to the filter graph; emitting a
+	// command without it would fail only at run time.
 	ve := findVideo(t, "hevc_vaapi")
-	res, err := ve.BuildVideoArgs(model.VideoSettings{
+	_, err := ve.BuildVideoArgs(model.VideoSettings{
 		Encoder:     "hevc_vaapi",
 		VAAPIDevice: "",
 		RateControl: "AUTO",
 		Bitrate:     "4M",
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected error for empty VAAPIDevice, got nil")
 	}
-	if len(res.PreInputArgs) != 0 {
-		t.Errorf("PreInputArgs = %v, want empty", res.PreInputArgs)
+	if !strings.Contains(err.Error(), "VAAPI device path is empty") {
+		t.Errorf("err = %q, want it to mention 'VAAPI device path is empty'", err.Error())
 	}
 }
 

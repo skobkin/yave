@@ -226,8 +226,8 @@ func TestBuildCommandQSV(t *testing.T) {
 	}
 	// The filter chain must use the QSV hw upload path. The test
 	// profile scales to 1280x720, so the chain is
-	// format=nv12,format=qsv,hwupload,scale_qsv=w=1280:h=720:...
-	if !slices.Contains(plan.Args, "format=nv12,format=qsv,hwupload,scale_qsv=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2") {
+	// format=nv12,hwupload,format=qsv,scale_qsv=w=1280:h=720:...
+	if !slices.Contains(plan.Args, "format=nv12,hwupload,format=qsv,scale_qsv=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2") {
 		t.Errorf("missing QSV filter in %#v", plan.Args)
 	}
 }

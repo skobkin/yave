@@ -68,14 +68,21 @@ func (e *vaapiEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo)
 // BuildVideoArgs emits the pre-input -vaapi_device flag plus the
 // per-stream rate-control args. The switch mirrors the prior
 // ffmpeg.buildVideoArgs VAAPI branch.
+//
+// A blank VAAPIDevice is a configuration error, not a "use default"
+// case: -vaapi_device is required for ffmpeg to attach a VAAPI context
+// to the filter graph, and silently dropping it produces an unusable
+// command that fails only when the user runs it. Surface the error
+// here so command generation matches the validation UI.
 func (e *vaapiEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) {
 	if v.Encoder == "" {
 		return BuildResult{}, fmt.Errorf("video encoder is empty")
 	}
-	res := BuildResult{}
-	if strings.TrimSpace(v.VAAPIDevice) != "" {
-		res.PreInputArgs = []string{"-vaapi_device", v.VAAPIDevice}
+	if strings.TrimSpace(v.VAAPIDevice) == "" {
+		return BuildResult{}, fmt.Errorf("VAAPI device path is empty")
 	}
+	res := BuildResult{}
+	res.PreInputArgs = []string{"-vaapi_device", v.VAAPIDevice}
 	args := []string{"-c:v", e.name}
 	mode := strings.ToUpper(strings.TrimSpace(v.RateControl))
 	switch mode {
