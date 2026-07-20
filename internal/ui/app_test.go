@@ -102,7 +102,7 @@ func TestProgressVisibilityFlipsAcrossRunLifecycle(t *testing.T) {
 	}
 }
 
-func TestRunFieldsUseWordWrapping(t *testing.T) {
+func TestRunFieldsUseAppropriateWrapping(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
 
@@ -117,8 +117,8 @@ func TestRunFieldsUseWordWrapping(t *testing.T) {
 	if c.command.Wrapping != fyne.TextWrapWord {
 		t.Fatalf("command wrapping = %v, want word wrapping", c.command.Wrapping)
 	}
-	if c.log.Wrapping != fyne.TextWrapWord {
-		t.Fatalf("output wrapping = %v, want word wrapping", c.log.Wrapping)
+	if c.log.Wrapping != fyne.TextWrapOff {
+		t.Fatalf("output wrapping = %v, want wrapping disabled", c.log.Wrapping)
 	}
 }
 

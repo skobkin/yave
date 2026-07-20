@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ func TestCancelEscalatesToTerminateAfterGracePeriod(t *testing.T) {
 	if control.cancelRequests != 1 {
 		t.Fatalf("cancel requests = %d, want 1", control.cancelRequests)
 	}
-	if c.status.Text != "Canceling…" || !c.cancel.Disabled() {
+	if c.status.Text != "Canceling…" || c.cancel.Disabled() {
 		t.Fatalf("initial cancel state = status %q, disabled %v", c.status.Text, c.cancel.Disabled())
 	}
 
@@ -58,6 +59,63 @@ func TestCancelEscalatesToTerminateAfterGracePeriod(t *testing.T) {
 	}
 	if c.status.Text != "Terminating…" || !c.cancel.Disabled() {
 		t.Fatalf("termination state = status %q, disabled %v", c.status.Text, c.cancel.Disabled())
+	}
+}
+
+func TestSecondCancelTerminatesWhenTimerUIUpdateIsDelayed(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	control := &fakeConversionControl{}
+	updates := make(chan func(), 1)
+	c := &Controller{
+		runControl:  control,
+		cancelDelay: 10 * time.Millisecond,
+		status:      widget.NewLabel("Running"),
+		cancel:      widget.NewButton("Cancel", nil),
+		uiDispatch:  func(update func()) { updates <- update },
+	}
+
+	c.cancelConversion()
+	time.Sleep(20 * time.Millisecond)
+	c.cancelConversion()
+
+	if control.terminations != 1 {
+		t.Fatalf("terminations = %d, want 1", control.terminations)
+	}
+	if c.cancelStage != cancellationTerminating || !c.cancel.Disabled() {
+		t.Fatalf("termination state = stage %v, disabled %v", c.cancelStage, c.cancel.Disabled())
+	}
+}
+
+func TestRunLogUpdatesDoNotQueueBehindSlowRender(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	control := &fakeConversionControl{}
+	updates := make(chan func(), 4)
+	log := newRunLog("", nil)
+	c := &Controller{
+		runControl: control,
+		log:        widget.NewMultiLineEntry(),
+		uiDispatch: func(update func()) { updates <- update },
+	}
+	stop := c.startRunLogUpdates(log, control)
+	defer close(stop)
+
+	log.AppendLine("first")
+	firstUpdate := waitForUIUpdate(t, updates)
+	log.AppendLine("second")
+	time.Sleep(3 * runLogFlushInterval)
+	if queued := len(updates); queued != 0 {
+		t.Fatalf("log updates queued behind pending render = %d, want 0", queued)
+	}
+
+	firstUpdate()
+	secondUpdate := waitForUIUpdate(t, updates)
+	secondUpdate()
+	if !strings.Contains(c.log.Text, "second") {
+		t.Fatalf("rendered log = %q, want latest output", c.log.Text)
 	}
 }
 

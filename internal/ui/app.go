@@ -61,6 +61,7 @@ type Controller struct {
 	cancelTimer  *time.Timer
 	cancelDelay  time.Duration
 	cancelStage  cancellationStage
+	cancelSince  time.Time
 	activeRunLog *runLog
 	quitPrompt   fyne.Window
 	uiDispatch   func(func())
@@ -280,7 +281,10 @@ func (c *Controller) createWidgets() {
 	c.progressInfo.Hide()
 	c.log = widget.NewMultiLineEntry()
 	c.log.Disable()
-	c.log.Wrapping = fyne.TextWrapWord
+	// Word wrapping a rapidly changing FFmpeg log makes Entry repeatedly lay
+	// out thousands of fragments on the UI thread. Horizontal scrolling is a
+	// much better tradeoff for machine-generated output.
+	c.log.Wrapping = fyne.TextWrapOff
 	c.log.SetMinRowsVisible(12)
 	c.start = widget.NewButton("Start", c.startConversion)
 	c.cancel = widget.NewButton("Cancel", c.cancelConversion)
@@ -574,6 +578,7 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 	control := transcode.NewRunControl()
 	c.runControl = control
 	c.cancelStage = cancellationRunning
+	c.cancelSince = time.Time{}
 	c.start.Disable()
 	c.cancel.SetText("Cancel")
 	c.cancel.Enable()
@@ -596,7 +601,7 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 		runLog.AppendLine(message)
 	}
 	runLog.AppendLine("")
-	initialLog, _ := runLog.Snapshot()
+	initialLog, _ := runLog.LiveSnapshot()
 	c.log.SetText(initialLog)
 	stopLogUpdates := c.startRunLogUpdates(runLog, control)
 
@@ -615,7 +620,7 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 		})
 		close(stopLogUpdates)
 		_ = runLog.Close()
-		finalLog, _ := runLog.Snapshot()
+		finalLog, _ := runLog.LiveSnapshot()
 		fyne.Do(func() {
 			if c.runControl != control {
 				return
@@ -624,6 +629,7 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 			c.runControl = nil
 			c.activeRunLog = nil
 			c.cancelStage = cancellationRunning
+			c.cancelSince = time.Time{}
 			c.cancel.SetText("Cancel")
 			c.cancel.Disable()
 			c.log.SetText(finalLog)
@@ -638,20 +644,29 @@ func (c *Controller) startRunLogUpdates(runLog *runLog, control conversionContro
 	go func() {
 		ticker := time.NewTicker(runLogFlushInterval)
 		defer ticker.Stop()
+		completed := make(chan struct{}, 1)
 		var displayedVersion uint64
+		updatePending := false
 		for {
 			select {
 			case <-ticker.C:
-				text, version := runLog.Snapshot()
+				if updatePending {
+					continue
+				}
+				text, version := runLog.LiveSnapshot()
 				if version == displayedVersion {
 					continue
 				}
 				displayedVersion = version
-				fyne.Do(func() {
+				updatePending = true
+				c.dispatchUI(func() {
 					if c.runControl == control {
 						c.log.SetText(text)
 					}
+					completed <- struct{}{}
 				})
+			case <-completed:
+				updatePending = false
 			case <-stop:
 				return
 			}
@@ -700,13 +715,14 @@ func (c *Controller) cancelConversion() {
 	switch c.cancelStage {
 	case cancellationRunning:
 		c.cancelStage = cancellationRequested
+		c.cancelSince = time.Now()
 		c.status.SetText("Canceling…")
-		c.cancel.Disable()
+		// Keep the control clickable. Under normal conditions the timer changes
+		// its label to Terminate; if the UI callback is delayed, a click after
+		// the grace period can still force termination based on wall time.
+		c.cancel.Enable()
 		control.RequestCancel()
-		delay := c.cancelDelay
-		if delay <= 0 {
-			delay = cancelGracePeriod
-		}
+		delay := c.cancellationDelay()
 		c.cancelTimer = time.AfterFunc(delay, func() {
 			c.dispatchUI(func() {
 				if c.runControl != control || c.cancelStage != cancellationRequested {
@@ -718,12 +734,29 @@ func (c *Controller) cancelConversion() {
 				c.cancel.Enable()
 			})
 		})
+	case cancellationRequested:
+		if time.Since(c.cancelSince) < c.cancellationDelay() {
+			return
+		}
+		c.terminateConversion(control)
 	case cancellationTerminateAvailable:
-		c.cancelStage = cancellationTerminating
-		c.status.SetText("Terminating…")
-		c.cancel.Disable()
-		control.Terminate()
+		c.terminateConversion(control)
 	}
+}
+
+func (c *Controller) cancellationDelay() time.Duration {
+	if c.cancelDelay > 0 {
+		return c.cancelDelay
+	}
+	return cancelGracePeriod
+}
+
+func (c *Controller) terminateConversion(control conversionControl) {
+	c.cancelStage = cancellationTerminating
+	c.status.SetText("Terminating…")
+	c.cancel.SetText("Terminate")
+	c.cancel.Disable()
+	control.Terminate()
 }
 
 func (c *Controller) dispatchUI(fn func()) {

@@ -10,6 +10,11 @@ import (
 
 const visibleRunLogLimit = 256 * 1024
 
+// liveRunLogLimit keeps Fyne's text layout work small while a conversion is
+// running. The larger visibleRunLogLimit is retained in memory, and the full
+// unbounded log is written to disk.
+const liveRunLogLimit = 32 * 1024
+
 type runLog struct {
 	mu        sync.Mutex
 	file      *os.File
@@ -74,14 +79,38 @@ func (l *runLog) AppendLine(line string) {
 }
 
 func (l *runLog) Snapshot() (string, uint64) {
+	return l.snapshot(visibleRunLogLimit)
+}
+
+func (l *runLog) LiveSnapshot() (string, uint64) {
+	return l.snapshot(liveRunLogLimit)
+}
+
+func (l *runLog) snapshot(limit int) (string, uint64) {
 	if l == nil {
 		return "", 0
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if limit <= 0 {
+		limit = visibleRunLogLimit
+	}
+
+	start := len(l.lines)
+	size := 0
+	for start > 0 && size+len(l.lines[start-1]) <= limit {
+		start--
+		size += len(l.lines[start])
+	}
+	lines := l.lines[start:]
+	if len(lines) == 0 && len(l.lines) > 0 {
+		line := l.lines[len(l.lines)-1]
+		lines = []string{trimUTF8Prefix(line, len(line)-limit)}
+		start = len(l.lines) - 1
+	}
 
 	var notices []string
-	if l.truncated {
+	if l.truncated || start > 0 {
 		notices = append(notices, "Earlier output omitted from this view.")
 	}
 	if l.path != "" {
@@ -91,7 +120,7 @@ func (l *runLog) Snapshot() (string, uint64) {
 	if len(notices) > 0 {
 		prefix = strings.Join(notices, " ") + "\n\n"
 	}
-	return prefix + strings.Join(l.lines, ""), l.version
+	return prefix + strings.Join(lines, ""), l.version
 }
 
 func (l *runLog) Close() error {

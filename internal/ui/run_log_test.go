@@ -46,6 +46,28 @@ func TestRunLogKeepsBoundedTailAndCompleteFile(t *testing.T) {
 	}
 }
 
+func TestRunLogLiveSnapshotKeepsSmallNewestTail(t *testing.T) {
+	log := newRunLog("", nil)
+	log.AppendLine("first line")
+	for i := 0; i < 1000; i++ {
+		log.AppendLine(fmt.Sprintf("line-%04d %s", i, strings.Repeat("x", 80)))
+	}
+
+	visible, _ := log.LiveSnapshot()
+	if !strings.Contains(visible, "Earlier output omitted from this view") {
+		t.Fatal("live log does not report truncation")
+	}
+	if strings.Contains(visible, "first line") {
+		t.Fatal("live log retained old output")
+	}
+	if !strings.Contains(visible, "line-0999") {
+		t.Fatal("live log does not retain newest output")
+	}
+	if len(visible) > liveRunLogLimit+100 {
+		t.Fatalf("live log size = %d, expected at most about %d", len(visible), liveRunLogLimit)
+	}
+}
+
 func TestLastRunLogUsesCacheAndOverwritesPriorRun(t *testing.T) {
 	cacheDir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", cacheDir)
