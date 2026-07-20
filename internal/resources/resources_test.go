@@ -2,6 +2,7 @@ package resources
 
 import (
 	"encoding/xml"
+	"errors"
 	"image/color"
 	"io"
 	"math"
@@ -92,7 +93,7 @@ func TestTrayProgressIconsAreValidSVG(t *testing.T) {
 		decoder := xml.NewDecoder(strings.NewReader(string(TrayProgressIcon(progress).Content())))
 		for {
 			_, err := decoder.Token()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {

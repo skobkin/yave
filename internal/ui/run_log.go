@@ -34,7 +34,9 @@ func openLastRunLog() (*runLog, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return newRunLog("", nil), fmt.Errorf("create log directory: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// path combines the platform cache root with fixed application-owned
+	// components; it does not include media paths or other runtime input.
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) //nolint:gosec // G304: application-owned cache path
 	if err != nil {
 		return newRunLog("", nil), fmt.Errorf("open conversion log: %w", err)
 	}

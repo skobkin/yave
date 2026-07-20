@@ -10,7 +10,7 @@ import (
 
 func TestRunLogKeepsBoundedTailAndCompleteFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "conversion.log")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) //nolint:gosec // G304: path is inside t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestRunLogKeepsBoundedTailAndCompleteFile(t *testing.T) {
 		t.Fatalf("visible log size = %d, expected bounded tail", len(visible))
 	}
 
-	complete, err := os.ReadFile(path)
+	complete, err := os.ReadFile(path) //nolint:gosec // G304: path is inside t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestLastRunLogUsesCacheAndOverwritesPriorRun(t *testing.T) {
 	}
 
 	path := filepath.Join(cacheDir, "yave", "last-conversion.log")
-	contents, err := os.ReadFile(path)
+	contents, err := os.ReadFile(path) //nolint:gosec // G304: path is inside t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
