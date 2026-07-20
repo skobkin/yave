@@ -3,9 +3,9 @@ package transcode
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -22,8 +22,107 @@ type Callbacks struct {
 
 type Runner struct{}
 
-func (Runner) Run(ctx context.Context, plan model.RunPlan, duration time.Duration, cb Callbacks) error {
-	cmd := exec.CommandContext(ctx, plan.Executable, plan.Args...) //nolint:gosec // G204: executable path validated by ffmpeg.ResolveExecutable
+// RunControl coordinates graceful and forced cancellation with a running
+// FFmpeg process. Requests made before the process starts are retained and
+// applied as soon as it is attached.
+type RunControl struct {
+	mu                 sync.Mutex
+	process            *os.Process
+	stdin              io.WriteCloser
+	cancelRequested    bool
+	terminateRequested bool
+}
+
+func NewRunControl() *RunControl {
+	return &RunControl{}
+}
+
+// RequestCancel asks FFmpeg to finish its current work and close its output
+// cleanly using FFmpeg's interactive quit command.
+func (c *RunControl) RequestCancel() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.cancelRequested || c.terminateRequested {
+		c.mu.Unlock()
+		return
+	}
+	c.cancelRequested = true
+	stdin := c.stdin
+	c.mu.Unlock()
+	if stdin != nil {
+		_, _ = io.WriteString(stdin, "q\n")
+	}
+}
+
+// Terminate forcefully stops FFmpeg. It is safe to call before the process has
+// started; in that case Runner will not start it.
+func (c *RunControl) Terminate() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.terminateRequested {
+		c.mu.Unlock()
+		return
+	}
+	c.terminateRequested = true
+	process := c.process
+	c.mu.Unlock()
+	if process != nil {
+		_ = process.Kill()
+	}
+}
+
+func (c *RunControl) requested() (cancel, terminate bool) {
+	if c == nil {
+		return false, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cancelRequested, c.terminateRequested
+}
+
+func (c *RunControl) attach(process *os.Process, stdin io.WriteCloser) {
+	c.mu.Lock()
+	c.process = process
+	c.stdin = stdin
+	cancel := c.cancelRequested
+	terminate := c.terminateRequested
+	c.mu.Unlock()
+
+	if terminate {
+		_ = process.Kill()
+		return
+	}
+	if cancel {
+		_, _ = io.WriteString(stdin, "q\n")
+	}
+}
+
+func (c *RunControl) detach(process *os.Process) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.process == process {
+		c.process = nil
+		c.stdin = nil
+	}
+}
+
+func (Runner) Run(control *RunControl, plan model.RunPlan, duration time.Duration, cb Callbacks) error {
+	if control == nil {
+		control = NewRunControl()
+	}
+	if cancel, terminate := control.requested(); cancel || terminate {
+		return context.Canceled
+	}
+
+	cmd := exec.Command(plan.Executable, plan.Args...) //nolint:gosec // G204: executable path validated by ffmpeg.ResolveExecutable
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("open FFmpeg control pipe: %w", err)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("open FFmpeg progress pipe: %w", err)
@@ -33,8 +132,13 @@ func (Runner) Run(ctx context.Context, plan model.RunPlan, duration time.Duratio
 		return fmt.Errorf("open FFmpeg log pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
+		if cancel, terminate := control.requested(); cancel || terminate {
+			return context.Canceled
+		}
 		return fmt.Errorf("start FFmpeg: %w", err)
 	}
+	control.attach(cmd.Process, stdin)
+	defer control.detach(cmd.Process)
 
 	started := time.Now()
 	var wg sync.WaitGroup
@@ -50,7 +154,7 @@ func (Runner) Run(ctx context.Context, plan model.RunPlan, duration time.Duratio
 
 	waitErr := cmd.Wait()
 	wg.Wait()
-	if errors.Is(ctx.Err(), context.Canceled) {
+	if cancel, terminate := control.requested(); cancel || terminate {
 		return context.Canceled
 	}
 	if waitErr != nil {

@@ -28,19 +28,43 @@ import (
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
-const progressInfoWidthSample = "999h59m59s | 999.9x"
+const (
+	progressInfoWidthSample = "999h59m59s | 999.9x"
+	cancelGracePeriod       = 5 * time.Second
+	runLogFlushInterval     = 100 * time.Millisecond
+)
+
+type cancellationStage uint8
+
+type conversionControl interface {
+	RequestCancel()
+	Terminate()
+}
+
+const (
+	cancellationRunning cancellationStage = iota
+	cancellationRequested
+	cancellationTerminateAvailable
+	cancellationTerminating
+)
 
 type Controller struct {
-	app        fyne.App
-	window     fyne.Window
-	configPath string
-	config     model.Config
-	caps       model.Capabilities
-	media      model.MediaInfo
-	inputPath  string
-	outputPath string
-	runCancel  context.CancelFunc
-	loading    bool
+	app          fyne.App
+	window       fyne.Window
+	configPath   string
+	config       model.Config
+	caps         model.Capabilities
+	media        model.MediaInfo
+	inputPath    string
+	outputPath   string
+	runControl   conversionControl
+	cancelTimer  *time.Timer
+	cancelDelay  time.Duration
+	cancelStage  cancellationStage
+	activeRunLog *runLog
+	quitPrompt   fyne.Window
+	uiDispatch   func(func())
+	loading      bool
 	// windowVisible mirrors the Fyne window's visibility so the tray click
 	// handler can decide between Show() and Hide() without polling the
 	// driver. fyne.Window has no Visible() accessor, so we track it
@@ -147,14 +171,8 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	return c, nil
 }
 
-// configureTray wires up the system tray icon and a minimal click handler
-// that toggles the main window's visibility.
-//
-// The empty fyne.NewMenu("YAVE") passed to SetSystemTrayMenu is what
-// actually starts Fyne's systray goroutine — SetSystemTrayIcon on its own
-// only stores the resource and never registers with the OS D-Bus tray.
-// Fyne auto-appends a separator and a Quit item to a menu that lacks one,
-// which conveniently provides a way to exit the app from the tray.
+// configureTray wires up the system tray icon, visibility toggle, and an
+// explicit Quit action that can coordinate with an active FFmpeg process.
 //
 // The systray callback runs in the systray's own goroutine, so the
 // window Show/Hide calls must be dispatched onto Fyne's UI thread via
@@ -162,13 +180,14 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 // read-modify-write of windowVisible on a single goroutine, avoiding a
 // data race with ShowAndRun.
 //
-// The window's close button still quits the app via Fyne's default
-// behaviour — the close intercept is not overridden, so X = quit while
-// tray click = toggle visibility.
+// With a tray available, closing the main window hides it instead of exiting.
 func (c *Controller) configureTray(desk desktop.App) {
 	desk.SetSystemTrayIcon(resources.TrayIcon())
 	c.trayProgress = newTrayProgressIndicator(desk.SetSystemTrayIcon)
-	desk.SetSystemTrayMenu(fyne.NewMenu("YAVE"))
+	quit := fyne.NewMenuItem("Quit", c.requestQuit)
+	quit.IsQuit = true
+	desk.SetSystemTrayMenu(fyne.NewMenu("YAVE", quit))
+	c.window.SetCloseIntercept(c.hideWindow)
 	systray.SetOnTapped(func() {
 		fyne.Do(func() {
 			if c.windowVisible {
@@ -180,6 +199,11 @@ func (c *Controller) configureTray(desk desktop.App) {
 			c.windowVisible = true
 		})
 	})
+}
+
+func (c *Controller) hideWindow() {
+	c.window.Hide()
+	c.windowVisible = false
 }
 
 func (c *Controller) ShowAndRun() {
@@ -493,7 +517,7 @@ func (c *Controller) refresh() {
 			}
 		}
 	}
-	if c.runCancel == nil {
+	if c.runControl == nil {
 		c.start.Enable()
 	} else {
 		c.start.Disable()
@@ -547,9 +571,11 @@ func (c *Controller) showRunError(status, message string) {
 }
 
 func (c *Controller) run(plan model.RunPlan, messages []string) {
-	ctx, cancel := context.WithCancel(context.Background())
-	c.runCancel = cancel
+	control := transcode.NewRunControl()
+	c.runControl = control
+	c.cancelStage = cancellationRunning
 	c.start.Disable()
+	c.cancel.SetText("Cancel")
 	c.cancel.Enable()
 	c.status.SetText("Running")
 	c.progress.SetValue(0)
@@ -560,17 +586,24 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 	for _, warning := range plan.Warnings {
 		messages = append(messages, "Warning: "+warning)
 	}
-	if len(messages) == 0 {
-		c.log.SetText("")
-	} else {
-		c.log.SetText(strings.Join(messages, "\n") + "\n\n")
+	runLog, logErr := openLastRunLog()
+	c.activeRunLog = runLog
+	if logErr != nil {
+		runLog.AppendLine("Warning: complete conversion log is unavailable: " + logErr.Error())
 	}
+	runLog.AppendLine("Command: " + plan.Preview)
+	for _, message := range messages {
+		runLog.AppendLine(message)
+	}
+	runLog.AppendLine("")
+	initialLog, _ := runLog.Snapshot()
+	c.log.SetText(initialLog)
+	stopLogUpdates := c.startRunLogUpdates(runLog, control)
+
 	go func() {
-		err := (transcode.Runner{}).Run(ctx, plan, c.media.Duration, transcode.Callbacks{
+		err := (transcode.Runner{}).Run(control, plan, c.media.Duration, transcode.Callbacks{
 			OnLog: func(line string) {
-				fyne.Do(func() {
-					c.log.SetText(c.log.Text + line + "\n")
-				})
+				runLog.AppendLine(line)
 			},
 			OnProgress: func(p model.Progress) {
 				fyne.Do(func() {
@@ -580,13 +613,51 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 				})
 			},
 		})
+		close(stopLogUpdates)
+		_ = runLog.Close()
+		finalLog, _ := runLog.Snapshot()
 		fyne.Do(func() {
-			c.runCancel = nil
+			if c.runControl != control {
+				return
+			}
+			c.stopCancelTimer()
+			c.runControl = nil
+			c.activeRunLog = nil
+			c.cancelStage = cancellationRunning
+			c.cancel.SetText("Cancel")
 			c.cancel.Disable()
+			c.log.SetText(finalLog)
 			c.setRunResult(err)
 			c.refresh()
 		})
 	}()
+}
+
+func (c *Controller) startRunLogUpdates(runLog *runLog, control conversionControl) chan struct{} {
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(runLogFlushInterval)
+		defer ticker.Stop()
+		var displayedVersion uint64
+		for {
+			select {
+			case <-ticker.C:
+				text, version := runLog.Snapshot()
+				if version == displayedVersion {
+					continue
+				}
+				displayedVersion = version
+				fyne.Do(func() {
+					if c.runControl == control {
+						c.log.SetText(text)
+					}
+				})
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return stop
 }
 
 func formatProgressInfo(progress model.Progress) string {
@@ -622,9 +693,108 @@ func (c *Controller) setProgressVisible(visible bool) {
 }
 
 func (c *Controller) cancelConversion() {
-	if c.runCancel != nil {
-		c.runCancel()
+	control := c.runControl
+	if control == nil {
+		return
 	}
+	switch c.cancelStage {
+	case cancellationRunning:
+		c.cancelStage = cancellationRequested
+		c.status.SetText("Canceling…")
+		c.cancel.Disable()
+		control.RequestCancel()
+		delay := c.cancelDelay
+		if delay <= 0 {
+			delay = cancelGracePeriod
+		}
+		c.cancelTimer = time.AfterFunc(delay, func() {
+			c.dispatchUI(func() {
+				if c.runControl != control || c.cancelStage != cancellationRequested {
+					return
+				}
+				c.cancelStage = cancellationTerminateAvailable
+				c.status.SetText("FFmpeg is not responding")
+				c.cancel.SetText("Terminate")
+				c.cancel.Enable()
+			})
+		})
+	case cancellationTerminateAvailable:
+		c.cancelStage = cancellationTerminating
+		c.status.SetText("Terminating…")
+		c.cancel.Disable()
+		control.Terminate()
+	}
+}
+
+func (c *Controller) dispatchUI(fn func()) {
+	if c.uiDispatch != nil {
+		c.uiDispatch(fn)
+		return
+	}
+	fyne.Do(fn)
+}
+
+func (c *Controller) stopCancelTimer() {
+	if c.cancelTimer != nil {
+		c.cancelTimer.Stop()
+		c.cancelTimer = nil
+	}
+}
+
+func (c *Controller) requestQuit() {
+	if c.runControl == nil {
+		c.quitApplication()
+		return
+	}
+	if c.quitPrompt != nil {
+		c.quitPrompt.Show()
+		return
+	}
+
+	prompt := c.app.NewWindow("Quit YAVE?")
+	c.quitPrompt = prompt
+	closePrompt := func() {
+		if c.quitPrompt != prompt {
+			return
+		}
+		c.quitPrompt = nil
+		prompt.SetCloseIntercept(nil)
+		prompt.Close()
+	}
+	keepRunning := widget.NewButton("Keep Running", closePrompt)
+	terminateAndQuit := widget.NewButton("Terminate and Quit", c.quitApplication)
+	terminateAndQuit.Importance = widget.HighImportance
+	warning := widget.NewLabel("A conversion is running. Quitting will terminate FFmpeg and may leave an incomplete output file.")
+	warning.Wrapping = fyne.TextWrapWord
+	prompt.SetContent(container.NewPadded(container.NewVBox(
+		warning,
+		container.NewHBox(keepRunning, terminateAndQuit),
+	)))
+	prompt.Resize(fyne.NewSize(520, 150))
+	prompt.CenterOnScreen()
+	prompt.SetCloseIntercept(closePrompt)
+	prompt.Show()
+}
+
+func (c *Controller) quitApplication() {
+	control := c.runControl
+	if control != nil {
+		control.Terminate()
+	}
+	c.runControl = nil
+	c.stopCancelTimer()
+	if c.activeRunLog != nil {
+		_ = c.activeRunLog.Close()
+	}
+	c.activeRunLog = nil
+	if c.quitPrompt != nil {
+		prompt := c.quitPrompt
+		c.quitPrompt = nil
+		prompt.SetCloseIntercept(nil)
+		prompt.Close()
+	}
+	c.window.SetCloseIntercept(nil)
+	c.app.Quit()
 }
 
 func (c *Controller) loadProfile(p model.Profile) {
