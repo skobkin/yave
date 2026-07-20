@@ -47,6 +47,7 @@ type Controller struct {
 	// ourselves. It is flipped to true in ShowAndRun and toggled in
 	// configureTray's click handler.
 	windowVisible bool
+	trayProgress  *trayProgressIndicator
 
 	status        *widget.Label
 	detection     *widget.Label
@@ -166,6 +167,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 // tray click = toggle visibility.
 func (c *Controller) configureTray(desk desktop.App) {
 	desk.SetSystemTrayIcon(resources.TrayIcon())
+	c.trayProgress = newTrayProgressIndicator(desk.SetSystemTrayIcon)
 	desk.SetSystemTrayMenu(fyne.NewMenu("YAVE"))
 	systray.SetOnTapped(func() {
 		fyne.Do(func() {
@@ -551,6 +553,7 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 	c.cancel.Enable()
 	c.status.SetText("Running")
 	c.progress.SetValue(0)
+	c.setTrayProgress(0)
 	c.progressInfo.SetText("")
 	c.command.SetText(plan.Preview)
 	c.setProgressVisible(true)
@@ -572,6 +575,7 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 			OnProgress: func(p model.Progress) {
 				fyne.Do(func() {
 					c.progress.SetValue(p.Percentage)
+					c.setTrayProgress(p.Percentage)
 					c.progressInfo.SetText(formatProgressInfo(p))
 				})
 			},
@@ -590,6 +594,7 @@ func formatProgressInfo(progress model.Progress) string {
 }
 
 func (c *Controller) setRunResult(err error) {
+	c.resetTrayProgress()
 	switch err {
 	case nil:
 		c.status.SetText("Completed")
