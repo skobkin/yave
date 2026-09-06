@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
+	"git.skobk.in/skobkin/yave/internal/ffmpeg"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
@@ -875,5 +876,90 @@ func TestEncoderRegistryInterfacesForCuratedSet(t *testing.T) {
 		if _, ok := e.(encoder.VideoEncoder); !ok {
 			t.Errorf("%q is registered but does not implement VideoEncoder", name)
 		}
+	}
+}
+
+func TestHardwareDevicesSummary(t *testing.T) {
+	cases := []struct {
+		name string
+		caps model.Capabilities
+		want string
+	}{
+		{"none available", model.Capabilities{}, "none"},
+		{"vaapi and qsv", model.Capabilities{HWVAAPIAvailable: true, HWQSVAvailable: true}, "vaapi, qsv"},
+		{"nvenc single gpu", model.Capabilities{HWNVENCAvailable: true, NVENCGPUCount: 1}, "nvenc"},
+		{"all with multi gpu", model.Capabilities{HWVAAPIAvailable: true, HWQSVAvailable: true, HWNVENCAvailable: true, NVENCGPUCount: 3}, "vaapi, qsv, nvenc (3 GPUs)"},
+		{"multi gpu only", model.Capabilities{HWNVENCAvailable: true, NVENCGPUCount: 2}, "nvenc (2 GPUs)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hardwareDevicesSummary(tc.caps); got != tc.want {
+				t.Errorf("hardwareDevicesSummary() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSelectRunnableProfileFallsBackWhenHWFiltered covers GPU removal:
+// the default profile references hevc_nvenc, detection finds no NVIDIA
+// device, and the app must land on the software profile with the
+// encoder dropdown actually showing the fallback encoder.
+func TestSelectRunnableProfileFallsBackWhenHWFiltered(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	nvencProfile := model.Profile{
+		Name:           "NVENC",
+		Container:      model.ContainerMKV,
+		OutputTemplate: "{dir}/{name}.{ext}",
+		Video: model.VideoSettings{
+			Encoder:       "hevc_nvenc",
+			RateControl:   "CQP",
+			QP:            30,
+			FrameRateMode: "keep",
+		},
+		Audio:     model.AudioSettings{Mode: model.AudioCopy, Encoder: "copy"},
+		Subtitles: model.SubtitleSettings{Mode: model.SubtitleNone},
+	}
+	softwareProfile := model.Profile{
+		Name:           "Software",
+		Container:      model.ContainerMKV,
+		OutputTemplate: "{dir}/{name}.{ext}",
+		Video: model.VideoSettings{
+			Encoder:       "libx265",
+			RateControl:   "CRF",
+			CRF:           28,
+			FrameRateMode: "keep",
+		},
+		Audio:     model.AudioSettings{Mode: model.AudioCopy, Encoder: "copy"},
+		Subtitles: model.SubtitleSettings{Mode: model.SubtitleNone},
+	}
+
+	c := &Controller{config: model.Config{
+		Profiles:       []model.Profile{nvencProfile, softwareProfile},
+		DefaultProfile: "NVENC",
+	}}
+	c.createWidgets()
+	c.loadProfile(nvencProfile)
+
+	// Simulate detection with NVENC filtered out: caps contains only
+	// the software encoder, mirroring filterUnavailableHWEncoders.
+	c.caps = model.Capabilities{
+		Encoders: map[string]model.Encoder{
+			"libx265": {Name: "libx265", Media: ffmpeg.MediaVideo},
+			"copy":    {Name: "copy", Media: "video,audio"},
+		},
+	}
+
+	// Mirror the detect() ordering: options refreshed BEFORE profile
+	// selection, so Fyne's SetSelected lands on the fallback encoder.
+	c.updateEncoderOptions()
+	c.selectRunnableProfile()
+
+	if got := c.profile.Selected; got != "Software" {
+		t.Errorf("selected profile = %q, want %q", got, "Software")
+	}
+	if got := c.videoEncoder.Selected; got != "libx265" {
+		t.Errorf("selected encoder = %q, want %q", got, "libx265")
 	}
 }

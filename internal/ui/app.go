@@ -471,11 +471,16 @@ func (c *Controller) detect() {
 				c.caps = caps
 				c.config.FFmpeg.FFmpegPath = caps.FFmpegPath
 				c.config.FFmpeg.FFprobePath = caps.FFprobePath
-				c.detection.SetText(fmt.Sprintf("%s\n%s\nHardware acceleration: %s",
-					caps.FFmpegVersion, caps.FFprobeVersion, strings.Join(caps.HWAccels, ", ")))
+				c.detection.SetText(fmt.Sprintf("%s\n%s\nHardware acceleration: %s\nHardware devices: %s",
+					caps.FFmpegVersion, caps.FFprobeVersion, strings.Join(caps.HWAccels, ", "), hardwareDevicesSummary(caps)))
+				// Refresh dropdown options from the new capabilities
+				// BEFORE selecting a runnable profile: Fyne's
+				// Select.SetSelected silently drops values not in
+				// Options, and selectRunnableProfile may load a profile
+				// whose encoder only became available in this round.
+				c.updateEncoderOptions()
 				c.selectRunnableProfile()
 			}
-			c.updateEncoderOptions()
 			c.refresh()
 		})
 	}()
@@ -1396,6 +1401,29 @@ func issueMessages(result validation.Result) []string {
 		items = append(items, "Warning: "+issue.Message)
 	}
 	return items
+}
+
+// hardwareDevicesSummary renders the probed hardware-encoder backends
+// for the detection card, e.g. "vaapi, qsv, nvenc (2 GPUs)" or "none".
+func hardwareDevicesSummary(caps model.Capabilities) string {
+	var backends []string
+	if caps.HWVAAPIAvailable {
+		backends = append(backends, "vaapi")
+	}
+	if caps.HWQSVAvailable {
+		backends = append(backends, "qsv")
+	}
+	if caps.HWNVENCAvailable {
+		if caps.NVENCGPUCount > 1 {
+			backends = append(backends, fmt.Sprintf("nvenc (%d GPUs)", caps.NVENCGPUCount))
+		} else {
+			backends = append(backends, "nvenc")
+		}
+	}
+	if len(backends) == 0 {
+		return "none"
+	}
+	return strings.Join(backends, ", ")
 }
 
 func formatMediaInfo(info model.MediaInfo) string {

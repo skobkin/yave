@@ -23,8 +23,13 @@ const (
 )
 
 // Discover resolves both programs and queries their versions and FFmpeg's
-// encoder and hardware-acceleration capabilities.
+// encoder and hardware-acceleration capabilities, and probes the host for
+// the device nodes the hardware encoder families need.
 func Discover(ctx context.Context, config model.FFmpegConfig) (model.Capabilities, error) {
+	return discover(ctx, config, osFSProbe)
+}
+
+func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe) (model.Capabilities, error) {
 	ffmpegPath, err := ResolveExecutable(config.FFmpegPath, "ffmpeg")
 	if err != nil {
 		return model.Capabilities{}, err
@@ -51,13 +56,19 @@ func Discover(ctx context.Context, config model.FFmpegConfig) (model.Capabilitie
 		return model.Capabilities{}, fmt.Errorf("detect FFmpeg hardware accelerators: %w", err)
 	}
 
+	hw := probeHWBackends(fs)
 	return model.Capabilities{
 		FFmpegPath:     ffmpegPath,
 		FFprobePath:    ffprobePath,
 		FFmpegVersion:  ParseVersion(ffmpegVersion),
 		FFprobeVersion: ParseVersion(ffprobeVersion),
-		Encoders:       ParseEncoders(encodersOutput),
+		Encoders:       filterUnavailableHWEncoders(ParseEncoders(encodersOutput), hw),
 		HWAccels:       ParseHWAccels(hwaccelsOutput),
+
+		HWVAAPIAvailable: hw.vaapi,
+		HWQSVAvailable:   hw.qsv,
+		HWNVENCAvailable: hw.nvenc,
+		NVENCGPUCount:    hw.nvencGPUs,
 	}, nil
 }
 

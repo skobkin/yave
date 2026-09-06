@@ -78,6 +78,13 @@ type Capabilities struct {
 	FFprobeVersion string
 	Encoders       map[string]Encoder
 	HWAccels       []string
+	// Hardware-availability probe results. Encoders whose backend device
+	// is absent are already filtered out of Encoders; these fields record
+	// the probe outcome for display.
+	HWVAAPIAvailable bool
+	HWQSVAvailable   bool
+	HWNVENCAvailable bool
+	NVENCGPUCount    int
 }
 
 type MediaInfo struct {
