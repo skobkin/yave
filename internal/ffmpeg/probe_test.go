@@ -132,6 +132,16 @@ func TestProbeLinuxNVENCPermDeniedFailsOpen(t *testing.T) {
 	}
 }
 
+func TestProbeLinuxNVENViaNonzeroGPUNode(t *testing.T) {
+	// Containers may expose only nonzero GPU nodes (no /dev/nvidia0);
+	// enumeration alone must keep NVENC available.
+	fs := fakeFS(nil, map[string][]string{nvidiaPattern: {"/dev/nvidia1"}}, nil)
+	got := probeLinuxHWBackends(fs)
+	if !got.nvenc || got.nvencGPUs != 1 {
+		t.Errorf("nvenc=%v gpus=%d, want true/1", got.nvenc, got.nvencGPUs)
+	}
+}
+
 // hwFilterFixture builds a ParseEncoders result covering every backend
 // family plus software and audio encoders.
 func hwFilterFixture(t *testing.T) map[string]model.Encoder {

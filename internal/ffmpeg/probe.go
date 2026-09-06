@@ -58,13 +58,17 @@ func probeLinuxHWBackends(fs fsProbe) hwAvailability {
 	// from a stale /dev/nvidia0 node; stat-only avoids subprocess cost
 	// and permission surprises. Revisit if the stat probe produces
 	// false positives.
-	if devicePresent(fs, nvidiaControlNode) {
+	if gpus, err := fs.glob(nvidiaPattern); err == nil && len(gpus) > 0 {
+		// Enumeration is authoritative: containers may expose only
+		// nonzero GPU nodes (no /dev/nvidia0), so GPU 0 alone is not
+		// the gate for availability.
 		hw.nvenc = true
-		if gpus, err := fs.glob(nvidiaPattern); err != nil || len(gpus) == 0 {
-			hw.nvencGPUs = 1
-		} else {
-			hw.nvencGPUs = len(gpus)
-		}
+		hw.nvencGPUs = len(gpus)
+	} else if devicePresent(fs, nvidiaControlNode) {
+		// Enumeration empty or failed while the GPU 0 node exists:
+		// keep NVENC visible and conservatively report one GPU.
+		hw.nvenc = true
+		hw.nvencGPUs = 1
 	}
 	return hw
 }
