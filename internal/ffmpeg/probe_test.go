@@ -220,8 +220,8 @@ func TestFilterUnavailableHWEncoders(t *testing.T) {
 }
 
 func TestDiscoverFiltersHWWithoutDevices(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("test helper is a POSIX shell script")
+	if runtime.GOOS != "linux" {
+		t.Skip("device probe is Linux-specific and the test helper is a POSIX shell script")
 	}
 	dir := t.TempDir()
 	ffmpegPath := writeExecutable(t, dir, "ffmpeg", `#!/bin/sh
@@ -263,8 +263,8 @@ printf 'ffprobe version test-2\n'
 }
 
 func TestDiscoverKeepsHWWithDevices(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("test helper is a POSIX shell script")
+	if runtime.GOOS != "linux" {
+		t.Skip("device probe is Linux-specific and the test helper is a POSIX shell script")
 	}
 	dir := t.TempDir()
 	ffmpegPath := writeExecutable(t, dir, "ffmpeg", `#!/bin/sh
