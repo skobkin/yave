@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -76,6 +77,13 @@ type Controller struct {
 	// configureTray's click handler.
 	windowVisible bool
 	trayProgress  *trayProgressIndicator
+	// updateChecker polls the forge for new releases; nil when unavailable.
+	updateChecker   updateChecker
+	checkingUpdates atomic.Bool
+	// trayApp publishes the tray menu; nil when no system tray is available.
+	trayApp       desktop.App
+	trayCheckItem *fyne.MenuItem
+	trayQuitItem  *fyne.MenuItem
 
 	status        *widget.Label
 	detection     *widget.Label
@@ -205,6 +213,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	if desk, ok := a.(desktop.App); ok {
 		c.configureTray(desk)
 	}
+	c.setupUpdateChecker()
 	return c, nil
 }
 
@@ -221,9 +230,13 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 func (c *Controller) configureTray(desk desktop.App) {
 	desk.SetSystemTrayIcon(resources.TrayIcon())
 	c.trayProgress = newTrayProgressIndicator(desk.SetSystemTrayIcon)
-	quit := fyne.NewMenuItem("Quit", c.requestQuit)
-	quit.IsQuit = true
-	desk.SetSystemTrayMenu(fyne.NewMenu("YAVE", quit))
+	c.trayApp = desk
+	c.trayCheckItem = fyne.NewMenuItem("Check for updates…", func() {
+		fyne.Do(c.checkForUpdates) // systray callbacks run off the UI thread
+	})
+	c.trayQuitItem = fyne.NewMenuItem("Quit", c.requestQuit)
+	c.trayQuitItem.IsQuit = true
+	desk.SetSystemTrayMenu(c.trayMenu())
 	c.window.SetCloseIntercept(c.hideWindow)
 	systray.SetOnTapped(func() {
 		fyne.Do(func() {
@@ -243,10 +256,23 @@ func (c *Controller) hideWindow() {
 	c.windowVisible = false
 }
 
+// trayMenu assembles the system tray menu; the single source of the item
+// list so republishing stays in sync with configureTray.
+func (c *Controller) trayMenu() *fyne.Menu {
+	return fyne.NewMenu("YAVE", c.trayCheckItem, c.trayQuitItem)
+}
+
 func (c *Controller) ShowAndRun() {
 	c.window.Show()
 	c.windowVisible = true
+	c.startUpdateChecks()
 	c.window.ShowAndRun()
+	if c.updateChecker != nil {
+		// Not in quitApplication: Stop waits out an in-flight check, which
+		// must not delay the UI-thread quit path. After ShowAndRun returns
+		// the app is exiting anyway.
+		c.updateChecker.Stop()
+	}
 }
 
 func (c *Controller) createWidgets() {
@@ -2034,19 +2060,23 @@ func (c *Controller) showSettings() {
 	ffmpegPath.SetText(c.config.FFmpeg.FFmpegPath)
 	ffprobePath := widget.NewEntry()
 	ffprobePath.SetText(c.config.FFmpeg.FFprobePath)
-	form := dialog.NewForm("FFmpeg settings", "Save and detect", "Cancel", []*widget.FormItem{
+	checkUpdates := widget.NewCheck("", nil)
+	checkUpdates.SetChecked(c.config.Updates.CheckAutomatically)
+	form := dialog.NewForm("Settings", "Save and detect", "Cancel", []*widget.FormItem{
 		widget.NewFormItem("FFmpeg path", ffmpegPath),
 		widget.NewFormItem("ffprobe path", ffprobePath),
+		widget.NewFormItem("Check for updates automatically", checkUpdates),
 	}, func(ok bool) {
 		if !ok {
 			return
 		}
 		c.config.FFmpeg.FFmpegPath = strings.TrimSpace(ffmpegPath.Text)
 		c.config.FFmpeg.FFprobePath = strings.TrimSpace(ffprobePath.Text)
+		c.config.Updates.CheckAutomatically = checkUpdates.Checked
 		c.saveConfig()
+		c.applyUpdateCheckSetting(checkUpdates.Checked)
 		c.detect()
 	}, c.window)
-	form.Resize(fyne.NewSize(600, 240))
 	form.Show()
 }
 

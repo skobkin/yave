@@ -22,6 +22,9 @@ func DefaultConfig() Config {
 			FFmpegPath:  "ffmpeg",
 			FFprobePath: "ffprobe",
 		},
+		Updates: UpdatesConfig{
+			CheckAutomatically: true,
+		},
 	}
 }
 

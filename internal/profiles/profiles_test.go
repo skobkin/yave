@@ -55,6 +55,41 @@ func TestLoadFileNormalizesGlobalDefaults(t *testing.T) {
 	}
 }
 
+// Existing configurations predate the updates section and must keep getting
+// the enabled default, not the zero value.
+func TestLoadFileUpdatesDefaultEnabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte("profiles:\n  - name: custom\n    container: mkv\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Updates.CheckAutomatically {
+		t.Errorf("Updates.CheckAutomatically = false, want the enabled default")
+	}
+}
+
+func TestSaveFileUpdatesRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := model.DefaultConfig()
+	cfg.Updates.CheckAutomatically = false
+
+	if err := SaveFile(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Updates.CheckAutomatically {
+		t.Errorf("Updates.CheckAutomatically = true, want false after round trip")
+	}
+}
+
 func TestSaveFileRoundTripAndPermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
 	cfg := model.DefaultConfig()

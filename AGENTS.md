@@ -11,6 +11,7 @@
 - `internal/templates`: output filename template expansion and path-safety checks.
 - `internal/validation`: profile, source stream, encoder, and container compatibility checks.
 - `internal/transcode`: FFmpeg process execution, progress parsing, logging, and cancellation.
+- `internal/updates`: Forgejo release checks via go4updates; periodic and manual update verification.
 - `PRD.md`: MVP product requirements and the source of truth for intended behavior.
 
 Keep package boundaries explicit. UI code may coordinate these packages, but command generation, validation, persistence, and parsing logic should remain independently testable outside Fyne.

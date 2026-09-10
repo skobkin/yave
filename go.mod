@@ -6,6 +6,8 @@ require (
 	fyne.io/fyne/v2 v2.8.2
 	fyne.io/systray v1.12.3-0.20260810170012-af4e8e793ec4
 	github.com/ebitengine/purego v0.11.2
+	github.com/skobkin/go4updates v0.1.0
+	github.com/skobkin/go4updates/ui/fyne v0.1.0
 	go.yaml.in/yaml/v3 v3.0.4
 )
 
@@ -39,6 +41,7 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/yuin/goldmark v1.8.2 // indirect
 	golang.org/x/image v0.24.0 // indirect
+	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.22.0 // indirect

@@ -9,15 +9,22 @@ import (
 const ConfigVersion = 1
 
 type Config struct {
-	Version        int          `yaml:"version"`
-	Profiles       []Profile    `yaml:"profiles"`
-	DefaultProfile string       `yaml:"default_profile"`
-	FFmpeg         FFmpegConfig `yaml:"ffmpeg"`
+	Version        int           `yaml:"version"`
+	Profiles       []Profile     `yaml:"profiles"`
+	DefaultProfile string        `yaml:"default_profile"`
+	FFmpeg         FFmpegConfig  `yaml:"ffmpeg"`
+	Updates        UpdatesConfig `yaml:"updates"`
 }
 
 type FFmpegConfig struct {
 	FFmpegPath  string `yaml:"ffmpeg_path"`
 	FFprobePath string `yaml:"ffprobe_path"`
+}
+
+// UpdatesConfig controls automatic update checks against the release forge.
+type UpdatesConfig struct {
+	// CheckAutomatically enables the startup and periodic update checks.
+	CheckAutomatically bool `yaml:"check_automatically"`
 }
 
 type Profile struct {
