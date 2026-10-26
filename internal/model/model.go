@@ -89,6 +89,9 @@ type Capabilities struct {
 	HWQSVAvailable   bool
 	HWNVENCAvailable bool
 	NVENCGPUCount    int
+	// RenderNodes lists the DRM render nodes found on the host, sorted.
+	// Linux-only: nil on other platforms and when nothing was found.
+	RenderNodes []string
 }
 
 type MediaInfo struct {

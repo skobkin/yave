@@ -142,6 +142,68 @@ func TestProbeLinuxNVENViaNonzeroGPUNode(t *testing.T) {
 	}
 }
 
+// TestRenderNodes pins the DRM render-node list alongside the
+// availability booleans: multi-node hosts get a sorted list, the
+// canonical node is offered alone when only it stats, and the
+// fail-open branches (glob error, unreadable /dev) still offer the
+// canonical node so device dropdowns stay populated.
+func TestRenderNodes(t *testing.T) {
+	cases := []struct {
+		name  string
+		fs    fsProbe
+		want  []string
+		avail bool
+	}{
+		{
+			name:  "multiple nodes sorted",
+			fs:    fakeFS(nil, map[string][]string{driRenderPattern: {"/dev/dri/renderD129", "/dev/dri/renderD128"}}, nil),
+			want:  []string{"/dev/dri/renderD128", "/dev/dri/renderD129"},
+			avail: true,
+		},
+		{
+			name:  "only canonical node stats",
+			fs:    fakeFS(map[string]error{driRenderNode: nil}, nil, nil),
+			want:  []string{driRenderNode},
+			avail: true,
+		},
+		{
+			name:  "glob error fails open with canonical node",
+			fs:    fakeFS(nil, nil, map[string]error{driRenderPattern: os.ErrPermission}),
+			want:  []string{driRenderNode},
+			avail: true,
+		},
+		{
+			name:  "stat permission fails open with canonical node",
+			fs:    fakeFS(map[string]error{driRenderNode: permDenied(driRenderNode)}, nil, nil),
+			want:  []string{driRenderNode},
+			avail: true,
+		},
+		{
+			name:  "nothing found",
+			fs:    fakeFS(nil, nil, nil),
+			want:  nil,
+			avail: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			avail, nodes := renderNodes(tc.fs)
+			if avail != tc.avail {
+				t.Errorf("available = %v, want %v", avail, tc.avail)
+			}
+			if len(nodes) != len(tc.want) {
+				t.Fatalf("renderNodes = %v, want %v", nodes, tc.want)
+			}
+			for i := range nodes {
+				if nodes[i] != tc.want[i] {
+					t.Fatalf("renderNodes = %v, want %v", nodes, tc.want)
+				}
+			}
+		})
+	}
+}
+
 // hwFilterFixture builds a ParseEncoders result covering every backend
 // family plus software and audio encoders.
 func hwFilterFixture(t *testing.T) map[string]model.Encoder {
@@ -260,6 +322,9 @@ printf 'ffprobe version test-2\n'
 			HWNVENCAvailable: got.HWNVENCAvailable,
 		}, got.NVENCGPUCount)
 	}
+	if got.RenderNodes != nil {
+		t.Errorf("RenderNodes = %v, want nil without device nodes", got.RenderNodes)
+	}
 }
 
 func TestDiscoverKeepsHWWithDevices(t *testing.T) {
@@ -298,6 +363,9 @@ printf 'ffprobe version test-2\n'
 	}
 	if !got.HWVAAPIAvailable || !got.HWQSVAvailable || !got.HWNVENCAvailable {
 		t.Errorf("probe flags = vaapi:%v qsv:%v nvenc:%v, want all true", got.HWVAAPIAvailable, got.HWQSVAvailable, got.HWNVENCAvailable)
+	}
+	if len(got.RenderNodes) != 1 || got.RenderNodes[0] != driRenderNode {
+		t.Errorf("RenderNodes = %v, want [%s]", got.RenderNodes, driRenderNode)
 	}
 	if got.NVENCGPUCount != 2 {
 		t.Errorf("NVENCGPUCount = %d, want 2", got.NVENCGPUCount)

@@ -71,6 +71,7 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe) (model
 		HWQSVAvailable:   hw.qsv,
 		HWNVENCAvailable: hw.nvenc,
 		NVENCGPUCount:    hw.nvencGPUs,
+		RenderNodes:      hw.renderNodes,
 	}, nil
 }
 

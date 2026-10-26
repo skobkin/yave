@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
@@ -37,6 +38,11 @@ type hwAvailability struct {
 	qsv       bool
 	nvenc     bool
 	nvencGPUs int
+	// renderNodes lists the DRM render nodes found on the host, sorted.
+	// Non-Linux and "no nodes" both leave it nil; the fail-open branch
+	// (unreadable /dev) offers the canonical node so device dropdowns
+	// stay populated.
+	renderNodes []string
 }
 
 // probeHWBackends checks for the device nodes the curated hardware
@@ -51,8 +57,8 @@ func probeHWBackends(fs fsProbe) hwAvailability {
 }
 
 func probeLinuxHWBackends(fs fsProbe) hwAvailability {
-	render := renderNodePresent(fs)
-	hw := hwAvailability{vaapi: render, qsv: render}
+	render, nodes := renderNodes(fs)
+	hw := hwAvailability{vaapi: render, qsv: render, renderNodes: nodes}
 
 	// TODO: nvidia-smi's exit code could distinguish a live driver+GPU
 	// from a stale /dev/nvidia0 node; stat-only avoids subprocess cost
@@ -89,20 +95,33 @@ func devicePresent(fs fsProbe, path string) bool {
 	}
 }
 
-// renderNodePresent checks for a DRM render node. QSV piggybacks on the
-// same nodes on Linux, so this is an approximation: an AMD-only box
-// (render node present, no Intel media driver) still reports QSV as
-// available — the runtime FFmpeg error makes the real gap obvious.
-func renderNodePresent(fs fsProbe) bool {
-	if devicePresent(fs, driRenderNode) {
-		return true
-	}
+// renderNodes checks for DRM render nodes and returns them sorted.
+// QSV piggybacks on the same nodes on Linux, so this is an
+// approximation: an AMD-only box (render node present, no Intel media
+// driver) still reports QSV as available — the runtime FFmpeg error
+// makes the real gap obvious.
+//
+// The bool reports availability with the same semantics the previous
+// renderNodePresent probe had: a glob error fails open (devicePresent
+// semantics — hiding a working encoder is worse than showing one that
+// errors at run time) and the canonical node is offered even though it
+// could not be verified. Nothing found at all reports (false, nil).
+func renderNodes(fs fsProbe) (bool, []string) {
 	nodes, err := fs.glob(driRenderPattern)
 	if err != nil {
 		// filepath.Glob only errors on malformed patterns; fail open.
-		return true
+		return true, []string{driRenderNode}
 	}
-	return len(nodes) > 0
+	if len(nodes) == 0 {
+		// No matches: only count the canonical node as present when a
+		// stat confirms it (or the stat fails non-not-exist).
+		if devicePresent(fs, driRenderNode) {
+			return true, []string{driRenderNode}
+		}
+		return false, nil
+	}
+	sort.Strings(nodes)
+	return true, nodes
 }
 
 // filterUnavailableHWEncoders drops encoders whose hardware backend has
