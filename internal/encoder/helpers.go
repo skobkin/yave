@@ -88,6 +88,46 @@ func rateControlMode(v model.VideoSettings) string {
 	return strings.ToUpper(strings.TrimSpace(v.RateControl))
 }
 
+// inCuratedList reports whether value matches a list entry
+// case-insensitively after trimming. An empty list never matches.
+func inCuratedList(list []string, value string) bool {
+	want := strings.ToLower(strings.TrimSpace(value))
+	for _, entry := range list {
+		if strings.EqualFold(entry, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// profileIssues returns the shared -profile:v findings used by every
+// video encoder family: encoders that do not support the flag reject
+// any non-empty profile, and encoders with a curated list reject
+// values outside it (case-insensitive). The membership check is gated
+// on a non-empty curated list so an encoder that accepts profiles we
+// cannot enumerate never rejects everything.
+func profileIssues(supports bool, profiles []string, encoderName, profile string) []Issue {
+	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return nil
+	}
+	if !supports {
+		return []Issue{{
+			Level:   IssueError,
+			Field:   "profile.video.profile",
+			Message: fmt.Sprintf("%s does not support -profile:v", encoderName),
+		}}
+	}
+	if len(profiles) > 0 && !inCuratedList(profiles, profile) {
+		return []Issue{{
+			Level:   IssueError,
+			Field:   "profile.video.profile",
+			Message: fmt.Sprintf("%s profile must be one of: %s", encoderName, strings.Join(profiles, ", ")),
+		}}
+	}
+	return nil
+}
+
 // appendFrameRateFilter returns the leading fps= filter when frame-rate
 // conversion is requested, or nil when no conversion is configured.
 // The slice is intended to be prepended to the encoder's filter chain.

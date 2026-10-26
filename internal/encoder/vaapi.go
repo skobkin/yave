@@ -19,6 +19,8 @@ type vaapiEncoder struct {
 	codecFamily string
 	priority    int
 	qpRange     IntegerRange
+	// profiles is the curated -profile:v value list; see Profiles().
+	profiles []string
 }
 
 func (e *vaapiEncoder) Name() string         { return e.name }
@@ -37,6 +39,7 @@ func (e *vaapiEncoder) SupportsTune() bool                { return false }
 func (e *vaapiEncoder) SupportsProfile() bool             { return true }
 func (e *vaapiEncoder) SupportsPreset() bool              { return false }
 func (e *vaapiEncoder) DefaultPreset() string             { return "" }
+func (e *vaapiEncoder) Profiles() []string                { return e.profiles }
 func (e *vaapiEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCAuto, RCCQP, RCVBR, RCCBR}
 }
@@ -116,30 +119,42 @@ func (e *vaapiEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error
 	return res, nil
 }
 
-// Validate is a no-op for VAAPI encoders; encoder-specific rules are
-// covered by the validation package's range checks.
+// Validate rejects out-of-list -profile:v values. VAAPI always accepts
+// the flag itself (a generic AVCodecContext option), so only curated
+// membership is enforced.
 func (e *vaapiEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
-	return nil, nil
+	return profileIssues(e.SupportsProfile(), e.profiles, e.name, v.Profile), nil
 }
 
 // vaapiVideoEncoders returns the curated VAAPI video encoder set.
+//
+// The profile lists are pinned from `ffmpeg -h encoder=<name>` of the
+// reference build, which enumerates the accepted values for the
+// encoder-private -profile option. vp9_vaapi is the exception: it
+// exposes no enumeration, but the generic profile_idc integers (0 =
+// Profile 0, 2 = Profile 2) parse and reach the driver, so those two
+// are curated.
 func vaapiVideoEncoders() []Encoder {
 	return []Encoder{
 		&vaapiEncoder{
 			name: "h264_vaapi", label: "H.264 VA-API", codecFamily: "h264",
 			priority: 60, qpRange: IntegerRange{Min: 1, Max: 51},
+			profiles: []string{"constrained_baseline", "main", "high", "high10"},
 		},
 		&vaapiEncoder{
 			name: "hevc_vaapi", label: "H.265 VA-API", codecFamily: "hevc",
 			priority: 50, qpRange: IntegerRange{Min: 1, Max: 51},
+			profiles: []string{"main", "main10", "rext"},
 		},
 		&vaapiEncoder{
 			name: "av1_vaapi", label: "AV1 VA-API", codecFamily: "av1",
 			priority: 40, qpRange: IntegerRange{Min: 0, Max: 255},
+			profiles: []string{"main", "high", "professional"},
 		},
 		&vaapiEncoder{
 			name: "vp9_vaapi", label: "VP9 VA-API", codecFamily: "vp9",
 			priority: 30, qpRange: IntegerRange{Min: 0, Max: 255},
+			profiles: []string{"0", "2"},
 		},
 	}
 }

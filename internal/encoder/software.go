@@ -40,6 +40,8 @@ type softwareEncoder struct {
 	supportsTune bool
 	// supportsProfile gates the -profile:v flag.
 	supportsProfile bool
+	// profiles is the curated -profile:v value list; see Profiles().
+	profiles []string
 	// rateControlModes lists the modes exposed by the UI dropdown.
 	rateControlModes   []RateControl
 	defaultRateControl RateControl
@@ -77,6 +79,7 @@ func (e *softwareEncoder) SupportsTune() bool    { return e.supportsTune }
 func (e *softwareEncoder) SupportsProfile() bool { return e.supportsProfile }
 func (e *softwareEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *softwareEncoder) DefaultPreset() string { return e.presetDefault }
+func (e *softwareEncoder) Profiles() []string    { return e.profiles }
 
 // VideoFilter returns the filter chain for software encoders. When
 // scaling is requested a scale= filter is emitted; when frame-rate
@@ -112,18 +115,22 @@ func (e *softwareEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, er
 	return BuildResult{Args: args}, nil
 }
 
-// Validate enforces encoder-specific rules that are not just
-// range checks (CRF/preset bounds are checked at the validation
-// package level from the registry, so we only enforce what is specific
-// to a particular encoder — none of the software encoders require that
-// at this stage).
+// Validate rejects out-of-list -profile:v values (libvpx-vp9 curates
+// none and supports none — SupportsProfile is false, matching what
+// BuildVideoArgs emits).
 func (e *softwareEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
-	return nil, nil
+	return profileIssues(e.supportsProfile, e.profiles, e.name, v.Profile), nil
 }
 
 // softwareVideoEncoders returns the curated software video encoder
 // set. Registration order does not matter; the registry sorts by
 // priority then name.
+//
+// Profile lists are verified by one-frame test encodes: libx264 /
+// libx265 accept their lists for any matching pixel format (the
+// software chain passes the source format through, so 10/12-bit
+// sources make main10/main12 reachable); libsvtav1 and libaom-av1
+// reject every non-Main profile for the 4:2:0 formats yave targets.
 func softwareVideoEncoders() []Encoder {
 	return []Encoder{
 		&softwareEncoder{
@@ -131,6 +138,7 @@ func softwareVideoEncoders() []Encoder {
 			priority: 100, crfRange: IntegerRange{0, 51},
 			presetFlag: "-preset", presetKind: "categorical", presetName: "preset",
 			supportsTune: true, supportsProfile: true,
+			profiles: []string{"baseline", "main", "high"},
 			// libx264 supports CRF only — the prior buildVideoArgs switch
 			// did not emit -b:v for libx264, so any other mode must be
 			// rejected by validation.
@@ -143,6 +151,7 @@ func softwareVideoEncoders() []Encoder {
 			priority: 90, crfRange: IntegerRange{0, 51},
 			presetFlag: "-preset", presetKind: "categorical", presetName: "preset",
 			supportsTune: true, supportsProfile: true,
+			profiles: []string{"main", "main10", "main12"},
 			// libx265 supports CRF only — matches prior behaviour.
 			rateControlModes:   []RateControl{RCCRF},
 			defaultRateControl: RCCRF,
@@ -154,6 +163,7 @@ func softwareVideoEncoders() []Encoder {
 			presetRange: IntegerRange{0, 13}, presetFlag: "-preset",
 			presetKind: "integer", presetName: "preset", presetDefault: "6",
 			supportsProfile:    true,
+			profiles:           []string{"main"},
 			rateControlModes:   []RateControl{RCCRF, RCBitrate},
 			defaultRateControl: RCCRF,
 			buildArgs:          svtAV1Args,
@@ -165,6 +175,7 @@ func softwareVideoEncoders() []Encoder {
 			// libvpx-vp9 has no -profile:v flag in the prior code path;
 			// SupportsProfile reports what BuildVideoArgs actually emits.
 			supportsProfile:    false,
+			profiles:           nil,
 			rateControlModes:   []RateControl{RCCRF, RCBitrate},
 			defaultRateControl: RCCRF,
 			buildArgs:          vpxVP9Args,
@@ -175,6 +186,7 @@ func softwareVideoEncoders() []Encoder {
 			presetRange: IntegerRange{0, 8}, presetFlag: "-cpu-used",
 			presetKind: "integer", presetName: "cpu-used", presetDefault: "4",
 			supportsProfile:    true,
+			profiles:           []string{"main"},
 			rateControlModes:   []RateControl{RCCRF, RCBitrate},
 			defaultRateControl: RCCRF,
 			buildArgs:          libaomAV1Args,

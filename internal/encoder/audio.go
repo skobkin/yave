@@ -35,6 +35,7 @@ func (e *audioEncoder) AudioCompressionRange() (IntegerRange, bool) {
 	}
 	return *e.compressionRange, true
 }
+func (e *audioEncoder) BitrateChoices() []string { return e.bitrateChoices }
 
 // BuildAudioArgs emits -c:a and the encoder-specific flags. The flag
 // shape matches the original ffmpeg.buildAudioArgs exactly so existing

@@ -37,9 +37,11 @@ type qsvEncoder struct {
 	qpRange         IntegerRange
 	presets         []string // categorical preset names
 	supportsProfile bool
-	presetFlag      string
-	presetName      string
-	presetDefault   string
+	// profiles is the curated -profile:v value list; see Profiles().
+	profiles      []string
+	presetFlag    string
+	presetName    string
+	presetDefault string
 }
 
 func (e *qsvEncoder) Name() string         { return e.name }
@@ -61,6 +63,7 @@ func (e *qsvEncoder) SupportsTune() bool    { return false }
 func (e *qsvEncoder) SupportsProfile() bool { return e.supportsProfile }
 func (e *qsvEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *qsvEncoder) DefaultPreset() string { return e.presetDefault }
+func (e *qsvEncoder) Profiles() []string    { return e.profiles }
 func (e *qsvEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }
@@ -183,15 +186,7 @@ func (e *qsvEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) 
 func (e *qsvEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 	var issues []Issue
 	if len(e.presets) > 0 && strings.TrimSpace(v.Preset) != "" {
-		want := strings.ToLower(strings.TrimSpace(v.Preset))
-		ok := false
-		for _, p := range e.presets {
-			if strings.ToLower(p) == want {
-				ok = true
-				break
-			}
-		}
-		if !ok {
+		if !inCuratedList(e.presets, v.Preset) {
 			issues = append(issues, Issue{
 				Level:   IssueError,
 				Field:   "profile.video.preset",
@@ -199,6 +194,7 @@ func (e *qsvEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 			})
 		}
 	}
+	issues = append(issues, profileIssues(e.supportsProfile, e.profiles, e.name, v.Profile)...)
 	if strings.EqualFold(strings.TrimSpace(v.RateControl), "CBR") &&
 		strings.TrimSpace(v.Maxrate) != "" &&
 		strings.TrimSpace(v.Bitrate) != "" &&
@@ -228,6 +224,7 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 1, Max: 51},
 			presets:         qsvPresets,
 			supportsProfile: true,
+			profiles:        []string{"baseline", "main", "high"},
 			presetFlag:      "-preset", presetName: "preset", presetDefault: "medium",
 		},
 		&qsvEncoder{
@@ -236,6 +233,7 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 1, Max: 51},
 			presets:         qsvPresets,
 			supportsProfile: true,
+			profiles:        []string{"main", "main10"},
 			presetFlag:      "-preset", presetName: "preset", presetDefault: "medium",
 		},
 		&qsvEncoder{
@@ -244,6 +242,7 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 0, Max: 255},
 			presets:         qsvPresets,
 			supportsProfile: true,
+			profiles:        []string{"main"},
 			presetFlag:      "-preset", presetName: "preset", presetDefault: "medium",
 		},
 		&qsvEncoder{
@@ -252,6 +251,7 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 0, Max: 255},
 			presets:         qsvPresets,
 			supportsProfile: true,
+			profiles:        []string{"profile0", "profile1", "profile2", "profile3"},
 			presetFlag:      "-preset", presetName: "preset", presetDefault: "medium",
 		},
 	}

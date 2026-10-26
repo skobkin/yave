@@ -35,9 +35,11 @@ type nvencEncoder struct {
 	qpRange         IntegerRange
 	presets         []string // categorical preset names
 	supportsProfile bool
-	presetFlag      string // "-preset"
-	presetName      string // UI label
-	presetDefault   string
+	// profiles is the curated -profile:v value list; see Profiles().
+	profiles      []string
+	presetFlag    string // "-preset"
+	presetName    string // UI label
+	presetDefault string
 }
 
 func (e *nvencEncoder) Name() string         { return e.name }
@@ -59,6 +61,7 @@ func (e *nvencEncoder) SupportsTune() bool    { return false }
 func (e *nvencEncoder) SupportsProfile() bool { return e.supportsProfile }
 func (e *nvencEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *nvencEncoder) DefaultPreset() string { return e.presetDefault }
+func (e *nvencEncoder) Profiles() []string    { return e.profiles }
 func (e *nvencEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }
@@ -174,15 +177,7 @@ func (e *nvencEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error
 func (e *nvencEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 	var issues []Issue
 	if len(e.presets) > 0 && strings.TrimSpace(v.Preset) != "" {
-		want := strings.ToLower(strings.TrimSpace(v.Preset))
-		ok := false
-		for _, p := range e.presets {
-			if strings.ToLower(p) == want {
-				ok = true
-				break
-			}
-		}
-		if !ok {
+		if !inCuratedList(e.presets, v.Preset) {
 			issues = append(issues, Issue{
 				Level:   IssueError,
 				Field:   "profile.video.preset",
@@ -190,13 +185,7 @@ func (e *nvencEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 			})
 		}
 	}
-	if !e.supportsProfile && strings.TrimSpace(v.Profile) != "" {
-		issues = append(issues, Issue{
-			Level:   IssueError,
-			Field:   "profile.video.profile",
-			Message: fmt.Sprintf("%s does not support -profile:v", e.name),
-		})
-	}
+	issues = append(issues, profileIssues(e.supportsProfile, e.profiles, e.name, v.Profile)...)
 	if strings.EqualFold(strings.TrimSpace(v.RateControl), "CBR") &&
 		strings.TrimSpace(v.Maxrate) != "" &&
 		strings.TrimSpace(v.Bitrate) != "" &&
@@ -229,6 +218,7 @@ func nvencVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 0, Max: 51},
 			presets:         h264HevcPresets,
 			supportsProfile: true,
+			profiles:        []string{"baseline", "main", "high"},
 			presetFlag:      "-preset", presetName: "preset", presetDefault: "p4",
 		},
 		&nvencEncoder{
@@ -237,7 +227,11 @@ func nvencVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 0, Max: 51},
 			presets:         h264HevcPresets,
 			supportsProfile: true,
-			presetFlag:      "-preset", presetName: "preset", presetDefault: "p4",
+			// "mv" (motion-estimation-only MV between two streams) is
+			// deliberately not curated: it is not useful for yave's
+			// single-output conversions.
+			profiles:   []string{"main", "main10"},
+			presetFlag: "-preset", presetName: "preset", presetDefault: "p4",
 		},
 		&nvencEncoder{
 			name: "av1_nvenc", label: "AV1 NVENC", codecFamily: "av1",
@@ -245,6 +239,7 @@ func nvencVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 0, Max: 255},
 			presets:         av1Presets,
 			supportsProfile: false, // ffmpeg's av1_nvenc rejects -profile:v
+			profiles:        nil,
 			presetFlag:      "-preset", presetName: "preset", presetDefault: "p4",
 		},
 	}

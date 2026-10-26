@@ -201,6 +201,14 @@ type VideoEncoder interface {
 	// encoder. Most encoders accept profile; some (e.g. av1_nvenc) do not.
 	SupportsProfile() bool
 
+	// Profiles lists the curated -profile:v values the UI offers for
+	// this encoder, in display order (pinned from ffmpeg documentation
+	// and verified against reference builds). An empty list means yave
+	// curates no profile values for this encoder: the UI hides the
+	// control and any non-empty profile is rejected by Validate. The
+	// returned slice is shared state and must be treated as immutable.
+	Profiles() []string
+
 	// VideoFilter returns the filter chain to follow -vf, including any
 	// frame-rate conversion, soft scaling, format conversion, hw upload,
 	// and hardware scaling. Empty string means no -vf is emitted.
@@ -222,6 +230,13 @@ type AudioEncoder interface {
 	// AudioCompressionRange returns the FLAC compression level range.
 	// ok=false means the encoder does not accept a compression level.
 	AudioCompressionRange() (IntegerRange, bool)
+
+	// BitrateChoices lists the bitrate values the UI offers and
+	// validation accepts for this encoder (e.g. "128k"). An empty list
+	// means the encoder does not take a bitrate (e.g. flac) and any
+	// bitrate is left unvalidated. The returned slice is shared state
+	// and must be treated as immutable.
+	BitrateChoices() []string
 
 	// BuildAudioArgs emits the -c:a and per-encoder flags (e.g.
 	// -compression_level, -b:a). A returned non-nil error is fatal.
