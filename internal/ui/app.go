@@ -146,14 +146,20 @@ type Controller struct {
 	subtitles          *widget.Select
 	videoFormBox       *fyne.Container
 	videoFormSignature string
-	command            *widget.Entry
-	progress           *widget.ProgressBar
-	progressInfo       *widget.Label
-	log                *widget.Entry
-	start              *widget.Button
-	cancel             *widget.Button
-	tabs               *container.AppTabs
-	runTab             *container.TabItem
+	// aspectFlags groups the keep-aspect / no-upscale checks into one
+	// container created once: the video form signature hashes widget
+	// pointers, so the row's HBox must be stable across
+	// videoFormItems calls or every state change would rebuild the
+	// form (see formItemsSignature).
+	aspectFlags  *fyne.Container
+	command      *widget.Entry
+	progress     *widget.ProgressBar
+	progressInfo *widget.Label
+	log          *widget.Entry
+	start        *widget.Button
+	cancel       *widget.Button
+	tabs         *container.AppTabs
+	runTab       *container.TabItem
 }
 
 func New(a fyne.App, initialInput string) (*Controller, error) {
@@ -302,6 +308,10 @@ func (c *Controller) createWidgets() {
 	c.rebuildAudioForm()
 	// Same for the video tab (initially just the Encoder row).
 	c.videoFormBox = container.NewVBox()
+	// The aspect checks live in a stable HBox so the video form's
+	// pointer-based signature does not change on every videoFormItems
+	// call.
+	c.aspectFlags = container.NewHBox(c.keepAspect, c.noUpscale)
 	c.rebuildVideoForm()
 
 	c.command = widget.NewMultiLineEntry()
@@ -1608,7 +1618,10 @@ func (c *Controller) videoFormItems() []*widget.FormItem {
 	items = append(items,
 		widget.NewFormItem("Maximum width", c.maxWidth),
 		widget.NewFormItem("Maximum height", c.maxHeight),
-		widget.NewFormItem("", container.NewHBox(c.keepAspect, c.noUpscale)),
+		// c.aspectFlags is a Controller field: a fresh container here
+		// would change the signature on every call and rebuild the
+		// form on each keystroke.
+		widget.NewFormItem("", c.aspectFlags),
 	)
 	switch ve.HWBackend() {
 	case encoder.HWVAAPI:

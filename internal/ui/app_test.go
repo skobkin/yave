@@ -1298,6 +1298,45 @@ func TestAudioFormNoRebuildOnIdenticalState(t *testing.T) {
 	}
 }
 
+// TestVideoFormNoRebuildOnIdenticalState pins the signature guard on
+// the video tab: every videoFormItems widget must be a stable pointer
+// (the aspect-flags HBox included — a fresh container there changed
+// the signature on every call and rebuilt the whole form on each
+// keystroke or slider tick).
+func TestVideoFormNoRebuildOnIdenticalState(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("libx264")
+
+	before := c.videoFormBox.Objects[0]
+	c.updateControlState()
+	c.updateControlState()
+	if c.videoFormBox.Objects[0] != before {
+		t.Errorf("identical state rebuilt the video form")
+	}
+
+	// Copy mode collapses the row set and must rebuild.
+	c.videoEncoder.SetSelected("copy")
+	if c.videoFormBox.Objects[0] == before {
+		t.Errorf("encoder change to copy did not rebuild the video form")
+	}
+
+	// Back to a real encoder: rebuild, then a same-row-set state tick
+	// (frame rate text is not a row boundary in keep mode) must not.
+	c.videoEncoder.SetSelected("libx264")
+	afterSwitch := c.videoFormBox.Objects[0]
+	if afterSwitch == before {
+		t.Fatalf("encoder change back to libx264 did not rebuild the video form")
+	}
+	c.updateControlState()
+	if c.videoFormBox.Objects[0] != afterSwitch {
+		t.Errorf("identical state rebuilt the video form after encoder switch")
+	}
+}
+
 // TestAudioEncoderAutoSelectOnEncodeMode pins that switching to encode
 // mode with no usable selection picks the first available encoder, and
 // that "copy" never appears among the options.
