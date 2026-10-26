@@ -313,17 +313,14 @@ func validateAudio(result *Result, audio model.AudioSettings, capabilities model
 		result.error("profile.audio.encoder", "audio encoder %q is not available in the detected FFmpeg build", audio.Encoder)
 	}
 
-	switch encoder {
-	case "libopus", "opus":
-		validateChoice(result, "profile.audio.bitrate", audio.Bitrate, "96k", "128k", "160k", "192k", "256k")
-	case "aac":
-		validateChoice(result, "profile.audio.bitrate", audio.Bitrate, "128k", "160k", "192k", "256k")
-	case "libmp3lame", "mp3":
-		validateChoice(result, "profile.audio.bitrate", audio.Bitrate, "128k", "192k", "256k", "320k")
-	case "flac":
-		r, _ := AudioCompressionRange(encoder)
-		if !r.Contains(audio.Compression) {
-			result.error("profile.audio.compression", "FLAC compression level must be between %d and %d", r.Min, r.Max)
+	// Bitrate and compression checks read the encoder's own choices
+	// from the registry — the same source the UI dropdowns use — so a
+	// new audio encoder only needs registering to validate correctly.
+	if ae, ok := lookupAudioEncoder(encoder); ok {
+		if choices := ae.BitrateChoices(); len(choices) > 0 {
+			validateChoice(result, "profile.audio.bitrate", audio.Bitrate, choices...)
+		} else if r, ok := ae.AudioCompressionRange(); ok && !r.Contains(audio.Compression) {
+			result.error("profile.audio.compression", "%s compression level must be between %d and %d", strings.ToUpper(encoder), r.Min, r.Max)
 		}
 	}
 }
