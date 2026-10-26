@@ -229,8 +229,10 @@ func nvencVideoEncoders() []Encoder {
 			supportsProfile: true,
 			// "mv" (motion-estimation-only MV between two streams) is
 			// deliberately not curated: it is not useful for yave's
-			// single-output conversions.
-			profiles:   []string{"main", "main10"},
+			// single-output conversions. main10 needs a 10-bit surface;
+			// yave's NVENC chain uploads nv12 only (see
+			// vaapiVideoEncoders for the constraint).
+			profiles:   []string{"main"},
 			presetFlag: "-preset", presetName: "preset", presetDefault: "p4",
 		},
 		&nvencEncoder{

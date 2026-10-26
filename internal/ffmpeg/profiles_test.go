@@ -85,9 +85,10 @@ func TestIntersectProfiles(t *testing.T) {
 }
 
 // TestDiscoverNarrowsProfiles checks the discovery path end to end
-// with a fake ffmpeg: h264_vaapi's enumeration misses high10, so the
-// capability list narrows; libx264 enumerates nothing and keeps its
-// curated list; a probe failure (exit 2) also keeps the curated list.
+// with a fake ffmpeg: h264_vaapi's enumeration misses
+// constrained_baseline, so the capability list narrows; libx264
+// enumerates nothing and keeps its curated list; a probe failure
+// (exit 2) also keeps the curated list.
 func TestDiscoverNarrowsProfiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test helper is a POSIX shell script")
@@ -100,7 +101,7 @@ case "$2" in
   -hwaccels) printf 'Hardware acceleration methods:\n' ;;
   -h)
     case "$3" in
-      # h264_vaapi's build enumerates but lacks high10.
+      # h264_vaapi's build enumerates but lacks constrained_baseline.
       encoder=h264_vaapi) printf '  -profile <int> E\n     main 77 E\n     high 100 E\n' ;;
       # libx264's probe fails: fail open to the curated list.
       *) exit 2 ;;
@@ -125,7 +126,7 @@ printf 'ffprobe version test-2\n'
 		t.Fatal("h264_vaapi not discovered")
 	}
 	if !slices.Equal(vaapi.Profiles, []string{"main", "high"}) {
-		t.Errorf("h264_vaapi Profiles = %v, want [main high] (high10 dropped by build probe)", vaapi.Profiles)
+		t.Errorf("h264_vaapi Profiles = %v, want [main high] (constrained_baseline dropped by build probe)", vaapi.Profiles)
 	}
 
 	x264, ok := got.Encoders["libx264"]

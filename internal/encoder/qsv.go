@@ -233,8 +233,10 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 1, Max: 51},
 			presets:         qsvPresets,
 			supportsProfile: true,
-			profiles:        []string{"main", "main10"},
-			presetFlag:      "-preset", presetName: "preset", presetDefault: "medium",
+			// main10 needs a 10-bit surface; yave's QSV chain uploads
+			// nv12 only (see vaapiVideoEncoders for the constraint).
+			profiles:   []string{"main"},
+			presetFlag: "-preset", presetName: "preset", presetDefault: "medium",
 		},
 		&qsvEncoder{
 			name: "av1_qsv", label: "AV1 QSV", codecFamily: "av1",
@@ -251,8 +253,10 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 0, Max: 255},
 			presets:         qsvPresets,
 			supportsProfile: true,
-			profiles:        []string{"profile0", "profile1", "profile2", "profile3"},
-			presetFlag:      "-preset", presetName: "preset", presetDefault: "medium",
+			// profile1/2/3 are 10- and 12-bit / non-4:2:0; the fixed
+			// nv12 chain can only serve profile0.
+			profiles:   []string{"profile0"},
+			presetFlag: "-preset", presetName: "preset", presetDefault: "medium",
 		},
 	}
 }

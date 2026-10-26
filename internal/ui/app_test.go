@@ -855,7 +855,7 @@ func TestProfileOptionsFollowEncoder(t *testing.T) {
 	c.createWidgets()
 
 	c.videoEncoder.SetSelected("hevc_vaapi")
-	want := []string{"(default)", "main", "main10", "rext"}
+	want := []string{"(default)", "main", "rext"}
 	if !slices.Equal(c.videoProfile.Options, want) {
 		t.Errorf("hevc_vaapi profile options = %v, want %v", c.videoProfile.Options, want)
 	}
@@ -910,10 +910,10 @@ func TestLoadProfileSeedsProfileOptions(t *testing.T) {
 
 	profile := c.config.Profiles[0]
 	profile.Video.Encoder = "hevc_vaapi"
-	profile.Video.Profile = "main10"
+	profile.Video.Profile = "rext"
 	c.loadProfile(profile)
-	if got := c.profileFromWidgets().Video.Profile; got != "main10" {
-		t.Errorf("in-list profile round-trip = %q, want main10", got)
+	if got := c.profileFromWidgets().Video.Profile; got != "rext" {
+		t.Errorf("in-list profile round-trip = %q, want rext", got)
 	}
 
 	// A value outside the curated list must survive the load instead

@@ -128,33 +128,41 @@ func (e *vaapiEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 
 // vaapiVideoEncoders returns the curated VAAPI video encoder set.
 //
-// The profile lists are pinned from `ffmpeg -h encoder=<name>` of the
-// reference build, which enumerates the accepted values for the
-// encoder-private -profile option. vp9_vaapi is the exception: it
-// exposes no enumeration, but the generic profile_idc integers (0 =
-// Profile 0, 2 = Profile 2) parse and reach the driver, so those two
-// are curated.
+// The profile lists start from `ffmpeg -h encoder=<name>` of the
+// reference build and are then restricted to the values that can
+// actually encode through yave's fixed 8-bit 4:2:0 upload chain
+// (format=nv12,hwupload): ffmpeg matches -profile:v against an
+// internal profile↔surface-format table before the driver is reached,
+// so a 10-bit or non-4:2:0 profile (h264 high10, hevc main10, av1
+// high/professional, vp9 profile 2) can never match an nv12 surface
+// and fails every conversion with "No usable encoding profile found."
+// regardless of hardware. hevc rext was encode-verified to work
+// through the nv12 chain. vp9_vaapi exposes no -h enumeration, but the
+// generic profile_idc integer 0 parses and reaches the driver.
+//
+// Restoring the dropped profiles needs a 10-bit chain (p010 upload /
+// vpp format conversion) — tracked in the issue tracker.
 func vaapiVideoEncoders() []Encoder {
 	return []Encoder{
 		&vaapiEncoder{
 			name: "h264_vaapi", label: "H.264 VA-API", codecFamily: "h264",
 			priority: 60, qpRange: IntegerRange{Min: 1, Max: 51},
-			profiles: []string{"constrained_baseline", "main", "high", "high10"},
+			profiles: []string{"constrained_baseline", "main", "high"}, // high10 needs a 10-bit surface
 		},
 		&vaapiEncoder{
 			name: "hevc_vaapi", label: "H.265 VA-API", codecFamily: "hevc",
 			priority: 50, qpRange: IntegerRange{Min: 1, Max: 51},
-			profiles: []string{"main", "main10", "rext"},
+			profiles: []string{"main", "rext"}, // main10 needs a 10-bit surface
 		},
 		&vaapiEncoder{
 			name: "av1_vaapi", label: "AV1 VA-API", codecFamily: "av1",
 			priority: 40, qpRange: IntegerRange{Min: 0, Max: 255},
-			profiles: []string{"main", "high", "professional"},
+			profiles: []string{"main"}, // high/professional need 4:4:4/4:2:2 surfaces
 		},
 		&vaapiEncoder{
 			name: "vp9_vaapi", label: "VP9 VA-API", codecFamily: "vp9",
 			priority: 30, qpRange: IntegerRange{Min: 0, Max: 255},
-			profiles: []string{"0", "2"},
+			profiles: []string{"0"}, // profile 2 is 10-bit
 		},
 	}
 }
