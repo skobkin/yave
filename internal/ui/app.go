@@ -877,6 +877,15 @@ func (c *Controller) loadProfile(p model.Profile) {
 	// populateRateControlOptions also performs the SetSelected when
 	// preferred is non-empty, so the explicit SetSelected below is
 	// redundant and would re-fire OnChanged.
+	// populateRateControlOptions keeps the current selection when
+	// preferred is empty — the right behavior for user-driven encoder
+	// switches, but wrong for a fresh load: an empty saved value must
+	// land on the encoder default instead of inheriting the previous
+	// profile's mode. ClearSelected empties the selection so the
+	// populate call falls back (OnChanged is swallowed by c.loading).
+	if p.Video.RateControl == "" && c.rateControl.Selected != "" {
+		c.rateControl.ClearSelected()
+	}
 	c.populateRateControlOptions(p.Video.RateControl)
 	c.updateIntegerRanges()
 	c.qp.SetValue(p.Video.QP)
@@ -891,6 +900,13 @@ func (c *Controller) loadProfile(p model.Profile) {
 	// rate-control dropdown above (SetSelected silently drops values
 	// missing from Options). populateProfileOptions also performs the
 	// SetSelected when preferred is non-empty.
+	// Same empty-value rule as the rate-control dropdown above: a
+	// profile saved without -profile:v must land on "(default)", not
+	// keep the previously loaded profile's selection (which would be
+	// emitted for this profile and persisted by Save).
+	if p.Video.Profile == "" && c.videoProfile.Selected != "" {
+		c.videoProfile.ClearSelected()
+	}
 	c.populateProfileOptions(p.Video.Profile)
 	c.frameMode.SetSelected(p.Video.FrameRateMode)
 	c.frameRate.SetText(p.Video.FrameRate)
@@ -918,8 +934,15 @@ func (c *Controller) loadProfile(p model.Profile) {
 	// Seed the bitrate options for the just-loaded encoder before
 	// anything reads the selection (Fyne drops SetSelected values
 	// missing from Options). The seed keeps the loaded bitrate
-	// round-tripping while the row is hidden in copy mode.
+	// round-tripping while the row is hidden in copy mode. The row is
+	// also hidden or meaningless for a copy-mode / bitrate-less load,
+	// so clear the dropdown first — populateAudioBitrateOptions keeps
+	// the current selection when preferred is empty, which would
+	// inherit the previously loaded profile's bitrate.
 	c.audioBitrateSeed = p.Audio.Bitrate
+	if p.Audio.Bitrate == "" || p.Audio.Encoder == "copy" {
+		c.audioBitrate.ClearSelected()
+	}
 	c.populateAudioBitrateOptions(p.Audio.Encoder, p.Audio.Bitrate)
 	c.compression.SetValue(p.Audio.Compression)
 	c.allAudio.SetChecked(p.Audio.CopyAllStreams)
@@ -944,6 +967,13 @@ func (c *Controller) profileFromWidgets() model.Profile {
 		// Copy mode has no encoder settings; YAML/validation expect
 		// the literal "copy" encoder alongside the copy mode.
 		audioEncoder = "copy"
+	}
+	// In copy mode the bitrate row is hidden, so the invisible
+	// dropdown selection must never win: only a visible encode-mode
+	// selection takes precedence over the loaded value.
+	audioBitrate := c.audioBitrateSeed
+	if audioMode == model.AudioEncode {
+		audioBitrate = firstNonEmpty(c.audioBitrate.Selected, c.audioBitrateSeed)
 	}
 	return model.Profile{
 		Name: c.profile.Selected, Container: c.container.Selected, OutputTemplate: c.output.Text,
@@ -970,7 +1000,7 @@ func (c *Controller) profileFromWidgets() model.Profile {
 		},
 		Audio: model.AudioSettings{
 			Mode: audioMode, Encoder: audioEncoder,
-			Bitrate:        firstNonEmpty(c.audioBitrate.Selected, c.audioBitrateSeed),
+			Bitrate:        audioBitrate,
 			Compression:    c.compression.Value(),
 			CopyAllStreams: c.allAudio.Checked,
 		},

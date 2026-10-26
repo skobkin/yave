@@ -1133,6 +1133,86 @@ func TestLoadProfileAppliesSavedDeviceOverStaleSelection(t *testing.T) {
 	}
 }
 
+// TestLoadProfileEmptyProfileResetsSelection is the stale-profile-
+// value regression: populateProfileOptions keeps the current selection
+// when the preferred value is empty (the encoder-switch behavior), so
+// loading a profile saved without -profile:v after one with a profile
+// kept the previous value visible, emitted it for the new profile, and
+// Saved it into it. An empty loaded value must land on "(default)".
+func TestLoadProfileEmptyProfileResetsSelection(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	first := c.config.Profiles[0]
+	first.Video.Encoder = "libx265"
+	first.Video.RateControl = "CRF"
+	first.Video.Profile = "main10"
+	c.loadProfile(first)
+	if got := c.videoProfile.Selected; got != "main10" {
+		t.Fatalf("first load profile selection = %q, want main10", got)
+	}
+
+	second := first
+	second.Video.Profile = ""
+	c.loadProfile(second)
+
+	if got := c.videoProfile.Selected; got != defaultOption {
+		t.Errorf("profile selection after loading an empty-profile value = %q, want %q", got, defaultOption)
+	}
+	if got := c.profileFromWidgets().Video.Profile; got != "" {
+		t.Errorf("profile value after loading an empty-profile value = %q, want \"\"", got)
+	}
+}
+
+// TestLoadProfileBitrateNotInherited is the stale-bitrate regression:
+// a copy-mode profile (bitrate row hidden) must keep its own saved
+// bitrate on Save instead of inheriting the previously loaded encode
+// profile's dropdown selection, and an encode profile without a
+// bitrate must fall back instead of keeping the previous selection.
+func TestLoadProfileBitrateNotInherited(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	encode := c.config.Profiles[0]
+	encode.Audio.Mode = model.AudioEncode
+	encode.Audio.Encoder = "libmp3lame"
+	encode.Audio.Bitrate = "320k"
+	c.loadProfile(encode)
+	if got := c.audioBitrate.Selected; got != "320k" {
+		t.Fatalf("encode load bitrate selection = %q, want 320k", got)
+	}
+
+	copied := encode
+	copied.Audio.Mode = model.AudioCopy
+	copied.Audio.Encoder = "copy"
+	copied.Audio.Bitrate = "160k"
+	c.loadProfile(copied)
+	if got := c.profileFromWidgets().Audio.Bitrate; got != "160k" {
+		t.Errorf("copy-profile bitrate after switching = %q, want the copy profile's 160k", got)
+	}
+
+	empty := copied
+	empty.Audio.Mode = model.AudioEncode
+	empty.Audio.Encoder = "libmp3lame"
+	empty.Audio.Bitrate = ""
+	c.loadProfile(empty)
+	// The cleared selection must fall back to a documented choice of
+	// the encoder (160k when offered, else the median) — never to the
+	// previously loaded profile's value.
+	if got := c.audioBitrate.Selected; got == "320k" {
+		t.Errorf("empty-bitrate load kept the previous profile's 320k instead of falling back")
+	}
+	if got := c.profileFromWidgets().Audio.Bitrate; got == "320k" {
+		t.Errorf("empty-bitrate load kept the previous profile's 320k (got %q)", got)
+	}
+}
+
 // audioFormLabels reads the labels of the currently built audio form.
 func audioFormLabels(c *Controller) []string {
 	labels := []string{}
