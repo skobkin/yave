@@ -379,35 +379,46 @@ func (c *Controller) outputTemplateHelpButton() *widget.Button {
 	return button
 }
 
-func (c *Controller) showOutputTemplateHelp() {
-	const help = `{dir}       Input directory, for example /home/user/Videos
-{name}      Input filename without extension, for example movie
-{ext}       Output extension without dot, for example mkv
-{input_ext} Input extension without dot, for example mp4
-{datetime}  Local date and time, for example 20260614-153045
-{date}      Local date, for example 20260614
-{time}      Local time, for example 153045
-{profile}   Selected profile name, for example HEVC_720p
-{codec}     Selected video encoder, for example libx265
-{width}     Output maximum or source width, for example 1280
-{height}    Output maximum or source height, for example 720
+// outputTemplateHelpText renders the template-help dialog body from
+// templates.Placeholders — the single source of truth — so the help
+// cannot drift from what Resolve actually accepts. Keys are listed
+// sorted, space-padded to a common width; the example block below is
+// hand-written prose the map cannot express.
+func outputTemplateHelpText() string {
+	keys := make([]string, 0, len(templates.Placeholders))
+	width := 0
+	for key := range templates.Placeholders {
+		keys = append(keys, key)
+		if len(key) > width {
+			width = len(key)
+		}
+	}
+	sort.Strings(keys)
 
+	var b strings.Builder
+	for _, key := range keys {
+		b.WriteString("{" + key + "}")
+		b.WriteString(strings.Repeat(" ", width-len(key)+2))
+		b.WriteString(templates.Placeholders[key])
+		b.WriteString("\n")
+	}
+	b.WriteString(`
 Template:
 {dir}/{name}_{profile}.{ext}
 
 Result:
-/home/user/Videos/movie_HEVC_720p.mkv`
+/home/user/Videos/movie_HEVC_720p.mkv`)
+	return b.String()
+}
 
+func (c *Controller) showOutputTemplateHelp() {
+	help := outputTemplateHelpText()
 	text := widget.NewMultiLineEntry()
 	text.SetText(help)
 	text.SetMinRowsVisible(16)
 	text.Disable()
 
-	copyButton := widget.NewButton("Copy all", func() {
-		c.app.Clipboard().SetContent(help)
-	})
-	content := container.NewBorder(nil, copyButton, nil, nil, text)
-	helpDialog := dialog.NewCustom("Output template placeholders", "Close", content, c.window)
+	helpDialog := dialog.NewCustom("Output template placeholders", "Close", text, c.window)
 	helpDialog.Resize(fyne.NewSize(760, 600))
 	helpDialog.Show()
 }

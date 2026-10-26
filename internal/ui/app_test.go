@@ -15,6 +15,7 @@ import (
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/ffmpeg"
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/templates"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
@@ -1412,5 +1413,41 @@ func TestRateControlHintExplainsMode(t *testing.T) {
 	c.rateControl.SetSelected("VBR")
 	if c.rateControlHint.Text == "" || c.rateControlHint.Text == autoHint {
 		t.Errorf("VBR mode hint = %q, want distinct non-empty text", c.rateControlHint.Text)
+	}
+}
+
+// TestOutputTemplateHelpText pins that the generated help lists every
+// templates.Placeholders key in sorted order with the example block,
+// and uses spaces rather than tabs for alignment.
+func TestOutputTemplateHelpText(t *testing.T) {
+	help := outputTemplateHelpText()
+
+	keys := make([]string, 0, len(templates.Placeholders))
+	for key := range templates.Placeholders {
+		keys = append(keys, key)
+		if !strings.Contains(help, "{"+key+"}") {
+			t.Errorf("help text misses placeholder {%s}:\n%s", key, help)
+		}
+	}
+	sorted := slices.Clone(keys)
+	slices.Sort(sorted)
+
+	// The keys appear in sorted order in the text.
+	position := -1
+	for _, key := range sorted {
+		at := strings.Index(help, "{"+key+"}")
+		if at < position {
+			t.Errorf("placeholder {%s} out of order in help text", key)
+		}
+		position = at
+	}
+
+	for _, want := range []string{"Template:", "{dir}/{name}_{profile}.{ext}", "Result:", "/home/user/Videos/movie_HEVC_720p.mkv"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("help text misses %q:\n%s", want, help)
+		}
+	}
+	if strings.Contains(help, "\t") {
+		t.Errorf("help text must align with spaces, not tabs")
 	}
 }
