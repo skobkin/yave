@@ -99,6 +99,68 @@ func TestValidateRejectsProfilesOutsideDetectedBuild(t *testing.T) {
 	}
 }
 
+// TestValidateWarnsOnProfileBitDepthMismatch pins the source-aware
+// profile warning: the software chains pass the source pixel format
+// through, so an 8-bit-only profile on a 10-bit source guarantees a
+// conversion failure the "(default)" selection would not have.
+// Hardware chains are exempt — their lists are nv12-compatible — and
+// an empty profile never warns.
+func TestValidateWarnsOnProfileBitDepthMismatch(t *testing.T) {
+	tenBit := validMedia()
+	tenBit.VideoStreams[0].PixelFormat = "yuv420p10le"
+	eightBit := validMedia()
+	eightBit.VideoStreams[0].PixelFormat = "yuv420p"
+
+	caps := capabilities()
+
+	x264 := validProfile()
+	x264.Video.Encoder = "libx264"
+	x264.Video.RateControl = "CRF"
+	x264.Video.Preset = ""
+	x264.Video.Profile = "main"
+
+	if result := validation.ValidateProfile(x264, caps, &tenBit); !result.Valid() {
+		t.Fatalf("profile must stay valid (warning, not error): %#v", result.Errors)
+	} else {
+		assertWarningContains(t, result, "profile.video.profile", "10-bit")
+	}
+
+	noProfile := x264
+	noProfile.Video.Profile = ""
+	if result := validation.ValidateProfile(noProfile, caps, &tenBit); len(result.Warnings) > 0 {
+		t.Errorf("empty profile must not warn: %#v", result.Warnings)
+	}
+
+	if result := validation.ValidateProfile(x264, caps, &eightBit); len(result.Warnings) > 0 {
+		t.Errorf("8-bit source with an 8-bit profile must not warn: %#v", result.Warnings)
+	}
+
+	x265main10 := x264
+	x265main10.Video.Encoder = "libx265"
+	x265main10.Video.Profile = "main10"
+	if result := validation.ValidateProfile(x265main10, caps, &tenBit); len(result.Warnings) > 0 {
+		t.Errorf("libx265 main10 accepts a 10-bit source: %#v", result.Warnings)
+	}
+
+	x265main := x265main10
+	x265main.Video.Profile = "main"
+	if result := validation.ValidateProfile(x265main, caps, &tenBit); !result.Valid() {
+		t.Fatalf("profile must stay valid (warning, not error): %#v", result.Errors)
+	} else {
+		assertWarningContains(t, result, "profile.video.profile", "10-bit")
+	}
+
+	vaapi := x264
+	vaapi.Video.Encoder = "hevc_vaapi"
+	vaapi.Video.RateControl = "CQP"
+	vaapi.Video.QP = 26
+	vaapi.Video.VAAPIDevice = "/dev/dri/renderD128"
+	vaapi.Video.Profile = "main"
+	if result := validation.ValidateProfile(vaapi, caps, &tenBit); len(result.Warnings) > 0 {
+		t.Errorf("hardware chain profiles must not trigger the depth warning: %#v", result.Warnings)
+	}
+}
+
 func TestValidateProfileAllowsCopyBeforeMediaIsLoaded(t *testing.T) {
 	profile := validProfile()
 	profile.Video.Encoder = "copy"

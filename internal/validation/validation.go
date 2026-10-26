@@ -77,6 +77,7 @@ func validateProfile(profile model.Profile, capabilities model.Capabilities, med
 
 	validateVideo(&result, profile.Video, videoEncoder)
 	validateBuildProfile(&result, profile.Video, videoEncoder, capabilities)
+	validateProfileBitDepth(&result, profile.Video, videoEncoder, media)
 	validateAudio(&result, profile.Audio, capabilities)
 	validateSubtitles(&result, profile.Subtitles)
 
@@ -191,6 +192,79 @@ func validateBuildProfile(result *Result, video model.VideoSettings, encoderName
 	result.error("profile.video.profile",
 		"%s profile %q is not offered by the detected FFmpeg build; must be one of: %s",
 		encoderName, value, strings.Join(m.Profiles, ", "))
+}
+
+// validateProfileBitDepth warns when the selected -profile:v cannot
+// encode the source's bit depth. The software chains pass the source
+// pixel format through, so an 8-bit-only profile on a 10-bit source
+// turns a working conversion into a hard x264/x265 failure ("main
+// profile doesn't support a bit depth of 10") that an empty profile —
+// which lets the encoder auto-select — would not have. Only
+// libx264/libx265 curate depth-constrained profiles: the hardware
+// chains convert to nv12 and offer only chain-compatible values, and
+// the AV1/VP9 Main profiles cover every depth. A warning, not an
+// error: the pixel-format name heuristic can mis-parse exotic names,
+// and the encoder's own error is loud.
+func validateProfileBitDepth(result *Result, video model.VideoSettings, encoderName string, media *model.MediaInfo) {
+	maxDepth := profileMaxBitDepth(encoderName, strings.TrimSpace(video.Profile))
+	if maxDepth == 0 || media == nil {
+		return
+	}
+	stream, ok := media.PrimaryVideo()
+	if !ok {
+		return
+	}
+	if depth := pixelFormatBitDepth(stream.PixelFormat); depth > maxDepth {
+		result.warning("profile.video.profile",
+			"%s profile %q does not support %d-bit sources; clear the profile to let %s auto-select a compatible one",
+			encoderName, video.Profile, depth, encoderName)
+	}
+}
+
+// profileMaxBitDepth reports the highest source bit depth the given
+// -profile:v value accepts, or 0 when the combination carries no
+// depth constraint (no profile selected, unknown encoder, or a
+// profile that is not depth-limited).
+func profileMaxBitDepth(encoderName, profile string) int {
+	if profile == "" {
+		return 0
+	}
+	switch strings.ToLower(encoderName) {
+	case "libx264":
+		// baseline/main/high are all 8-bit; a 10-bit source requires
+		// the automatic High10, reachable only without -profile:v.
+		return 8
+	case "libx265":
+		switch strings.ToLower(profile) {
+		case "main10":
+			return 10
+		case "main12":
+			return 12
+		default:
+			return 8
+		}
+	}
+	return 0
+}
+
+// pixelFormatBitDepth reads the bit depth out of an ffprobe pixel
+// format name (yuv420p10le → 10, yuv420p → 8). Unrecognized names
+// return 8, which disables the warning rather than fabricating one.
+func pixelFormatBitDepth(format string) int {
+	f := strings.ToLower(strings.TrimSpace(format))
+	switch {
+	case strings.Contains(f, "16le"), strings.Contains(f, "16be"):
+		return 16
+	case strings.Contains(f, "14le"), strings.Contains(f, "14be"):
+		return 14
+	case strings.Contains(f, "12le"), strings.Contains(f, "12be"):
+		return 12
+	case strings.Contains(f, "10le"), strings.Contains(f, "10be"):
+		return 10
+	case strings.Contains(f, "9le"), strings.Contains(f, "9be"):
+		return 9
+	}
+	return 8
 }
 
 // validateVideoForEncoder dispatches per-encoder checks via the
