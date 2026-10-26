@@ -832,6 +832,7 @@ func TestSelectRunnableProfileFallsBackWhenHWFiltered(t *testing.T) {
 
 	// Mirror the detect() ordering: options refreshed BEFORE profile
 	// selection, so Fyne's SetSelected lands on the fallback encoder.
+	// (The full production sequence is pinned by TestApplyDetectionSequence.)
 	c.updateEncoderOptions()
 	c.selectRunnableProfile()
 
@@ -840,6 +841,76 @@ func TestSelectRunnableProfileFallsBackWhenHWFiltered(t *testing.T) {
 	}
 	if got := c.videoEncoder.Selected; got != "libx265" {
 		t.Errorf("selected encoder = %q, want %q", got, "libx265")
+	}
+}
+
+// TestApplyDetectionSequence pins the end state of the real
+// detection-application ordering (updateEncoderOptions →
+// updateDeviceOptions → reconcileDevices(false) → updateControlState →
+// selectRunnableProfile): detect-time reconciliation replaces a
+// vanished seed, a fallback candidate loaded by selectRunnableProfile
+// wins through its load-time reconciliation, and re-applying the same
+// capabilities stays quiet.
+func TestApplyDetectionSequence(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	stale := model.Profile{
+		Name:           "Stale",
+		Container:      model.ContainerMKV,
+		OutputTemplate: "{dir}/{name}.{ext}",
+		Video: model.VideoSettings{
+			Encoder:       "hevc_vaapi",
+			RateControl:   "VBR",
+			VAAPIDevice:   "/dev/dri/renderD99", // not among the detected nodes
+			FrameRateMode: "keep",
+			// VBR without a target bitrate is invalid, forcing the
+			// selectRunnableProfile fallback below.
+		},
+		Audio:     model.AudioSettings{Mode: model.AudioCopy, Encoder: "copy"},
+		Subtitles: model.SubtitleSettings{Mode: model.SubtitleNone},
+	}
+	good := stale
+	good.Name = "Good"
+	good.Video.RateControl = "CQP"
+	good.Video.QP = 26
+	good.Video.VAAPIDevice = "/dev/dri/renderD129" // also not detected
+
+	c := &Controller{config: model.Config{Profiles: []model.Profile{stale, good}, DefaultProfile: "Stale"}}
+	c.createWidgets()
+	c.loadProfile(stale)
+
+	caps := model.Capabilities{
+		RenderNodes: []string{"/dev/dri/renderD128"},
+		Encoders: map[string]model.Encoder{
+			"hevc_vaapi": {Name: "hevc_vaapi", Media: ffmpeg.MediaVideo},
+			"copy":       {Name: "copy", Media: "video,audio"},
+		},
+	}
+
+	c.applyDetection(caps)
+
+	// The runnable fallback was loaded; its saved device was not
+	// detected either, so the load-time reconciliation replaced it
+	// with the first node and reseeded.
+	if got := c.profile.Selected; got != "Good" {
+		t.Errorf("selected profile after detection = %q, want the runnable fallback %q", got, "Good")
+	}
+	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD128" {
+		t.Errorf("device selection after detection = %q, want the replacement /dev/dri/renderD128", got)
+	}
+	if c.vaapiDeviceSeed != "/dev/dri/renderD128" {
+		t.Errorf("device seed after detection = %q, want updated to the replacement", c.vaapiDeviceSeed)
+	}
+
+	// Re-applying the same capabilities stays quiet: nothing flips
+	// back to a saved-but-absent path.
+	c.applyDetection(caps)
+	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD128" {
+		t.Errorf("device selection after re-application = %q, want unchanged", got)
+	}
+	if got := c.profile.Selected; got != "Good" {
+		t.Errorf("selected profile after re-application = %q, want unchanged", got)
 	}
 }
 

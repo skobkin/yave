@@ -495,25 +495,33 @@ func (c *Controller) detect() {
 				c.caps = model.Capabilities{}
 				c.detection.SetText("Detection failed: " + err.Error())
 			} else {
-				c.caps = caps
-				c.config.FFmpeg.FFmpegPath = caps.FFmpegPath
-				c.config.FFmpeg.FFprobePath = caps.FFprobePath
-				c.detection.SetText(fmt.Sprintf("%s\n%s\nHardware acceleration: %s\nHardware devices: %s",
-					caps.FFmpegVersion, caps.FFprobeVersion, strings.Join(caps.HWAccels, ", "), hardwareDevicesSummary(caps)))
-				// Refresh dropdown options from the new capabilities
-				// BEFORE selecting a runnable profile: Fyne's
-				// Select.SetSelected silently drops values not in
-				// Options, and selectRunnableProfile may load a profile
-				// whose encoder only became available in this round.
-				c.updateEncoderOptions()
-				c.updateDeviceOptions()
-				c.reconcileDevices(false)
-				c.updateControlState()
-				c.selectRunnableProfile()
+				c.applyDetection(caps)
 			}
 			c.refresh()
 		})
 	}()
+}
+
+// applyDetection applies freshly discovered capabilities on the UI
+// thread. The ordering is behavior: dropdown options are refreshed
+// before anything selects from them (Fyne's Select.SetSelected
+// silently drops values not in Options), devices are reconciled
+// before a runnable profile is auto-selected because
+// selectRunnableProfile may loadProfile a fallback candidate whose
+// load-time reconciliation must win, and updateControlState runs
+// before that selection so "encode + Encoder=copy" can never exist
+// for it to trip over (the A3 silent-revert bug).
+func (c *Controller) applyDetection(caps model.Capabilities) {
+	c.caps = caps
+	c.config.FFmpeg.FFmpegPath = caps.FFmpegPath
+	c.config.FFmpeg.FFprobePath = caps.FFprobePath
+	c.detection.SetText(fmt.Sprintf("%s\n%s\nHardware acceleration: %s\nHardware devices: %s",
+		caps.FFmpegVersion, caps.FFprobeVersion, strings.Join(caps.HWAccels, ", "), hardwareDevicesSummary(caps)))
+	c.updateEncoderOptions()
+	c.updateDeviceOptions()
+	c.reconcileDevices(false)
+	c.updateControlState()
+	c.selectRunnableProfile()
 }
 
 func (c *Controller) changed(string) {
