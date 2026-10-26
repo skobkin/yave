@@ -506,6 +506,16 @@ func testController() *Controller {
 	}
 }
 
+// deviceCapableController returns a controller whose fake detection
+// found one render node, so the device dropdowns have options.
+func deviceCapableController() *Controller {
+	c := testController()
+	c.createWidgets()
+	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128"}}
+	c.updateDeviceOptions()
+	return c
+}
+
 // TestEncoderSwitchToNVENCHidesVAAPIDevice verifies the dispatch gates
 // the hardware-device widgets by HWBackend: NVENC enables gpuIndex,
 // disables vaapiDevice and qsvDevice.
@@ -513,8 +523,7 @@ func TestEncoderSwitchToNVENCHidesVAAPIDevice(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
 
-	c := testController()
-	c.createWidgets()
+	c := deviceCapableController()
 
 	// VAAPI on first: vaapiDevice enabled, qsvDevice/gpuIndex disabled.
 	c.videoEncoder.SetSelected("hevc_vaapi")
@@ -547,8 +556,7 @@ func TestEncoderSwitchToQSVEnablesQSVDevice(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
 
-	c := testController()
-	c.createWidgets()
+	c := deviceCapableController()
 
 	c.videoEncoder.SetSelected("hevc_qsv")
 	if !c.vaapiDevice.Disabled() {
@@ -1051,5 +1059,137 @@ func TestLoadProfileSeedsProfileOptions(t *testing.T) {
 	}
 	if got := c.profileFromWidgets().Video.Profile; got != "main444" {
 		t.Errorf("out-of-list profile round-trip = %q, want main444", got)
+	}
+}
+
+// TestDeviceOptionsFromDetectedNodes pins that the device dropdowns
+// mirror caps.RenderNodes, with the QSV default option prefixed.
+func TestDeviceOptionsFromDetectedNodes(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}}
+	c.updateDeviceOptions()
+
+	if !slices.Equal(c.vaapiDevice.Options, []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}) {
+		t.Errorf("vaapiDevice options = %v, want the detected nodes", c.vaapiDevice.Options)
+	}
+	if !slices.Equal(c.qsvDevice.Options, []string{"(default)", "/dev/dri/renderD128", "/dev/dri/renderD129"}) {
+		t.Errorf("qsvDevice options = %v, want (default) plus the detected nodes", c.qsvDevice.Options)
+	}
+}
+
+// TestReconcileDevicesReplacesMissingSeed covers the load-time case:
+// a saved device that no longer exists among the detected nodes is
+// replaced with the first node (QSV: the default device) and the seed
+// is updated so later detections stay quiet. The window is nil in
+// tests, so the notification path must be skipped safely.
+func TestReconcileDevicesReplacesMissingSeed(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := deviceCapableController()
+	c.vaapiDeviceSeed = "/dev/dri/renderD99"
+	c.qsvDeviceSeed = "/dev/dri/renderD99"
+	c.reconcileDevices(true)
+
+	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD128" {
+		t.Errorf("vaapiDevice selection = %q, want the first detected node", got)
+	}
+	if c.vaapiDeviceSeed != "/dev/dri/renderD128" {
+		t.Errorf("vaapiDeviceSeed = %q, want updated to the replacement", c.vaapiDeviceSeed)
+	}
+	if got := c.qsvDevice.Selected; got != "(default)" {
+		t.Errorf("qsvDevice selection = %q, want (default)", got)
+	}
+	if got := c.profileFromWidgets().Video.VAAPIDevice; got != "/dev/dri/renderD128" {
+		t.Errorf("profile VAAPI device = %q, want the replacement", got)
+	}
+
+	// A second reconcile must stay quiet about the (now valid) seed:
+	// the replacement selection is kept and no further change occurs.
+	c.vaapiDevice.SetSelected("/dev/dri/renderD128")
+	c.reconcileDevices(false)
+	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD128" {
+		t.Errorf("vaapiDevice selection after re-reconcile = %q, want unchanged", got)
+	}
+}
+
+// TestReconcileDevicesKeepsManualChoice pins the detect-time contract:
+// reconciliation must not force the loaded profile's seed back over a
+// selection the user made manually.
+func TestReconcileDevicesKeepsManualChoice(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := deviceCapableController()
+	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}}
+	c.updateDeviceOptions()
+
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	c.reconcileDevices(true) // applies seed / first node
+	first := c.vaapiDevice.Selected
+	c.vaapiDevice.SetSelected("/dev/dri/renderD129")
+
+	// Detect-time: same nodes, seed still points at the load-time
+	// value — the manual pick must survive.
+	c.reconcileDevices(false)
+	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD129" {
+		t.Errorf("vaapiDevice selection after detect-time reconcile = %q, want manual /dev/dri/renderD129 (load selection was %q)", got, first)
+	}
+}
+
+// TestReconcileDevicesAppliesPendingSeed covers the startup order:
+// loadProfile runs before detection (no nodes yet), so the seed is
+// pending; when detection delivers the nodes the seed — not the first
+// node — must be selected.
+func TestReconcileDevicesAppliesPendingSeed(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	profile := c.config.Profiles[0]
+	profile.Video.Encoder = "hevc_vaapi"
+	profile.Video.VAAPIDevice = "/dev/dri/renderD129"
+	c.loadProfile(profile) // no caps yet: options stay empty
+
+	if got := c.vaapiDevice.Selected; got != "" {
+		t.Fatalf("pre-detect selection = %q, want empty", got)
+	}
+
+	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}}
+	c.updateDeviceOptions()
+	c.reconcileDevices(false) // the detect() sequence
+	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD129" {
+		t.Errorf("pending seed selection = %q, want /dev/dri/renderD129", got)
+	}
+}
+
+// TestDeviceSurvivesSaveWithoutDetectedNodes is the data-loss
+// regression: with no detected nodes (detection failure, non-Linux,
+// pre-detect window), the dropdown selection is empty but a Save must
+// keep the loaded profile's device paths instead of writing empty
+// strings to config.yaml.
+func TestDeviceSurvivesSaveWithoutDetectedNodes(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	profile := c.config.Profiles[0]
+	profile.Video.Encoder = "hevc_vaapi"
+	profile.Video.VAAPIDevice = "/dev/dri/renderD128"
+	profile.Video.QSVDevice = ""
+	c.loadProfile(profile) // c.caps is empty: no nodes detected
+
+	got := c.profileFromWidgets()
+	if got.Video.VAAPIDevice != "/dev/dri/renderD128" {
+		t.Errorf("VAAPI device after Save-with-empty-caps = %q, want the saved path", got.Video.VAAPIDevice)
+	}
+	if got.Video.QSVDevice != "" {
+		t.Errorf("QSV device after Save-with-empty-caps = %q, want \"\"", got.Video.QSVDevice)
 	}
 }

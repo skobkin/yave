@@ -117,23 +117,30 @@ type Controller struct {
 	maxHeight          *widget.Entry
 	keepAspect         *widget.Check
 	noUpscale          *widget.Check
-	vaapiDevice        *widget.Entry
-	qsvDevice          *widget.Entry
-	gpuIndex           *widget.Entry
-	audioMode          *widget.Select
-	audioEncoder       *widget.Select
-	audioBitrate       *widget.Select
-	compression        *integerSlider
-	allAudio           *widget.Check
-	subtitles          *widget.Select
-	command            *widget.Entry
-	progress           *widget.ProgressBar
-	progressInfo       *widget.Label
-	log                *widget.Entry
-	start              *widget.Button
-	cancel             *widget.Button
-	tabs               *container.AppTabs
-	runTab             *container.TabItem
+	vaapiDevice        *widget.Select
+	qsvDevice          *widget.Select
+	// vaapiDeviceSeed / qsvDeviceSeed record the device paths the
+	// loaded profile specified. Startup order is loadProfile → detect,
+	// so the dropdowns have no options yet at load time; reconciliation
+	// against the probed node list happens when detection delivers
+	// them. reconcileDevices owns every programmatic selection.
+	vaapiDeviceSeed string
+	qsvDeviceSeed   string
+	gpuIndex        *widget.Entry
+	audioMode       *widget.Select
+	audioEncoder    *widget.Select
+	audioBitrate    *widget.Select
+	compression     *integerSlider
+	allAudio        *widget.Check
+	subtitles       *widget.Select
+	command         *widget.Entry
+	progress        *widget.ProgressBar
+	progressInfo    *widget.Label
+	log             *widget.Entry
+	start           *widget.Button
+	cancel          *widget.Button
+	tabs            *container.AppTabs
+	runTab          *container.TabItem
 }
 
 func New(a fyne.App, initialInput string) (*Controller, error) {
@@ -260,8 +267,8 @@ func (c *Controller) createWidgets() {
 	c.maxHeight = numericEntry(c.changed)
 	c.keepAspect = widget.NewCheck("Keep aspect ratio", func(bool) { c.changed("") })
 	c.noUpscale = widget.NewCheck("Prevent upscaling", func(bool) { c.changed("") })
-	c.vaapiDevice = entry(c.changed)
-	c.qsvDevice = entry(c.changed)
+	c.vaapiDevice = widget.NewSelect([]string{}, c.changed)
+	c.qsvDevice = widget.NewSelect([]string{}, c.changed)
 	c.gpuIndex = numericEntry(c.changed)
 
 	c.audioMode = widget.NewSelect([]string{model.AudioCopy, model.AudioEncode}, c.changed)
@@ -481,6 +488,9 @@ func (c *Controller) detect() {
 				// Options, and selectRunnableProfile may load a profile
 				// whose encoder only became available in this round.
 				c.updateEncoderOptions()
+				c.updateDeviceOptions()
+				c.reconcileDevices(false)
+				c.updateControlState()
 				c.selectRunnableProfile()
 			}
 			c.refresh()
@@ -842,6 +852,7 @@ func (c *Controller) loadProfile(p model.Profile) {
 	defer func() {
 		c.loading = false
 		c.updateControlState()
+		c.reconcileDevices(true)
 		c.refresh()
 	}()
 	c.profile.SetSelected(p.Name)
@@ -879,8 +890,14 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.maxHeight.SetText(intText(p.Video.MaxHeight))
 	c.keepAspect.SetChecked(p.Video.KeepAspectRatio)
 	c.noUpscale.SetChecked(p.Video.PreventUpscaling)
-	c.vaapiDevice.SetText(p.Video.VAAPIDevice)
-	c.qsvDevice.SetText(p.Video.QSVDevice)
+	// Record the loaded device paths as seeds, then rebuild the device
+	// dropdowns from the detected nodes (empty before the first
+	// detection). reconcileDevices in the deferred block performs the
+	// actual selections once loading is done — including the
+	// saved-device-not-detected replacement + notification.
+	c.vaapiDeviceSeed = p.Video.VAAPIDevice
+	c.qsvDeviceSeed = p.Video.QSVDevice
+	c.updateDeviceOptions()
 	c.gpuIndex.SetText(intText(p.Video.GPUIndex))
 	c.audioMode.SetSelected(p.Audio.Mode)
 	c.audioEncoder.SetSelected(p.Audio.Encoder)
@@ -901,8 +918,14 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			FrameRateMode: c.frameMode.Selected, FrameRate: c.frameRate.Text,
 			MaxWidth: atoi(c.maxWidth.Text), MaxHeight: atoi(c.maxHeight.Text),
 			KeepAspectRatio: c.keepAspect.Checked, PreventUpscaling: c.noUpscale.Checked,
-			VAAPIDevice: c.vaapiDevice.Text, QSVDevice: c.qsvDevice.Text,
-			GPUIndex: atoi(c.gpuIndex.Text),
+			// When no nodes were detected (detection failure,
+			// non-Linux, pre-detect window) the dropdown selection is
+			// empty; fall back to the loaded profile's saved path so a
+			// Save in that state keeps the configured device instead of
+			// wiping it from config.yaml.
+			VAAPIDevice: firstNonEmpty(c.vaapiDevice.Selected, c.vaapiDeviceSeed),
+			QSVDevice:   firstNonEmpty(qsvDeviceValue(c.qsvDevice.Selected), c.qsvDeviceSeed),
+			GPUIndex:    atoi(c.gpuIndex.Text),
 		},
 		Audio: model.AudioSettings{
 			Mode: c.audioMode.Selected, Encoder: c.audioEncoder.Selected,
@@ -969,20 +992,20 @@ func (c *Controller) populateRateControlOptions(preferred string) {
 	}
 }
 
-// profileDefaultOption is the dropdown label standing in for "emit no
-// -profile:v". The empty string is reserved for that state because
-// Profile: "" legitimately means "no flag" in the profile model.
-const profileDefaultOption = "(default)"
+// defaultOption is the dropdown label standing in for "emit no
+// -profile:v" (Profile) and "use ffmpeg's default device" (QSV
+// device) — both map to the empty string in the profile model.
+const defaultOption = "(default)"
 
 func profileValueToOption(value string) string {
 	if strings.TrimSpace(value) == "" {
-		return profileDefaultOption
+		return defaultOption
 	}
 	return value
 }
 
 func profileOptionToValue(option string) string {
-	if option == profileDefaultOption {
+	if option == defaultOption {
 		return ""
 	}
 	return option
@@ -1023,11 +1046,11 @@ func (c *Controller) populateProfileOptions(preferred string) {
 		c.videoProfile.Options = []string{}
 		return
 	}
-	options := append([]string{profileDefaultOption}, c.profileChoices(ve)...)
+	options := append([]string{defaultOption}, c.profileChoices(ve)...)
 	// Union the preferred and current values so out-of-list values
 	// stay visible instead of being silently dropped by SetSelected.
 	for _, extra := range []string{profileValueToOption(preferred), c.videoProfile.Selected} {
-		if extra != "" && extra != profileDefaultOption && !slices.Contains(options, extra) {
+		if extra != "" && extra != defaultOption && !slices.Contains(options, extra) {
 			options = append(options, extra)
 		}
 	}
@@ -1041,13 +1064,110 @@ func (c *Controller) populateProfileOptions(preferred string) {
 	// dropdown never shows the generic placeholder where a real state
 	// belongs.
 	if target == "" {
-		target = profileDefaultOption
+		target = defaultOption
 	}
 	// Only SetSelected when the value actually changes; firing
 	// OnChanged from inside updateControlState would re-enter
 	// updateControlState via changed() (see populateRateControlOptions).
 	if c.videoProfile.Selected != target {
 		c.videoProfile.SetSelected(target)
+	}
+}
+
+// qsvDeviceValue maps a QSV device dropdown option to the profile
+// value: "(default)" stands for the empty path, which tells ffmpeg to
+// pick its default device.
+func qsvDeviceValue(option string) string {
+	if option == defaultOption {
+		return ""
+	}
+	return option
+}
+
+// firstNonEmpty returns the first value with non-whitespace content,
+// or the empty string when there is none.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// updateDeviceOptions rebuilds the VAAPI and QSV device dropdowns from
+// the detected render nodes. It never changes a selection that is
+// still valid — reconcileDevices owns programmatic selection so
+// manual picks survive re-detections.
+func (c *Controller) updateDeviceOptions() {
+	nodes := c.caps.RenderNodes
+	c.vaapiDevice.Options = slices.Clone(nodes)
+	c.qsvDevice.Options = append([]string{defaultOption}, nodes...)
+	c.vaapiDevice.Refresh()
+	c.qsvDevice.Refresh()
+}
+
+// reconcileDevices aligns the device dropdowns with the probed node
+// list and the loaded profile's seeds. atLoad marks the
+// loadProfile-deferred call, where the freshly loaded profile is
+// authoritative; the detect-time call (atLoad=false) never overrides
+// an existing selection so manual device picks survive re-detections.
+//
+// A non-empty seed that no longer exists among the detected nodes is
+// replaced (first node for VAAPI, the default device for QSV) and
+// reported once via popup dialog; the seed is updated to the
+// replacement so later detections stay quiet.
+//
+// With no detected nodes (detection failure, non-Linux, pre-detect
+// window) reconciliation is a no-op: the dropdowns stay disabled and
+// profileFromWidgets falls back to the seeds, so nothing is lost.
+func (c *Controller) reconcileDevices(atLoad bool) {
+	nodes := c.caps.RenderNodes
+	if len(nodes) == 0 {
+		return
+	}
+	var notes []string
+
+	switch {
+	case c.vaapiDeviceSeed != "" && !slices.Contains(nodes, c.vaapiDeviceSeed):
+		replacement := nodes[0]
+		if c.vaapiDevice.Selected != replacement {
+			c.vaapiDevice.SetSelected(replacement)
+		}
+		notes = append(notes, fmt.Sprintf("The VAAPI device %s was not detected; using %s instead.", c.vaapiDeviceSeed, replacement))
+		c.vaapiDeviceSeed = replacement
+	case c.vaapiDevice.Selected == "":
+		// A load that ran before detection had no nodes to select
+		// from. Apply the pending seed when it is one of the nodes;
+		// an empty VAAPI device is never valid (validation requires
+		// a path), so anything else lands on the first node.
+		if slices.Contains(nodes, c.vaapiDeviceSeed) {
+			c.vaapiDevice.SetSelected(c.vaapiDeviceSeed)
+		} else {
+			c.vaapiDevice.SetSelected(nodes[0])
+		}
+	}
+
+	switch {
+	case c.qsvDeviceSeed != "" && !slices.Contains(nodes, c.qsvDeviceSeed):
+		if c.qsvDevice.Selected != defaultOption {
+			c.qsvDevice.SetSelected(defaultOption)
+		}
+		notes = append(notes, fmt.Sprintf("The QSV device %s was not detected; using the default device instead.", c.qsvDeviceSeed))
+		c.qsvDeviceSeed = ""
+	case c.qsvDevice.Selected == "":
+		// An empty QSV device means ffmpeg's default — a valid state,
+		// so unlike VAAPI it is kept visible as "(default)" rather
+		// than force-picked.
+		if c.qsvDeviceSeed == "" {
+			c.qsvDevice.SetSelected(defaultOption)
+		} else {
+			c.qsvDevice.SetSelected(c.qsvDeviceSeed)
+		}
+	}
+
+	if len(notes) > 0 && c.window != nil {
+		dialog.ShowInformation("Profile devices", strings.Join(notes, "\n\n"), c.window)
 	}
 }
 
@@ -1153,9 +1273,11 @@ func (c *Controller) updateControlState() {
 
 	// Hardware-device widgets are gated by the encoder's HWBackend.
 	// Each backend gets exactly one device widget enabled; copy and
-	// software encoders disable all three.
-	setEnabled(c.vaapiDevice, hw == encoder.HWVAAPI)
-	setEnabled(c.qsvDevice, hw == encoder.HWQSV)
+	// software encoders disable all three. A dropdown without options
+	// (no render nodes detected) stays disabled — its seed fallback
+	// still round-trips the saved value through profileFromWidgets.
+	setEnabled(c.vaapiDevice, hw == encoder.HWVAAPI && len(c.vaapiDevice.Options) > 0)
+	setEnabled(c.qsvDevice, hw == encoder.HWQSV && len(c.qsvDevice.Options) > 0)
 	setEnabled(c.gpuIndex, hw == encoder.HWNVENC)
 
 	copyAudio := c.audioMode.Selected == model.AudioCopy
