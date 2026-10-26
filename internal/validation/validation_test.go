@@ -63,6 +63,42 @@ func TestValidateRejectsUnavailableEncoders(t *testing.T) {
 	assertErrorContains(t, result, "profile.audio.encoder", "not available")
 }
 
+// TestValidateRejectsProfilesOutsideDetectedBuild pins the
+// build-narrowed profile check: when capabilities carry a narrowed
+// profile list (what `ffmpeg -h encoder=` enumerated), a value
+// curated for the project but absent from this build is rejected
+// with a clear message instead of failing at conversion time.
+// Missing capabilities or un-narrowed lists keep failing open.
+func TestValidateRejectsProfilesOutsideDetectedBuild(t *testing.T) {
+	profile := validProfile()
+	profile.Video.Encoder = "hevc_vaapi"
+	profile.Video.RateControl = "CQP"
+	profile.Video.QP = 26
+	profile.Video.VAAPIDevice = "/dev/dri/renderD128"
+
+	caps := capabilities()
+	caps.Encoders["hevc_vaapi"] = model.Encoder{Name: "hevc_vaapi", Profiles: []string{"main", "main10"}}
+
+	// A narrowed-list value passes (case-insensitively).
+	pass := profile
+	pass.Video.Profile = "MAIN"
+	if result := validation.ValidateProfile(pass, caps, nil); !result.Valid() {
+		t.Errorf("build-offered profile rejected: %#v", result.Errors)
+	}
+
+	// Curated for the project but absent from this build fails.
+	reject := profile
+	reject.Video.Profile = "rext"
+	result := validation.ValidateProfile(reject, caps, nil)
+	assertErrorContains(t, result, "profile.video.profile", "not offered by the detected FFmpeg build")
+
+	// No narrowing information (pre-detection, fail-open probe):
+	// curated values keep passing.
+	if result := validation.ValidateProfile(reject, capabilities(), nil); !result.Valid() {
+		t.Errorf("validation without build data must not reject curated values: %#v", result.Errors)
+	}
+}
+
 func TestValidateProfileAllowsCopyBeforeMediaIsLoaded(t *testing.T) {
 	profile := validProfile()
 	profile.Video.Encoder = "copy"

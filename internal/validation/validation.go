@@ -76,6 +76,7 @@ func validateProfile(profile model.Profile, capabilities model.Capabilities, med
 	}
 
 	validateVideo(&result, profile.Video, videoEncoder)
+	validateBuildProfile(&result, profile.Video, videoEncoder, capabilities)
 	validateAudio(&result, profile.Audio, capabilities)
 	validateSubtitles(&result, profile.Subtitles)
 
@@ -162,6 +163,34 @@ func validateVideo(result *Result, video model.VideoSettings, encoderName string
 		return
 	}
 	validateVideoForEncoder(result, video, ve, encoderName)
+}
+
+// validateBuildProfile rejects -profile:v values the detected FFmpeg
+// build does not offer. capabilities.Encoders[name].Profiles is the
+// curated list narrowed by `ffmpeg -h encoder=<name>` — the same
+// source the UI dropdown uses — closing the gap the registry's static
+// curated list cannot see (a value curated for the project but absent
+// from this build's option constants fails at conversion time with
+// "Undefined constant or missing '('"). Missing capabilities or an
+// un-narrowed list defer to the registry check, so pre-detection
+// calls and fail-open builds keep the old behavior.
+func validateBuildProfile(result *Result, video model.VideoSettings, encoderName string, capabilities model.Capabilities) {
+	value := strings.TrimSpace(video.Profile)
+	if encoderName == "copy" || value == "" {
+		return
+	}
+	m, ok := capabilities.Encoders[encoderName]
+	if !ok || len(m.Profiles) == 0 {
+		return
+	}
+	for _, p := range m.Profiles {
+		if strings.EqualFold(p, value) {
+			return
+		}
+	}
+	result.error("profile.video.profile",
+		"%s profile %q is not offered by the detected FFmpeg build; must be one of: %s",
+		encoderName, value, strings.Join(m.Profiles, ", "))
 }
 
 // validateVideoForEncoder dispatches per-encoder checks via the
