@@ -1193,3 +1193,218 @@ func TestDeviceSurvivesSaveWithoutDetectedNodes(t *testing.T) {
 		t.Errorf("QSV device after Save-with-empty-caps = %q, want \"\"", got.Video.QSVDevice)
 	}
 }
+
+// audioFormLabels reads the labels of the currently built audio form.
+func audioFormLabels(c *Controller) []string {
+	labels := []string{}
+	if len(c.audioFormBox.Objects) == 0 {
+		return labels
+	}
+	form, ok := c.audioFormBox.Objects[0].(*widget.Form)
+	if !ok {
+		return labels
+	}
+	for _, item := range form.Items {
+		labels = append(labels, item.Text)
+	}
+	return labels
+}
+
+// TestAudioFormRowMatrix pins the hide-not-grey row sets: copy mode
+// shows only Mode/all-audio/Subtitles; encode mode adds Encoder plus
+// Bitrate (bitrate encoders) or Compression (flac), labelled
+// "Compression" rather than "FLAC compression".
+func TestAudioFormRowMatrix(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// Unselected mode starts in the copy layout.
+	want := []string{"Mode", "", "Subtitles"}
+	if got := audioFormLabels(c); !slices.Equal(got, want) {
+		t.Fatalf("initial audio rows = %v, want %v", got, want)
+	}
+
+	c.audioMode.SetSelected(model.AudioEncode)
+	c.audioEncoder.SetSelected("libopus")
+	want = []string{"Mode", "Encoder", "Bitrate", "", "Subtitles"}
+	if got := audioFormLabels(c); !slices.Equal(got, want) {
+		t.Fatalf("libopus audio rows = %v, want %v", got, want)
+	}
+	if c.audioBitrate.Disabled() || c.audioEncoder.Disabled() {
+		t.Errorf("visible audio rows must be enabled (bitrate=%v encoder=%v)", c.audioBitrate.Disabled(), c.audioEncoder.Disabled())
+	}
+
+	c.audioEncoder.SetSelected("flac")
+	want = []string{"Mode", "Encoder", "Compression", "", "Subtitles"}
+	if got := audioFormLabels(c); !slices.Equal(got, want) {
+		t.Fatalf("flac audio rows = %v, want %v", got, want)
+	}
+	if c.compression.slider.Disabled() {
+		t.Errorf("visible compression row must be enabled")
+	}
+
+	c.audioMode.SetSelected(model.AudioCopy)
+	want = []string{"Mode", "", "Subtitles"}
+	if got := audioFormLabels(c); !slices.Equal(got, want) {
+		t.Fatalf("copy audio rows = %v, want %v", got, want)
+	}
+}
+
+// TestAudioFormNoRebuildOnIdenticalState pins the signature guard:
+// driving updateControlState without a state change must not rebuild
+// the form (the Form instance stays the same pointer).
+func TestAudioFormNoRebuildOnIdenticalState(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.audioMode.SetSelected(model.AudioEncode)
+	c.audioEncoder.SetSelected("libopus")
+
+	before := c.audioFormBox.Objects[0]
+	c.updateControlState()
+	c.updateControlState()
+	if c.audioFormBox.Objects[0] != before {
+		t.Errorf("identical state rebuilt the audio form")
+	}
+
+	// A real state change must rebuild.
+	c.audioEncoder.SetSelected("flac")
+	if c.audioFormBox.Objects[0] == before {
+		t.Errorf("mode/encoder change did not rebuild the audio form")
+	}
+}
+
+// TestAudioEncoderAutoSelectOnEncodeMode pins that switching to encode
+// mode with no usable selection picks the first available encoder, and
+// that "copy" never appears among the options.
+func TestAudioEncoderAutoSelectOnEncodeMode(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	if slices.Contains(c.audioEncoder.Options, "copy") {
+		t.Fatalf("audio encoder options %v must not contain copy", c.audioEncoder.Options)
+	}
+
+	c.audioMode.SetSelected(model.AudioEncode)
+	if got := c.audioEncoder.Selected; got == "" || got == "copy" {
+		t.Errorf("audio encoder after encode mode = %q, want auto-selected real encoder", got)
+	}
+}
+
+// TestAudioBitrateOptionsFollowEncoder pins the per-encoder bitrate
+// dropdown: libopus offers its choices, flac none, and a hand-edited
+// out-of-list value is kept visible.
+func TestAudioBitrateOptionsFollowEncoder(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.audioMode.SetSelected(model.AudioEncode)
+	c.audioEncoder.SetSelected("libopus")
+	if !slices.Equal(c.audioBitrate.Options, []string{"96k", "128k", "160k", "192k", "256k"}) {
+		t.Errorf("libopus bitrate options = %v", c.audioBitrate.Options)
+	}
+
+	c.audioEncoder.SetSelected("libmp3lame")
+	if !slices.Equal(c.audioBitrate.Options, []string{"128k", "192k", "256k", "320k", "160k"}) {
+		t.Errorf("libmp3lame bitrate options = %v (previous selection unioned)", c.audioBitrate.Options)
+	}
+
+	// A hand-edited/loaded out-of-list value is seeded via the
+	// preferred path (the loadProfile route) and stays visible.
+	c.populateAudioBitrateOptions("libmp3lame", "96k")
+	if got := c.audioBitrate.Selected; got != "96k" {
+		t.Errorf("out-of-list bitrate selection = %q, want 96k kept", got)
+	}
+	if !slices.Contains(c.audioBitrate.Options, "96k") {
+		t.Errorf("bitrate options %v do not contain the out-of-list value", c.audioBitrate.Options)
+	}
+}
+
+// TestCopyModeAudioRoundTrip pins that a copy-mode profile keeps
+// encoder:"copy" and its bitrate through loadProfile/profileFromWidgets
+// even though the encoder and bitrate rows are hidden.
+func TestCopyModeAudioRoundTrip(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	profile := c.config.Profiles[0]
+	profile.Audio = model.AudioSettings{Mode: model.AudioCopy, Encoder: "copy", Bitrate: "160k", Compression: 8}
+	c.loadProfile(profile)
+
+	got := c.profileFromWidgets()
+	if got.Audio.Encoder != "copy" {
+		t.Errorf("copy-mode encoder = %q, want copy", got.Audio.Encoder)
+	}
+	if got.Audio.Bitrate != "160k" {
+		t.Errorf("copy-mode bitrate = %q, want 160k (seed round-trip)", got.Audio.Bitrate)
+	}
+	if got.Audio.Mode != model.AudioCopy {
+		t.Errorf("copy-mode round-trip mode = %q", got.Audio.Mode)
+	}
+}
+
+// TestEncodeModeSurvivesDetection is the A3 regression: switching to
+// encode mode while detection is still running used to let the
+// detection callback silently load a copy-mode built-in (encode +
+// encoder "copy" failed validation), snapping Mode back to copy and
+// greying out Encoder/Bitrate. With "copy" gone from the encoder
+// options and auto-selection in place, that state can no longer exist.
+func TestEncodeModeSurvivesDetection(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.audioMode.SetSelected(model.AudioEncode) // user acts while detection runs
+
+	// The detect() body: options from caps, control state, runnable
+	// profile selection.
+	c.caps = model.Capabilities{Encoders: map[string]model.Encoder{
+		"libopus":    {Name: "libopus", Media: ffmpeg.MediaAudio},
+		"copy":       {Name: "copy", Media: "video,audio"},
+		"h264_vaapi": {Name: "h264_vaapi", Media: ffmpeg.MediaVideo},
+	}}
+	c.updateEncoderOptions()
+	c.updateControlState()
+	c.selectRunnableProfile()
+
+	if got := c.audioMode.Selected; got != model.AudioEncode {
+		t.Errorf("audio mode after detection = %q, want encode (silent revert)", got)
+	}
+	if c.audioEncoder.Disabled() || c.audioBitrate.Disabled() {
+		t.Errorf("encoder=%v bitrate=%v disabled after detection, want enabled", c.audioEncoder.Disabled(), c.audioBitrate.Disabled())
+	}
+}
+
+// TestEncodeModeWithoutAudioEncodersReverts pins the zero-encoder
+// corner: a build with no audio encoders reverts the mode to copy
+// visibly instead of leaving an unsatisfiable encode selection.
+func TestEncodeModeWithoutAudioEncodersReverts(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.audioMode.SetSelected(model.AudioEncode)
+
+	c.caps = model.Capabilities{Encoders: map[string]model.Encoder{
+		"copy": {Name: "copy", Media: "video,audio"},
+	}}
+	c.updateEncoderOptions() // audio options become empty
+	c.updateControlState()
+
+	if got := c.audioMode.Selected; got != model.AudioCopy {
+		t.Errorf("audio mode with no audio encoders = %q, want visible revert to copy", got)
+	}
+}

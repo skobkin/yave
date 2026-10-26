@@ -130,17 +130,24 @@ type Controller struct {
 	audioMode       *widget.Select
 	audioEncoder    *widget.Select
 	audioBitrate    *widget.Select
-	compression     *integerSlider
-	allAudio        *widget.Check
-	subtitles       *widget.Select
-	command         *widget.Entry
-	progress        *widget.ProgressBar
-	progressInfo    *widget.Label
-	log             *widget.Entry
-	start           *widget.Button
-	cancel          *widget.Button
-	tabs            *container.AppTabs
-	runTab          *container.TabItem
+	// audioBitrateSeed keeps the loaded profile's bitrate while the
+	// bitrate dropdown is not shown (copy mode): the hidden widget's
+	// selection is empty, and profileFromWidgets falls back to the
+	// seed so a Save round-trips the value instead of wiping it.
+	audioBitrateSeed   string
+	audioFormBox       *fyne.Container
+	audioFormSignature string
+	compression        *integerSlider
+	allAudio           *widget.Check
+	subtitles          *widget.Select
+	command            *widget.Entry
+	progress           *widget.ProgressBar
+	progressInfo       *widget.Label
+	log                *widget.Entry
+	start              *widget.Button
+	cancel             *widget.Button
+	tabs               *container.AppTabs
+	runTab             *container.TabItem
 }
 
 func New(a fyne.App, initialInput string) (*Controller, error) {
@@ -272,12 +279,19 @@ func (c *Controller) createWidgets() {
 	c.gpuIndex = numericEntry(c.changed)
 
 	c.audioMode = widget.NewSelect([]string{model.AudioCopy, model.AudioEncode}, c.changed)
-	audioOpts := append([]string{"copy"}, encoder.DefaultRegistry().AudioNames()...)
-	c.audioEncoder = widget.NewSelect(audioOpts, c.changed)
-	c.audioBitrate = widget.NewSelect([]string{"96k", "128k", "160k", "192k", "256k", "320k"}, c.changed)
+	// "copy" is deliberately absent: copy mode has no encoder settings
+	// (see updateAudioControls), so the dropdown only ever lists real
+	// encoders.
+	c.audioEncoder = widget.NewSelect(encoder.DefaultRegistry().AudioNames(), c.changed)
+	c.audioBitrate = widget.NewSelect([]string{}, c.changed)
 	c.compression = newIntegerSlider(mustAudioCompressionRange("flac"), 8, c.changed)
 	c.allAudio = widget.NewCheck("Process all audio streams", func(bool) { c.changed("") })
 	c.subtitles = widget.NewSelect([]string{model.SubtitleNone, model.SubtitleCopy}, c.changed)
+	// The audio tab is one dynamic form rebuilt behind a signature; build
+	// the initial (copy-mode) row set here so tests and buildLayout see
+	// coherent state before the first updateControlState.
+	c.audioFormBox = container.NewVBox()
+	c.rebuildAudioForm()
 
 	c.command = widget.NewMultiLineEntry()
 	c.command.Disable()
@@ -341,14 +355,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		container.NewHBox(c.keepAspect, c.noUpscale),
 	))
 
-	audioTab := container.NewVBox(widget.NewForm(
-		widget.NewFormItem("Mode", c.audioMode),
-		widget.NewFormItem("Encoder", c.audioEncoder),
-		widget.NewFormItem("Bitrate", c.audioBitrate),
-		widget.NewFormItem("FLAC compression", c.compression.Object()),
-		widget.NewFormItem("", c.allAudio),
-		widget.NewFormItem("Subtitles", c.subtitles),
-	))
+	audioTab := container.NewVBox(c.audioFormBox)
 
 	runTab := container.NewBorder(
 		container.NewVBox(widget.NewLabel("Command"), c.command, widget.NewLabel("Output")),
@@ -900,14 +907,32 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.updateDeviceOptions()
 	c.gpuIndex.SetText(intText(p.Video.GPUIndex))
 	c.audioMode.SetSelected(p.Audio.Mode)
-	c.audioEncoder.SetSelected(p.Audio.Encoder)
-	c.audioBitrate.SetSelected(p.Audio.Bitrate)
+	// Copy-mode profiles carry Encoder: "copy" in YAML for validation
+	// compatibility; the dropdown only lists real encoders, so the
+	// value is not selected (the encoder row is hidden in copy mode
+	// and profileFromWidgets re-normalizes to "copy").
+	if p.Audio.Encoder != "copy" {
+		c.audioEncoder.SetSelected(p.Audio.Encoder)
+	}
+	// Seed the bitrate options for the just-loaded encoder before
+	// anything reads the selection (Fyne drops SetSelected values
+	// missing from Options). The seed keeps the loaded bitrate
+	// round-tripping while the row is hidden in copy mode.
+	c.audioBitrateSeed = p.Audio.Bitrate
+	c.populateAudioBitrateOptions(p.Audio.Encoder, p.Audio.Bitrate)
 	c.compression.SetValue(p.Audio.Compression)
 	c.allAudio.SetChecked(p.Audio.CopyAllStreams)
 	c.subtitles.SetSelected(p.Subtitles.Mode)
 }
 
 func (c *Controller) profileFromWidgets() model.Profile {
+	audioMode := c.audioMode.Selected
+	audioEncoder := c.audioEncoder.Selected
+	if audioMode != model.AudioEncode {
+		// Copy mode has no encoder settings; YAML/validation expect
+		// the literal "copy" encoder alongside the copy mode.
+		audioEncoder = "copy"
+	}
 	return model.Profile{
 		Name: c.profile.Selected, Container: c.container.Selected, OutputTemplate: c.output.Text,
 		Video: model.VideoSettings{
@@ -928,8 +953,9 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			GPUIndex:    atoi(c.gpuIndex.Text),
 		},
 		Audio: model.AudioSettings{
-			Mode: c.audioMode.Selected, Encoder: c.audioEncoder.Selected,
-			Bitrate: c.audioBitrate.Selected, Compression: c.compression.Value(),
+			Mode: audioMode, Encoder: audioEncoder,
+			Bitrate:        firstNonEmpty(c.audioBitrate.Selected, c.audioBitrateSeed),
+			Compression:    c.compression.Value(),
 			CopyAllStreams: c.allAudio.Checked,
 		},
 		Subtitles: model.SubtitleSettings{Mode: c.subtitles.Selected},
@@ -1171,6 +1197,132 @@ func (c *Controller) reconcileDevices(atLoad bool) {
 	}
 }
 
+// updateAudioControls settles the audio mode/encoder state before the
+// form rebuild: encode mode always has a real encoder selected (the
+// dropdown never contains "copy"), with per-encoder bitrate options in
+// place. A build with no audio encoders at all reverts the mode to
+// copy visibly rather than leaving an encode selection that cannot be
+// satisfied.
+func (c *Controller) updateAudioControls() {
+	if c.audioMode.Selected != model.AudioEncode {
+		return
+	}
+	if len(c.audioEncoder.Options) == 0 {
+		// Guarded revert: a visible state change beats a silent
+		// profile swap (and validation failing at Start).
+		if c.audioMode.Selected != model.AudioCopy {
+			c.audioMode.SetSelected(model.AudioCopy)
+		}
+		return
+	}
+	if !slices.Contains(c.audioEncoder.Options, c.audioEncoder.Selected) {
+		c.audioEncoder.SetSelected(c.audioEncoder.Options[0])
+	}
+	c.populateAudioBitrateOptions(c.audioEncoder.Selected, "")
+}
+
+// audioEncoderForName resolves the curated AudioEncoder for a dropdown
+// name, or nil for unknown names (e.g. "copy").
+func audioEncoderForName(name string) encoder.AudioEncoder {
+	if e, ok := encoder.DefaultRegistry().Get(name); ok {
+		ae, _ := e.(encoder.AudioEncoder)
+		return ae
+	}
+	return nil
+}
+
+// rebuildAudioForm rebuilds the audio tab's dynamic form when the
+// applicable row set changed (copy mode shows only Mode/all-audio/
+// Subtitles; encode mode adds Encoder plus Bitrate or Compression).
+func (c *Controller) rebuildAudioForm() {
+	items := c.audioFormItems()
+	rebuildFormOnSignature(c.audioFormBox, &c.audioFormSignature, items)
+	// Visible rows are never disabled: hiding replaces greying out.
+	c.audioMode.Enable()
+	c.allAudio.Enable()
+	c.subtitles.Enable()
+	if c.audioMode.Selected != model.AudioEncode {
+		return
+	}
+	c.audioEncoder.Enable()
+	for _, item := range items {
+		switch item.Text {
+		case "Bitrate":
+			c.audioBitrate.Enable()
+		case "Compression":
+			c.compression.Enable()
+		}
+	}
+}
+
+// audioFormItems computes the audio tab's row set from the current
+// mode and encoder capabilities. The same widget pointers are reused
+// across rebuilds, so no widget state is copied — only the row set
+// moves between Form instances.
+func (c *Controller) audioFormItems() []*widget.FormItem {
+	items := []*widget.FormItem{
+		widget.NewFormItem("Mode", c.audioMode),
+	}
+	if c.audioMode.Selected != model.AudioEncode {
+		return append(items,
+			widget.NewFormItem("", c.allAudio),
+			widget.NewFormItem("Subtitles", c.subtitles),
+		)
+	}
+	items = append(items, widget.NewFormItem("Encoder", c.audioEncoder))
+	ae := audioEncoderForName(c.audioEncoder.Selected)
+	switch {
+	case ae != nil && len(ae.BitrateChoices()) > 0:
+		items = append(items, widget.NewFormItem("Bitrate", c.audioBitrate))
+	case ae != nil:
+		if _, ok := ae.AudioCompressionRange(); ok {
+			items = append(items, widget.NewFormItem("Compression", c.compression.Object()))
+		}
+	}
+	return append(items,
+		widget.NewFormItem("", c.allAudio),
+		widget.NewFormItem("Subtitles", c.subtitles),
+	)
+}
+
+// populateAudioBitrateOptions rebuilds the bitrate dropdown from the
+// named encoder's choices. preferred (when non-empty) is the value the
+// dropdown should land on; the current selection is used when
+// preferred is empty, falling back to 160k (the historical default)
+// or the median choice. Out-of-list preferred/current values are
+// unioned into the options so hand-edited profiles stay visible and
+// validation reports them. Unknown encoders ("copy", pre-selection)
+// leave the dropdown untouched — it is hidden in those states and the
+// audioBitrateSeed keeps the loaded value round-tripping.
+func (c *Controller) populateAudioBitrateOptions(encoderName, preferred string) {
+	ae := audioEncoderForName(encoderName)
+	if ae == nil {
+		return
+	}
+	options := slices.Clone(ae.BitrateChoices())
+	target := preferred
+	if target == "" {
+		target = c.audioBitrate.Selected
+	}
+	for _, extra := range []string{target, c.audioBitrate.Selected} {
+		if extra != "" && !slices.Contains(options, extra) {
+			options = append(options, extra)
+		}
+	}
+	c.audioBitrate.Options = options
+	if target == "" {
+		switch {
+		case slices.Contains(options, "160k"):
+			target = "160k"
+		case len(options) > 0:
+			target = options[len(options)/2]
+		}
+	}
+	if target != "" && c.audioBitrate.Selected != target {
+		c.audioBitrate.SetSelected(target)
+	}
+}
+
 func (c *Controller) updateControlState() {
 	encoderName := c.videoEncoder.Selected
 	copyVideo := encoderName == "copy"
@@ -1280,10 +1432,47 @@ func (c *Controller) updateControlState() {
 	setEnabled(c.qsvDevice, hw == encoder.HWQSV && len(c.qsvDevice.Options) > 0)
 	setEnabled(c.gpuIndex, hw == encoder.HWNVENC)
 
-	copyAudio := c.audioMode.Selected == model.AudioCopy
-	setEnabled(c.audioEncoder, !copyAudio)
-	setEnabled(c.audioBitrate, !copyAudio && c.audioEncoder.Selected != "flac")
-	setEnabled(c.compression, !copyAudio && c.audioEncoder.Selected == "flac")
+	// Audio rows: visibility instead of grey-out. updateAudioControls
+	// first settles the encoder selection and bitrate options, then the
+	// form rebuild expresses the applicable row set; visible rows are
+	// always enabled.
+	c.updateAudioControls()
+	c.rebuildAudioForm()
+}
+
+// rebuildFormOnSignature swaps the form inside box when signature
+// changed. Fyne's widget.Form cannot hide rows (FormLayout skips a row
+// only when both cells are invisible) and mutating Form.Items is
+// unsafe (the render pass pairs items and labels positionally), so a
+// changed row set is expressed by building a fresh Form from the same
+// widget pointers. The signature guard keeps identical states from
+// rebuilding on every changed() tick. None of the widgets placed in
+// these forms implement fyne.Validatable, so a rebuild cannot leak
+// stale validation state.
+func rebuildFormOnSignature(box *fyne.Container, signature *string, items []*widget.FormItem) bool {
+	newSig := formItemsSignature(items)
+	if *signature == newSig {
+		return false
+	}
+	*signature = newSig
+	box.RemoveAll()
+	box.Add(widget.NewForm(items...))
+	box.Refresh()
+	return true
+}
+
+// formItemsSignature builds a comparable key from a form item list so
+// a stale signature is detected even when the caller's cached key and
+// the actual row set drift apart.
+func formItemsSignature(items []*widget.FormItem) string {
+	var b strings.Builder
+	for _, item := range items {
+		b.WriteString(item.Text)
+		b.WriteString("\x00")
+		b.WriteString(fmt.Sprintf("%p", item.Widget))
+		b.WriteString("\x00")
+	}
+	return b.String()
 }
 
 func (c *Controller) updateIntegerRanges() {
@@ -1351,7 +1540,10 @@ func (c *Controller) presetValue() string {
 }
 
 func (c *Controller) updateEncoderOptions() {
-	video, audio := []string{"copy"}, []string{"copy"}
+	// "copy" stays a video option (video passthrough is a real mode)
+	// but is never an audio encoder option: audio copy mode is
+	// expressed by Mode alone.
+	video, audio := []string{"copy"}, []string{}
 	for name, enc := range c.caps.Encoders {
 		if name == "copy" {
 			continue
@@ -1364,7 +1556,7 @@ func (c *Controller) updateEncoderOptions() {
 		}
 	}
 	sort.Strings(video[1:])
-	sort.Strings(audio[1:])
+	sort.Strings(audio)
 	c.videoEncoder.Options = video
 	c.videoEncoder.Refresh()
 	c.audioEncoder.Options = audio
