@@ -57,12 +57,14 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe) (model
 	}
 
 	hw := probeHWBackends(fs)
+	encoders := filterUnavailableHWEncoders(ParseEncoders(encodersOutput), hw)
+	narrowProfilesToBuild(ctx, ffmpegPath, encoders)
 	return model.Capabilities{
 		FFmpegPath:     ffmpegPath,
 		FFprobePath:    ffprobePath,
 		FFmpegVersion:  ParseVersion(ffmpegVersion),
 		FFprobeVersion: ParseVersion(ffprobeVersion),
-		Encoders:       filterUnavailableHWEncoders(ParseEncoders(encodersOutput), hw),
+		Encoders:       encoders,
 		HWAccels:       ParseHWAccels(hwaccelsOutput),
 
 		HWVAAPIAvailable: hw.vaapi,
@@ -70,6 +72,29 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe) (model
 		HWNVENCAvailable: hw.nvenc,
 		NVENCGPUCount:    hw.nvencGPUs,
 	}, nil
+}
+
+// narrowProfilesToBuild filters each discovered video encoder's
+// curated profile list down to the values the local ffmpeg build
+// enumerates via `ffmpeg -h encoder=<name>`. Builds that enumerate
+// nothing (free-string or absent -profile option) and probes that
+// fail keep the full curated list: absence of an enumeration is not
+// evidence of non-support. A probe that matches nothing curated also
+// keeps the curated list rather than presenting an empty dropdown.
+func narrowProfilesToBuild(ctx context.Context, ffmpegPath string, encoders map[string]model.Encoder) {
+	for name, m := range encoders {
+		if len(m.Profiles) == 0 {
+			continue
+		}
+		enumerated, err := probeEncoderProfiles(ctx, ffmpegPath, name)
+		if err != nil || len(enumerated) == 0 {
+			continue
+		}
+		if narrowed := intersectProfiles(m.Profiles, enumerated); len(narrowed) > 0 {
+			m.Profiles = narrowed
+			encoders[name] = m
+		}
+	}
 }
 
 // ResolveExecutable resolves configured through PATH when it is a bare

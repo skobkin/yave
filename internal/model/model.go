@@ -69,6 +69,10 @@ type Encoder struct {
 	Media    string
 	Kind     string
 	Priority int
+	// Profiles lists the -profile:v values this build accepts for the
+	// encoder (curated list narrowed by the build's own enumeration).
+	// Empty means no profile values are offered for this encoder.
+	Profiles []string
 }
 
 type Capabilities struct {

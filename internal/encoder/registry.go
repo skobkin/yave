@@ -92,13 +92,17 @@ func (r *Registry) Model(name string) (model.Encoder, bool) {
 	if !ok {
 		return model.Encoder{}, false
 	}
-	return model.Encoder{
+	m := model.Encoder{
 		Name:     e.Name(),
 		Label:    e.Label(),
 		Media:    e.Media(),
 		Kind:     e.Kind(),
 		Priority: e.Priority(),
-	}, true
+	}
+	if ve, ok := e.(VideoEncoder); ok {
+		m.Profiles = ve.Profiles()
+	}
+	return m, true
 }
 
 // Replace swaps the entire encoder set. Intended for tests.
