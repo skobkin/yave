@@ -100,6 +100,23 @@ func inCuratedList(list []string, value string) bool {
 	return false
 }
 
+// canonicalCurated returns the curated-list spelling matching value
+// case-insensitively after trimming, or the trimmed value when nothing
+// matches. ffmpeg's AVOption constant parser is case- and
+// whitespace-sensitive, while inCuratedList accepts the trimmed
+// case-insensitive form — every value validation accepts must be
+// normalized through this before it is emitted, or a hand-edited
+// "High" / " main " passes validation and dies at option parsing.
+func canonicalCurated(list []string, value string) string {
+	trimmed := strings.TrimSpace(value)
+	for _, entry := range list {
+		if strings.EqualFold(entry, trimmed) {
+			return entry
+		}
+	}
+	return trimmed
+}
+
 // profileIssues returns the shared -profile:v findings used by every
 // video encoder family: encoders that do not support the flag reject
 // any non-empty profile, and encoders with a curated list reject

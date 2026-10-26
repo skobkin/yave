@@ -104,6 +104,98 @@ func TestValidateRejectsUnknownProfile(t *testing.T) {
 	}
 }
 
+// argValue returns the value following flag in args.
+func argValue(args []string, flag string) (string, bool) {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
+// TestBuildVideoArgsCanonicalizesCuratedValues pins the emit side of
+// the accept-loose/emit-canonical contract: validation matches
+// profile/preset values case-insensitively after trimming, but
+// ffmpeg's option parsers are case- and whitespace-sensitive, so the
+// curated spelling must be emitted.
+func TestBuildVideoArgsCanonicalizesCuratedValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		encoder string
+		video   model.VideoSettings
+		flag    string
+		want    string
+	}{
+		{"vaapi profile case", "h264_vaapi",
+			model.VideoSettings{Encoder: "h264_vaapi", RateControl: "CQP", VAAPIDevice: "/dev/dri/renderD128", Profile: "High"},
+			"-profile:v", "high"},
+		{"vaapi profile whitespace", "hevc_vaapi",
+			model.VideoSettings{Encoder: "hevc_vaapi", RateControl: "CQP", VAAPIDevice: "/dev/dri/renderD128", Profile: " MAIN "},
+			"-profile:v", "main"},
+		{"nvenc preset case", "h264_nvenc",
+			model.VideoSettings{Encoder: "h264_nvenc", Preset: "P4"},
+			"-preset", "p4"},
+		{"nvenc profile case", "h264_nvenc",
+			model.VideoSettings{Encoder: "h264_nvenc", Preset: "P4", Profile: "HIGH"},
+			"-profile:v", "high"},
+		{"qsv preset whitespace", "h264_qsv",
+			model.VideoSettings{Encoder: "h264_qsv", Preset: " MEDIUM "},
+			"-preset", "medium"},
+		{"x264 profile whitespace", "libx264",
+			model.VideoSettings{Encoder: "libx264", CRF: 20, Profile: " MAIN "},
+			"-profile:v", "main"},
+		{"svtav1 profile case", "libsvtav1",
+			model.VideoSettings{Encoder: "libsvtav1", CRF: 30, Profile: "MAIN"},
+			"-profile:v", "main"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e, ok := DefaultRegistry().Get(tt.encoder)
+			if !ok {
+				t.Fatalf("%q is not registered", tt.encoder)
+			}
+			ve, ok := e.(VideoEncoder)
+			if !ok {
+				t.Fatalf("%q does not implement VideoEncoder", tt.encoder)
+			}
+			res, err := ve.BuildVideoArgs(tt.video)
+			if err != nil {
+				t.Fatalf("BuildVideoArgs returned error: %v", err)
+			}
+			got, ok := argValue(res.Args, tt.flag)
+			if !ok {
+				t.Fatalf("args %v lack %s", res.Args, tt.flag)
+			}
+			if got != tt.want {
+				t.Errorf("%s value = %q, want canonical %q (args %v)", tt.flag, got, tt.want, res.Args)
+			}
+		})
+	}
+}
+
+// TestWhitespaceOnlyProfileEmitsNoFlag matches profileIssues treating
+// a whitespace-only profile as empty: the emitted command must not
+// carry the flag either.
+func TestWhitespaceOnlyProfileEmitsNoFlag(t *testing.T) {
+	e, ok := DefaultRegistry().Get("libx264")
+	if !ok {
+		t.Fatal("libx264 is not registered")
+	}
+	ve, ok := e.(VideoEncoder)
+	if !ok {
+		t.Fatal("libx264 does not implement VideoEncoder")
+	}
+	res, err := ve.BuildVideoArgs(model.VideoSettings{Encoder: "libx264", CRF: 20, Profile: "   "})
+	if err != nil {
+		t.Fatalf("BuildVideoArgs returned error: %v", err)
+	}
+	if _, present := argValue(res.Args, "-profile:v"); present {
+		t.Errorf("whitespace-only profile emitted -profile:v: %v", res.Args)
+	}
+}
+
 // TestAudioBitrateChoices pins the bitrate choice list per audio
 // encoder; the validation refactor and the UI dropdown both read them.
 func TestAudioBitrateChoices(t *testing.T) {

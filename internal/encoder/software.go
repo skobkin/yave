@@ -99,10 +99,16 @@ func (e *softwareEncoder) VideoFilter(v model.VideoSettings, media model.MediaIn
 }
 
 // BuildVideoArgs builds the post -c:v flag list. The pre-input args
-// are empty for software encoders.
+// are empty for software encoders. The profile is normalized to the
+// canonical curated spelling before the per-encoder builder runs —
+// validation accepts case/whitespace variants the parsers reject
+// (libsvtav1 in particular; see canonicalCurated).
 func (e *softwareEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) {
 	if v.Encoder == "" {
 		return BuildResult{}, fmt.Errorf("video encoder is empty")
+	}
+	if e.supportsProfile {
+		v.Profile = canonicalCurated(e.profiles, v.Profile)
 	}
 	args := []string{"-c:v", e.name}
 	if e.buildArgs != nil {

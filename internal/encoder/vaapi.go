@@ -112,8 +112,11 @@ func (e *vaapiEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error
 	default:
 		return BuildResult{}, fmt.Errorf("unsupported VAAPI rate control %q", v.RateControl)
 	}
-	if v.Profile != "" {
-		args = append(args, "-profile:v", v.Profile)
+	// Emit the canonical curated spelling: validation accepts the
+	// trimmed case-insensitive form, but ffmpeg's option parser does
+	// not (see canonicalCurated).
+	if p := canonicalCurated(e.profiles, v.Profile); p != "" {
+		args = append(args, "-profile:v", p)
 	}
 	res.Args = args
 	return res, nil

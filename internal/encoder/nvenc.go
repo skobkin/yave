@@ -122,7 +122,10 @@ func (e *nvencEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error
 	if v.GPUIndex > 0 {
 		args = append(args, "-gpu", strconv.Itoa(v.GPUIndex))
 	}
-	preset := defaultString(v.Preset, e.presetDefault)
+	// Preset and profile are emitted in the canonical curated spelling
+	// — validation accepts case/whitespace variants ffmpeg's option
+	// parser rejects (see canonicalCurated).
+	preset := canonicalCurated(e.presets, defaultString(v.Preset, e.presetDefault))
 	if preset != "" {
 		args = append(args, e.presetFlag, preset)
 	}
@@ -158,8 +161,10 @@ func (e *nvencEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error
 	default:
 		return BuildResult{}, fmt.Errorf("unsupported NVENC rate control %q", v.RateControl)
 	}
-	if e.supportsProfile && v.Profile != "" {
-		args = append(args, "-profile:v", v.Profile)
+	if e.supportsProfile {
+		if p := canonicalCurated(e.profiles, v.Profile); p != "" {
+			args = append(args, "-profile:v", p)
+		}
 	}
 	res.Args = args
 	return res, nil
