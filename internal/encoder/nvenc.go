@@ -234,9 +234,15 @@ func nvencVideoEncoders() []Encoder {
 			supportsProfile: true,
 			// "mv" (motion-estimation-only MV between two streams) is
 			// deliberately not curated: it is not useful for yave's
-			// single-output conversions. main10 needs a 10-bit surface;
-			// yave's NVENC chain uploads nv12 only (see
-			// vaapiVideoEncoders for the constraint).
+			// single-output conversions. main10 is excluded for output
+			// correctness, not because it fails: NVENC has no
+			// profile↔surface-format table (that check is VAAPI-only,
+			// see vaapiVideoEncoders), so the value encodes — but it
+			// signals Main 10 over 8-bit content (verified on a
+			// GTX 1660 Ti: the output probes as profile "Main 10",
+			// pix_fmt yuv420p). Anyone picking main10 wants 10-bit
+			// output; a real 10-bit chain is tracked in the issue
+			// tracker.
 			profiles:   []string{"main"},
 			presetFlag: "-preset", presetName: "preset", presetDefault: "p4",
 		},

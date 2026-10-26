@@ -134,14 +134,19 @@ func (e *vaapiEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 // The profile lists start from `ffmpeg -h encoder=<name>` of the
 // reference build and are then restricted to the values that can
 // actually encode through yave's fixed 8-bit 4:2:0 upload chain
-// (format=nv12,hwupload): ffmpeg matches -profile:v against an
-// internal profile↔surface-format table before the driver is reached,
-// so a 10-bit or non-4:2:0 profile (h264 high10, hevc main10, av1
-// high/professional, vp9 profile 2) can never match an nv12 surface
-// and fails every conversion with "No usable encoding profile found."
-// regardless of hardware. hevc rext was encode-verified to work
-// through the nv12 chain. vp9_vaapi exposes no -h enumeration, but the
-// generic profile_idc integer 0 parses and reaches the driver.
+// (format=nv12,hwupload): ffmpeg's VAAPI encoder matches -profile:v
+// against an internal profile↔surface-format table before the driver
+// is reached, so a 10-bit or non-4:2:0 profile (h264 high10, hevc
+// main10, av1 high/professional, vp9 profile 2) can never match an
+// nv12 surface and fails every conversion with "No usable encoding
+// profile found." regardless of hardware. hevc rext was
+// encode-verified to work through the nv12 chain. vp9_vaapi exposes
+// no -h enumeration, but the generic profile_idc integer 0 parses and
+// reaches the driver.
+//
+// This table mechanism is VAAPI-specific — QSV validates via MFX and
+// NVENC via the driver (see their constructor comments) — but the
+// 8-bit-chain restriction holds for all three families.
 //
 // Restoring the dropped profiles needs a 10-bit chain (p010 upload /
 // vpp format conversion) — tracked in the issue tracker.

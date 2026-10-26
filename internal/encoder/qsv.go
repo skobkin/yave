@@ -238,8 +238,12 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 1, Max: 51},
 			presets:         qsvPresets,
 			supportsProfile: true,
-			// main10 needs a 10-bit surface; yave's QSV chain uploads
-			// nv12 only (see vaapiVideoEncoders for the constraint).
+			// main10 is dropped alongside the other hardware families:
+			// the chain uploads nv12 only, and MFX validates
+			// profile/depth consistency in its own init (source-derived
+			// — unverified on hardware here, no Intel GPU). The VAAPI
+			// table mechanism (vaapiVideoEncoders) does not apply to
+			// QSV. A real 10-bit chain is tracked in the issue tracker.
 			profiles:   []string{"main"},
 			presetFlag: "-preset", presetName: "preset", presetDefault: "medium",
 		},
@@ -258,8 +262,8 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 0, Max: 255},
 			presets:         qsvPresets,
 			supportsProfile: true,
-			// profile1/2/3 are 10- and 12-bit / non-4:2:0; the fixed
-			// nv12 chain can only serve profile0.
+			// profile1/2/3 are the 10-/12-bit and non-4:2:0 VP9
+			// profiles; the fixed nv12 chain serves profile0 only.
 			profiles:   []string{"profile0"},
 			presetFlag: "-preset", presetName: "preset", presetDefault: "medium",
 		},
