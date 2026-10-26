@@ -1063,6 +1063,76 @@ func TestDeviceSurvivesSaveWithoutDetectedNodes(t *testing.T) {
 	}
 }
 
+// TestQSVDefaultPickOverridesSeed is the UI/model divergence
+// regression: after a load applied the saved device, an explicit
+// "(default)" pick must map to the empty path. The seed only
+// backfills an empty dropdown selection — the model, the command
+// preview, and Save must follow what the dropdown shows.
+func TestQSVDefaultPickOverridesSeed(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := deviceCapableController()
+	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}}
+	c.updateDeviceOptions()
+	profile := c.config.Profiles[0]
+	profile.Video.Encoder = "hevc_qsv"
+	profile.Video.QSVDevice = "/dev/dri/renderD129"
+	c.loadProfile(profile)
+
+	if got := c.qsvDevice.Selected; got != "/dev/dri/renderD129" {
+		t.Fatalf("loaded QSV device selection = %q, want the saved node", got)
+	}
+	c.qsvDevice.SetSelected(defaultOption)
+	if got := c.profileFromWidgets().Video.QSVDevice; got != "" {
+		t.Errorf("QSV device with explicit (default) pick = %q, want \"\"", got)
+	}
+}
+
+// TestLoadProfileAppliesSavedDeviceOverStaleSelection is the
+// profile-switch regression: reconcileDevices at load time must apply
+// the freshly loaded profile's device even when a previously loaded
+// profile left a valid selection behind — otherwise the stale node is
+// previewed, encoded, and Saved into the newly loaded profile.
+func TestLoadProfileAppliesSavedDeviceOverStaleSelection(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := deviceCapableController()
+	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}}
+	c.updateDeviceOptions()
+
+	first := c.config.Profiles[0]
+	first.Video.Encoder = "hevc_vaapi"
+	first.Video.VAAPIDevice = "/dev/dri/renderD128"
+	first.Video.QSVDevice = "/dev/dri/renderD128"
+	c.loadProfile(first)
+
+	second := first
+	second.Video.VAAPIDevice = "/dev/dri/renderD129"
+	c.loadProfile(second)
+
+	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD129" {
+		t.Errorf("VAAPI selection after switching profiles = %q, want the loaded profile's /dev/dri/renderD129", got)
+	}
+	if got := c.profileFromWidgets().Video.VAAPIDevice; got != "/dev/dri/renderD129" {
+		t.Errorf("profile VAAPI device after switching profiles = %q, want the loaded profile's path", got)
+	}
+
+	// QSV variant: a profile saved with the default device must not
+	// inherit the previous profile's concrete node.
+	third := second
+	third.Video.Encoder = "hevc_qsv"
+	third.Video.QSVDevice = ""
+	c.loadProfile(third)
+	if got := c.qsvDevice.Selected; got != defaultOption {
+		t.Errorf("QSV selection after switching to a default-device profile = %q, want (default)", got)
+	}
+	if got := c.profileFromWidgets().Video.QSVDevice; got != "" {
+		t.Errorf("profile QSV device after switching profiles = %q, want \"\"", got)
+	}
+}
+
 // audioFormLabels reads the labels of the currently built audio form.
 func audioFormLabels(c *Controller) []string {
 	labels := []string{}

@@ -959,9 +959,13 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			// non-Linux, pre-detect window) the dropdown selection is
 			// empty; fall back to the loaded profile's saved path so a
 			// Save in that state keeps the configured device instead of
-			// wiping it from config.yaml.
+			// wiping it from config.yaml. The seed only backfills an
+			// empty selection: an explicit "(default)" pick maps to the
+			// empty path and must win over the seed, or the model would
+			// silently keep the pre-pick device while the dropdown
+			// shows "(default)".
 			VAAPIDevice: firstNonEmpty(c.vaapiDevice.Selected, c.vaapiDeviceSeed),
-			QSVDevice:   firstNonEmpty(qsvDeviceValue(c.qsvDevice.Selected), c.qsvDeviceSeed),
+			QSVDevice:   qsvDeviceFromWidgets(c),
 			GPUIndex:    atoi(c.gpuIndex.Text),
 		},
 		Audio: model.AudioSettings{
@@ -1122,6 +1126,18 @@ func qsvDeviceValue(option string) string {
 	return option
 }
 
+// qsvDeviceFromWidgets resolves the QSV device for the profile model.
+// An empty dropdown selection (no nodes detected yet, or never
+// selected) falls back to the loaded profile's saved path so a Save
+// cannot wipe it; any visible selection — "(default)" included — is
+// authoritative and maps through qsvDeviceValue.
+func qsvDeviceFromWidgets(c *Controller) string {
+	if c.qsvDevice.Selected == "" {
+		return c.qsvDeviceSeed
+	}
+	return qsvDeviceValue(c.qsvDevice.Selected)
+}
+
 // firstNonEmpty returns the first value with non-whitespace content,
 // or the empty string when there is none.
 func firstNonEmpty(values ...string) string {
@@ -1148,8 +1164,14 @@ func (c *Controller) updateDeviceOptions() {
 // reconcileDevices aligns the device dropdowns with the probed node
 // list and the loaded profile's seeds. atLoad marks the
 // loadProfile-deferred call, where the freshly loaded profile is
-// authoritative; the detect-time call (atLoad=false) never overrides
-// an existing selection so manual device picks survive re-detections.
+// authoritative: its device (or the replacement for a seed no longer
+// among the nodes) is selected even when a previous profile left a
+// valid selection behind — keeping that selection would preview,
+// encode, and Save the wrong device into the newly loaded profile.
+// The detect-time call (atLoad=false) never overrides an existing
+// selection so manual device picks survive re-detections; it only
+// fills an empty selection (a load that ran before nodes were known)
+// and applies replacements.
 //
 // A non-empty seed that no longer exists among the detected nodes is
 // replaced (first node for VAAPI, the default device for QSV) and
@@ -1166,41 +1188,51 @@ func (c *Controller) reconcileDevices(atLoad bool) {
 	}
 	var notes []string
 
-	switch {
-	case c.vaapiDeviceSeed != "" && !slices.Contains(nodes, c.vaapiDeviceSeed):
-		replacement := nodes[0]
-		if c.vaapiDevice.Selected != replacement {
-			c.vaapiDevice.SetSelected(replacement)
+	// Resolve each dropdown's target: the loaded seed while it is one
+	// of the detected nodes, otherwise the replacement. Only a
+	// non-empty vanished seed counts as replaced (reported + reseeded);
+	// an empty seed keeps its meaning — "no device configured yet" for
+	// VAAPI (validation requires a path) and "ffmpeg's default" for QSV.
+	vaapiTarget := c.vaapiDeviceSeed
+	vaapiReplaced := false
+	if !slices.Contains(nodes, vaapiTarget) {
+		vaapiTarget = nodes[0]
+		if c.vaapiDeviceSeed != "" {
+			vaapiReplaced = true
+			notes = append(notes, fmt.Sprintf("The VAAPI device %s was not detected; using %s instead.", c.vaapiDeviceSeed, vaapiTarget))
+			c.vaapiDeviceSeed = vaapiTarget
 		}
-		notes = append(notes, fmt.Sprintf("The VAAPI device %s was not detected; using %s instead.", c.vaapiDeviceSeed, replacement))
-		c.vaapiDeviceSeed = replacement
-	case c.vaapiDevice.Selected == "":
-		// A load that ran before detection had no nodes to select
-		// from. Apply the pending seed when it is one of the nodes;
-		// an empty VAAPI device is never valid (validation requires
-		// a path), so anything else lands on the first node.
-		if slices.Contains(nodes, c.vaapiDeviceSeed) {
-			c.vaapiDevice.SetSelected(c.vaapiDeviceSeed)
-		} else {
-			c.vaapiDevice.SetSelected(nodes[0])
+	}
+	qsvTarget := c.qsvDeviceSeed
+	qsvReplaced := false
+	if !slices.Contains(nodes, qsvTarget) {
+		// An empty QSV device means ffmpeg's default — a valid state,
+		// kept visible as "(default)" rather than force-picked.
+		qsvTarget = defaultOption
+		if c.qsvDeviceSeed != "" {
+			qsvReplaced = true
+			notes = append(notes, fmt.Sprintf("The QSV device %s was not detected; using the default device instead.", c.qsvDeviceSeed))
+			c.qsvDeviceSeed = ""
 		}
 	}
 
-	switch {
-	case c.qsvDeviceSeed != "" && !slices.Contains(nodes, c.qsvDeviceSeed):
-		if c.qsvDevice.Selected != defaultOption {
-			c.qsvDevice.SetSelected(defaultOption)
+	// Only SetSelected when the value actually changes; Select fires
+	// OnChanged on every assignment, which would re-enter
+	// updateControlState via changed().
+	selectTarget := func(sel *widget.Select, target string) {
+		if sel.Selected != target {
+			sel.SetSelected(target)
 		}
-		notes = append(notes, fmt.Sprintf("The QSV device %s was not detected; using the default device instead.", c.qsvDeviceSeed))
-		c.qsvDeviceSeed = ""
-	case c.qsvDevice.Selected == "":
-		// An empty QSV device means ffmpeg's default — a valid state,
-		// so unlike VAAPI it is kept visible as "(default)" rather
-		// than force-picked.
-		if c.qsvDeviceSeed == "" {
-			c.qsvDevice.SetSelected(defaultOption)
-		} else {
-			c.qsvDevice.SetSelected(c.qsvDeviceSeed)
+	}
+	if atLoad {
+		selectTarget(c.vaapiDevice, vaapiTarget)
+		selectTarget(c.qsvDevice, qsvTarget)
+	} else {
+		if vaapiReplaced || c.vaapiDevice.Selected == "" {
+			selectTarget(c.vaapiDevice, vaapiTarget)
+		}
+		if qsvReplaced || c.qsvDevice.Selected == "" {
+			selectTarget(c.qsvDevice, qsvTarget)
 		}
 	}
 
