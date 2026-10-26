@@ -85,8 +85,12 @@ type Controller struct {
 	outputPreview *widget.Label
 	videoEncoder  *widget.Select
 	rateControl   *widget.Select
-	qp            *integerSlider
-	crf           *integerSlider
+	// rateControlHint explains the selected rate-control mode (Auto
+	// and VBR semantics are not obvious). It is a plain label so mode
+	// switches update it by SetText without rebuilding the form.
+	rateControlHint *widget.Label
+	qp              *integerSlider
+	crf             *integerSlider
 	// qpRangeEncoder and crfRangeEncoder record which encoder's range is
 	// currently set on the QP and CRF sliders. An empty string means the
 	// slider's range is stale (the prior encoder did not expose the control),
@@ -140,6 +144,8 @@ type Controller struct {
 	compression        *integerSlider
 	allAudio           *widget.Check
 	subtitles          *widget.Select
+	videoFormBox       *fyne.Container
+	videoFormSignature string
 	command            *widget.Entry
 	progress           *widget.ProgressBar
 	progressInfo       *widget.Label
@@ -256,6 +262,8 @@ func (c *Controller) createWidgets() {
 	c.videoEncoder = widget.NewSelect(videoOpts, c.changed)
 	// rateControl options are populated per-encoder by updateControlState.
 	c.rateControl = widget.NewSelect([]string{}, c.changed)
+	c.rateControlHint = widget.NewLabel("")
+	c.rateControlHint.Wrapping = fyne.TextWrapWord
 	c.qp = newIntegerSlider(mustQPRange("hevc_vaapi"), 30, c.changed)
 	c.crf = newIntegerSlider(mustCRFRange("libx265"), 28, c.changed)
 	c.bitrate = entry(c.changed)
@@ -292,6 +300,9 @@ func (c *Controller) createWidgets() {
 	// coherent state before the first updateControlState.
 	c.audioFormBox = container.NewVBox()
 	c.rebuildAudioForm()
+	// Same for the video tab (initially just the Encoder row).
+	c.videoFormBox = container.NewVBox()
+	c.rebuildVideoForm()
 
 	c.command = widget.NewMultiLineEntry()
 	c.command.Disable()
@@ -332,28 +343,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		widget.NewCard("Resolved output", "", c.outputPreview),
 	)
 
-	videoTab := container.NewVScroll(container.NewVBox(
-		widget.NewForm(
-			widget.NewFormItem("Encoder", c.videoEncoder),
-			widget.NewFormItem("Rate control", c.rateControl),
-			widget.NewFormItem("QP", c.qp.Object()),
-			widget.NewFormItem("CRF", c.crf.Object()),
-			widget.NewFormItem("Target bitrate", c.bitrate),
-			widget.NewFormItem("Maximum bitrate", c.maxrate),
-			widget.NewFormItem("Buffer size", c.bufsize),
-			widget.NewFormItem("Preset", c.presetControl),
-			widget.NewFormItem("Tune", c.tune),
-			widget.NewFormItem("Profile", c.videoProfile),
-			widget.NewFormItem("Frame rate mode", c.frameMode),
-			widget.NewFormItem("Frame rate", c.frameRate),
-			widget.NewFormItem("Maximum width", c.maxWidth),
-			widget.NewFormItem("Maximum height", c.maxHeight),
-			widget.NewFormItem("VAAPI device", c.vaapiDevice),
-			widget.NewFormItem("QSV device", c.qsvDevice),
-			widget.NewFormItem("GPU index", c.gpuIndex),
-		),
-		container.NewHBox(c.keepAspect, c.noUpscale),
-	))
+	videoTab := container.NewVScroll(container.NewVBox(c.videoFormBox))
 
 	audioTab := container.NewVBox(c.audioFormBox)
 
@@ -925,6 +915,17 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.subtitles.SetSelected(p.Subtitles.Mode)
 }
 
+// videoProfileValue maps the Profile dropdown to the profile value,
+// emitting "" for encoders that do not accept -profile:v — their row
+// is hidden, so a stale invisible selection must never reach the
+// saved profile.
+func (c *Controller) videoProfileValue() string {
+	if ve := c.currentVideoEncoder(); ve == nil || !ve.SupportsProfile() {
+		return ""
+	}
+	return profileOptionToValue(c.videoProfile.Selected)
+}
+
 func (c *Controller) profileFromWidgets() model.Profile {
 	audioMode := c.audioMode.Selected
 	audioEncoder := c.audioEncoder.Selected
@@ -939,7 +940,7 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			Encoder: c.videoEncoder.Selected, RateControl: c.rateControl.Selected,
 			QP: c.qp.Value(), CRF: c.crf.Value(), Bitrate: c.bitrate.Text,
 			Maxrate: c.maxrate.Text, Bufsize: c.bufsize.Text, Preset: c.presetValue(),
-			Tune: c.tune.Text, Profile: profileOptionToValue(c.videoProfile.Selected),
+			Tune: c.tune.Text, Profile: c.videoProfileValue(),
 			FrameRateMode: c.frameMode.Selected, FrameRate: c.frameRate.Text,
 			MaxWidth: atoi(c.maxWidth.Text), MaxHeight: atoi(c.maxHeight.Text),
 			KeepAspectRatio: c.keepAspect.Checked, PreventUpscaling: c.noUpscale.Checked,
@@ -1325,12 +1326,12 @@ func (c *Controller) populateAudioBitrateOptions(encoderName, preferred string) 
 
 func (c *Controller) updateControlState() {
 	encoderName := c.videoEncoder.Selected
-	copyVideo := encoderName == "copy"
+	copyVideo := encoderName == "copy" || encoderName == ""
 
 	// Look up the encoder from the registry. Unknown names (e.g. before
 	// detection completes, or a name stripped by ParseEncoders) leave ve
-	// nil and every video control disabled — the dropdown still updates
-	// so the user can pick another.
+	// nil and the video tab collapses to the Encoder row — the dropdown
+	// still updates so the user can pick another.
 	var ve encoder.VideoEncoder
 	if !copyVideo {
 		if e, ok := encoder.DefaultRegistry().Get(encoderName); ok {
@@ -1343,34 +1344,14 @@ func (c *Controller) updateControlState() {
 	c.populateRateControlOptions("")
 
 	mode := c.rateControl.Selected
-	var hw = encoder.HWNone
-	var qpOK, crfOK, presetOK, supportsPreset bool
+	var presetOK, supportsPreset, supportsProfile bool
 	var presetR encoder.IntegerRange
-	var supportsTune, supportsProfile bool
 	if ve != nil {
-		hw = ve.HWBackend()
-		_, qpOK = ve.QPRange()
-		_, crfOK = ve.CRFRange()
 		presetR, presetOK = ve.PresetRange()
-		supportsTune = ve.SupportsTune()
 		supportsProfile = ve.SupportsProfile()
 		supportsPreset = ve.SupportsPreset()
 	}
 	integerPreset := presetOK && presetR.Max >= presetR.Min
-
-	setEnabled(c.rateControl, ve != nil)
-	setEnabled(c.qp, qpOK && strings.EqualFold(mode, "CQP"))
-	setEnabled(c.crf, crfOK && !strings.EqualFold(mode, "bitrate"))
-
-	bitrateMode := strings.EqualFold(mode, "VBR") ||
-		strings.EqualFold(mode, "CBR") ||
-		strings.EqualFold(mode, "bitrate") ||
-		strings.EqualFold(mode, "Auto")
-	setEnabled(c.bitrate, ve != nil && bitrateMode)
-
-	rateCapped := strings.EqualFold(mode, "VBR") || strings.EqualFold(mode, "CBR")
-	setEnabled(c.maxrate, ve != nil && rateCapped)
-	setEnabled(c.bufsize, ve != nil && rateCapped)
 
 	// Preset: toggle between text entry and integer slider. When
 	// switching to an integer-preset encoder, sync the slider from the
@@ -1394,43 +1375,62 @@ func (c *Controller) updateControlState() {
 		c.presetSlider.Hide()
 		c.preset.Show()
 	}
-	setEnabled(c.preset, ve != nil && supportsPreset && !integerPreset)
-	setEnabled(c.presetSlider, ve != nil && supportsPreset && integerPreset)
 
-	setEnabled(c.tune, supportsTune)
 	if supportsProfile {
 		// The options must exist before any SetSelected; keep them in
 		// sync with the encoder here so encoder switches relist values.
 		c.populateProfileOptions("")
-		c.videoProfile.Enable()
 	} else {
-		// av1_nvenc (and any other encoder that does not accept
-		// -profile:v) leaves the Profile widget disabled. A stale
-		// selection would still feed profileFromWidgets and fail
-		// validation as a hard error — drop it rather than trap the
-		// user. The Selected != "" guard prevents ClearSelected from
+		// The Profile row is hidden for these encoders (see
+		// videoFormItems); clear the invisible selection so switching
+		// back to a supporting encoder never resurrects a stale value.
+		// The Selected != "" guard prevents ClearSelected from
 		// re-firing OnChanged and re-entering updateControlState.
 		c.videoProfile.Options = []string{}
-		c.videoProfile.Disable()
 		if c.videoProfile.Selected != "" {
 			c.videoProfile.ClearSelected()
 		}
 	}
-	setEnabled(c.frameMode, ve != nil)
-	setEnabled(c.frameRate, ve != nil && c.frameMode.Selected == "convert")
-	setEnabled(c.maxWidth, ve != nil)
-	setEnabled(c.maxHeight, ve != nil)
-	setEnabled(c.keepAspect, ve != nil)
-	setEnabled(c.noUpscale, ve != nil)
 
-	// Hardware-device widgets are gated by the encoder's HWBackend.
-	// Each backend gets exactly one device widget enabled; copy and
-	// software encoders disable all three. A dropdown without options
-	// (no render nodes detected) stays disabled — its seed fallback
-	// still round-trips the saved value through profileFromWidgets.
-	setEnabled(c.vaapiDevice, hw == encoder.HWVAAPI && len(c.vaapiDevice.Options) > 0)
-	setEnabled(c.qsvDevice, hw == encoder.HWQSV && len(c.qsvDevice.Options) > 0)
-	setEnabled(c.gpuIndex, hw == encoder.HWNVENC)
+	// The rate-control hint explains the selected mode — this is what
+	// makes Auto and VBR legible. The hint lives in its own label so
+	// mode switches that keep the same row set update text without a
+	// form rebuild.
+	if hint := rateControlHintText(mode); c.rateControlHint.Text != hint {
+		c.rateControlHint.SetText(hint)
+	}
+
+	c.rebuildVideoForm()
+
+	// Everything visible is enabled; the form rebuild is what expresses
+	// applicability. The preset control keeps its internal entry/slider
+	// toggle (both live in one form row).
+	c.rateControl.Enable()
+	c.qp.Enable()
+	c.crf.Enable()
+	c.bitrate.Enable()
+	c.maxrate.Enable()
+	c.bufsize.Enable()
+	c.preset.Enable()
+	c.presetSlider.Enable()
+	c.tune.Enable()
+	c.videoProfile.Enable()
+	c.frameMode.Enable()
+	c.frameRate.Enable()
+	c.maxWidth.Enable()
+	c.maxHeight.Enable()
+	c.keepAspect.Enable()
+	c.noUpscale.Enable()
+	// Device dropdowns without options (no render nodes detected) stay
+	// disabled — their seed fallback still round-trips the saved value
+	// through profileFromWidgets.
+	if len(c.vaapiDevice.Options) > 0 {
+		c.vaapiDevice.Enable()
+	}
+	if len(c.qsvDevice.Options) > 0 {
+		c.qsvDevice.Enable()
+	}
+	c.gpuIndex.Enable()
 
 	// Audio rows: visibility instead of grey-out. updateAudioControls
 	// first settles the encoder selection and bitrate options, then the
@@ -1438,6 +1438,116 @@ func (c *Controller) updateControlState() {
 	// always enabled.
 	c.updateAudioControls()
 	c.rebuildAudioForm()
+}
+
+// rateControlHintText explains the selected rate-control mode: what
+// the user is expected to set, and what the encoder does with it. An
+// unknown/empty mode returns the empty string.
+func rateControlHintText(mode string) string {
+	switch {
+	case strings.EqualFold(mode, "Auto"):
+		return "Encoder default rate control. A target bitrate is optional."
+	case strings.EqualFold(mode, "CQP"):
+		return "Constant quality: every frame gets the same quantization parameter. Set QP (lower is better quality)."
+	case strings.EqualFold(mode, "CRF"):
+		return "Constant quality: set CRF (lower is better quality)."
+	case strings.EqualFold(mode, "VBR"):
+		return "Set a target bitrate; maximum bitrate and buffer size cap the peaks."
+	case strings.EqualFold(mode, "CBR"):
+		return "Constant bitrate: set the target bitrate (the maximum is forced to match)."
+	case strings.EqualFold(mode, "bitrate"):
+		return "Set the target bitrate."
+	}
+	return ""
+}
+
+// currentVideoEncoder resolves the selected video encoder, or nil for
+// "copy", an empty selection, or an unknown name.
+func (c *Controller) currentVideoEncoder() encoder.VideoEncoder {
+	name := c.videoEncoder.Selected
+	if name == "" || name == "copy" {
+		return nil
+	}
+	if e, ok := encoder.DefaultRegistry().Get(name); ok {
+		ve, _ := e.(encoder.VideoEncoder)
+		return ve
+	}
+	return nil
+}
+
+// rebuildVideoForm rebuilds the Video tab's dynamic form when the
+// applicable row set changed; see videoFormItems for the matrix.
+func (c *Controller) rebuildVideoForm() {
+	rebuildFormOnSignature(c.videoFormBox, &c.videoFormSignature, c.videoFormItems())
+}
+
+// videoFormItems computes the Video tab's row set from the selected
+// encoder and rate-control mode. Rows that cannot affect the command
+// are left out entirely (hide over grey-out): copy mode collapses the
+// tab to the Encoder row, and each rate-control mode shows only the
+// controls its BuildVideoArgs consumes.
+func (c *Controller) videoFormItems() []*widget.FormItem {
+	items := []*widget.FormItem{
+		widget.NewFormItem("Encoder", c.videoEncoder),
+	}
+	ve := c.currentVideoEncoder()
+	if ve == nil {
+		return items
+	}
+
+	if len(ve.RateControlModes()) > 0 {
+		items = append(items,
+			widget.NewFormItem("Rate control", c.rateControl),
+			widget.NewFormItem("", c.rateControlHint),
+		)
+	}
+	mode := c.rateControl.Selected
+	rateCapped := strings.EqualFold(mode, "VBR") || strings.EqualFold(mode, "CBR")
+	bitrateShown := rateCapped || strings.EqualFold(mode, "bitrate") ||
+		(strings.EqualFold(mode, "Auto") && ve.HWBackend() == encoder.HWVAAPI)
+	switch {
+	case strings.EqualFold(mode, "CQP"):
+		items = append(items, widget.NewFormItem("QP", c.qp.Object()))
+	case strings.EqualFold(mode, "CRF"):
+		items = append(items, widget.NewFormItem("CRF", c.crf.Object()))
+	case bitrateShown:
+		items = append(items, widget.NewFormItem("Target bitrate", c.bitrate))
+	}
+	if rateCapped {
+		items = append(items,
+			widget.NewFormItem("Maximum bitrate", c.maxrate),
+			widget.NewFormItem("Buffer size", c.bufsize),
+		)
+	}
+	if ve.SupportsPreset() {
+		items = append(items, widget.NewFormItem("Preset", c.presetControl))
+	}
+	if ve.SupportsTune() {
+		items = append(items, widget.NewFormItem("Tune", c.tune))
+	}
+	if ve.SupportsProfile() {
+		items = append(items, widget.NewFormItem("Profile", c.videoProfile))
+	}
+	items = append(items, widget.NewFormItem("Frame rate mode", c.frameMode))
+	if c.frameMode.Selected == "convert" {
+		items = append(items, widget.NewFormItem("Frame rate", c.frameRate))
+	}
+	items = append(items,
+		widget.NewFormItem("Maximum width", c.maxWidth),
+		widget.NewFormItem("Maximum height", c.maxHeight),
+		widget.NewFormItem("", container.NewHBox(c.keepAspect, c.noUpscale)),
+	)
+	switch ve.HWBackend() {
+	case encoder.HWVAAPI:
+		items = append(items, widget.NewFormItem("VAAPI device", c.vaapiDevice))
+	case encoder.HWQSV:
+		items = append(items, widget.NewFormItem("QSV device", c.qsvDevice))
+	case encoder.HWNVENC:
+		gpuItem := widget.NewFormItem("GPU index", c.gpuIndex)
+		gpuItem.HintText = "NVIDIA GPU to use when several are present"
+		items = append(items, gpuItem)
+	}
+	return items
 }
 
 // rebuildFormOnSignature swaps the form inside box when signature

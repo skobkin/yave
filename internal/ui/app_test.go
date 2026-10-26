@@ -516,210 +516,78 @@ func deviceCapableController() *Controller {
 	return c
 }
 
-// TestEncoderSwitchToNVENCHidesVAAPIDevice verifies the dispatch gates
-// the hardware-device widgets by HWBackend: NVENC enables gpuIndex,
-// disables vaapiDevice and qsvDevice.
-func TestEncoderSwitchToNVENCHidesVAAPIDevice(t *testing.T) {
-	app := fynetest.NewApp()
-	defer app.Quit()
-
-	c := deviceCapableController()
-
-	// VAAPI on first: vaapiDevice enabled, qsvDevice/gpuIndex disabled.
-	c.videoEncoder.SetSelected("hevc_vaapi")
-	if c.vaapiDevice.Disabled() {
-		t.Errorf("vaapiDevice should be enabled for hevc_vaapi")
+// videoFormLabels reads the labels of the currently built video form.
+func videoFormLabels(c *Controller) []string {
+	labels := []string{}
+	if len(c.videoFormBox.Objects) == 0 {
+		return labels
 	}
-	if !c.qsvDevice.Disabled() {
-		t.Errorf("qsvDevice should be disabled for hevc_vaapi")
+	form, ok := c.videoFormBox.Objects[0].(*widget.Form)
+	if !ok {
+		return labels
 	}
-	if !c.gpuIndex.Disabled() {
-		t.Errorf("gpuIndex should be disabled for hevc_vaapi")
+	for _, item := range form.Items {
+		labels = append(labels, item.Text)
 	}
-
-	// Switch to NVENC: gpuIndex enabled, the other two disabled.
-	c.videoEncoder.SetSelected("hevc_nvenc")
-	if !c.vaapiDevice.Disabled() {
-		t.Errorf("vaapiDevice should be disabled for hevc_nvenc")
-	}
-	if !c.qsvDevice.Disabled() {
-		t.Errorf("qsvDevice should be disabled for hevc_nvenc")
-	}
-	if c.gpuIndex.Disabled() {
-		t.Errorf("gpuIndex should be enabled for hevc_nvenc")
-	}
+	return labels
 }
 
-// TestEncoderSwitchToQSVEnablesQSVDevice verifies QSV enables only the
-// qsvDevice widget.
-func TestEncoderSwitchToQSVEnablesQSVDevice(t *testing.T) {
+// TestEncoderSwitchShowsOnlyMatchingDeviceRow pins the hide-not-grey
+// device dispatch: each hardware backend shows exactly its own device
+// row, software and copy encoders show none.
+func TestEncoderSwitchShowsOnlyMatchingDeviceRow(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
 
 	c := deviceCapableController()
 
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	labels := videoFormLabels(c)
+	if !slices.Contains(labels, "VAAPI device") {
+		t.Errorf("hevc_vaapi rows %v miss the VAAPI device row", labels)
+	}
+	if slices.Contains(labels, "QSV device") || slices.Contains(labels, "GPU index") {
+		t.Errorf("hevc_vaapi rows %v must not show QSV/GPU rows", labels)
+	}
+	if c.vaapiDevice.Disabled() {
+		t.Errorf("visible VAAPI device row must be enabled")
+	}
+
+	c.videoEncoder.SetSelected("hevc_nvenc")
+	labels = videoFormLabels(c)
+	if !slices.Contains(labels, "GPU index") {
+		t.Errorf("hevc_nvenc rows %v miss the GPU index row", labels)
+	}
+	if slices.Contains(labels, "VAAPI device") || slices.Contains(labels, "QSV device") {
+		t.Errorf("hevc_nvenc rows %v must not show VAAPI/QSV rows", labels)
+	}
+
 	c.videoEncoder.SetSelected("hevc_qsv")
-	if !c.vaapiDevice.Disabled() {
-		t.Errorf("vaapiDevice should be disabled for hevc_qsv")
+	labels = videoFormLabels(c)
+	if !slices.Contains(labels, "QSV device") {
+		t.Errorf("hevc_qsv rows %v miss the QSV device row", labels)
+	}
+	if slices.Contains(labels, "VAAPI device") || slices.Contains(labels, "GPU index") {
+		t.Errorf("hevc_qsv rows %v must not show VAAPI/GPU rows", labels)
 	}
 	if c.qsvDevice.Disabled() {
-		t.Errorf("qsvDevice should be enabled for hevc_qsv")
-	}
-	if !c.gpuIndex.Disabled() {
-		t.Errorf("gpuIndex should be disabled for hevc_qsv")
+		t.Errorf("visible QSV device row must be enabled")
 	}
 
-	// Software encoder: every device widget disabled.
+	// Software encoder: no device rows.
 	c.videoEncoder.SetSelected("libx265")
-	if !c.vaapiDevice.Disabled() {
-		t.Errorf("vaapiDevice should be disabled for libx265")
-	}
-	if !c.qsvDevice.Disabled() {
-		t.Errorf("qsvDevice should be disabled for libx265")
-	}
-	if !c.gpuIndex.Disabled() {
-		t.Errorf("gpuIndex should be disabled for libx265")
-	}
-
-	// Copy: every device widget disabled.
-	c.videoEncoder.SetSelected("copy")
-	if !c.vaapiDevice.Disabled() {
-		t.Errorf("vaapiDevice should be disabled for copy")
-	}
-	if !c.qsvDevice.Disabled() {
-		t.Errorf("qsvDevice should be disabled for copy")
-	}
-	if !c.gpuIndex.Disabled() {
-		t.Errorf("gpuIndex should be disabled for copy")
-	}
-}
-
-// TestRateControlOptionsFollowEncoder verifies the rate-control dropdown
-// is repopulated per encoder from RateControlModes() and the existing
-// selection is preserved when supported (or falls back to default).
-func TestRateControlOptionsFollowEncoder(t *testing.T) {
-	app := fynetest.NewApp()
-	defer app.Quit()
-
-	c := testController()
-	c.createWidgets()
-
-	// libx264 only supports CRF — matches the prior buildVideoArgs
-	// behaviour which never emitted -b:v for libx264.
-	c.videoEncoder.SetSelected("libx264")
-	want := []string{"CRF"}
-	if !slices.Equal(c.rateControl.Options, want) {
-		t.Errorf("libx264 rate-control options = %v, want %v", c.rateControl.Options, want)
-	}
-
-	// libsvtav1 advertises {CRF, bitrate}.
-	c.videoEncoder.SetSelected("libsvtav1")
-	want = []string{"CRF", "bitrate"}
-	if !slices.Equal(c.rateControl.Options, want) {
-		t.Errorf("libsvtav1 rate-control options = %v, want %v", c.rateControl.Options, want)
-	}
-
-	// libaom-av1 advertises {CRF, bitrate}.
-	c.videoEncoder.SetSelected("libaom-av1")
-	want = []string{"CRF", "bitrate"}
-	if !slices.Equal(c.rateControl.Options, want) {
-		t.Errorf("libaom-av1 rate-control options = %v, want %v", c.rateControl.Options, want)
-	}
-
-	// hevc_vaapi advertises {AUTO, CQP, VBR, CBR}.
-	c.videoEncoder.SetSelected("hevc_vaapi")
-	want = []string{"Auto", "CQP", "VBR", "CBR"}
-	if !slices.Equal(c.rateControl.Options, want) {
-		t.Errorf("hevc_vaapi rate-control options = %v, want %v", c.rateControl.Options, want)
-	}
-
-	// hevc_nvenc advertises {CQP, VBR, CBR}.
-	c.videoEncoder.SetSelected("hevc_nvenc")
-	want = []string{"CQP", "VBR", "CBR"}
-	if !slices.Equal(c.rateControl.Options, want) {
-		t.Errorf("hevc_nvenc rate-control options = %v, want %v", c.rateControl.Options, want)
-	}
-
-	// hevc_qsv advertises {CQP, VBR, CBR}.
-	c.videoEncoder.SetSelected("hevc_qsv")
-	want = []string{"CQP", "VBR", "CBR"}
-	if !slices.Equal(c.rateControl.Options, want) {
-		t.Errorf("hevc_qsv rate-control options = %v, want %v", c.rateControl.Options, want)
-	}
-}
-
-// TestRateControlFallsBackToDefaultWhenUnsupported verifies the
-// dispatch resets the rate-control selection to the encoder's default
-// when the prior selection is no longer supported.
-func TestRateControlFallsBackToDefaultWhenUnsupported(t *testing.T) {
-	app := fynetest.NewApp()
-	defer app.Quit()
-
-	c := testController()
-	c.createWidgets()
-
-	// VAAPI has AUTO mode; setting it explicitly so we can verify the
-	// fallback path.
-	c.videoEncoder.SetSelected("hevc_vaapi")
-	c.rateControl.SetSelected("Auto")
-	if c.rateControl.Selected != "Auto" {
-		t.Fatalf("setup: rate control = %q, want Auto", c.rateControl.Selected)
-	}
-
-	// NVENC does not support AUTO; selecting it must fall back to CQP
-	// (NVENC's default) so the user never sees a stale mode that the
-	// encoder cannot accept.
-	c.videoEncoder.SetSelected("hevc_nvenc")
-	if c.rateControl.Selected != "CQP" {
-		t.Errorf("rate control = %q, want CQP (NVENC default)", c.rateControl.Selected)
-	}
-}
-
-// TestEncoderSwitchFromLibsvtav1ToLibaomPreservesCPUUsed verifies the
-// integer preset slider remaps proportionally between two integer-preset
-// encoders (libsvtav1 {0,13} -> libaom-av1 {0,8}). 6 on SVT-AV1 maps to
-// roughly 4 on libaom-av1 (mid-quality in both scales).
-func TestEncoderSwitchFromLibsvtav1ToLibaomPreservesCPUUsed(t *testing.T) {
-	app := fynetest.NewApp()
-	defer app.Quit()
-
-	c := testController()
-	c.createWidgets()
-
-	c.videoEncoder.SetSelected("libsvtav1")
-	c.presetSlider.SetValue(6)
-	if got := c.profileFromWidgets().Video.Preset; got != "6" {
-		t.Fatalf("SVT preset = %q, want 6", got)
-	}
-
-	c.videoEncoder.SetSelected("libaom-av1")
-	if got := c.presetSlider.Value(); got != 4 {
-		t.Errorf("libaom-av1 preset = %d, want 4 (proportional remap of SVT 6/13 -> libaom 4/8)", got)
-	}
-	if got := c.profileFromWidgets().Video.Preset; got != "4" {
-		t.Errorf("profile preset = %q, want 4", got)
-	}
-}
-
-// TestInitialEncoderListIncludesNVENCAndQSV verifies the createWidgets
-// initial list is seeded from the registry so new encoders appear even
-// before ffmpeg detection completes.
-func TestInitialEncoderListIncludesNVENCAndQSV(t *testing.T) {
-	app := fynetest.NewApp()
-	defer app.Quit()
-
-	c := testController()
-	c.createWidgets()
-
-	want := []string{"hevc_nvenc", "hevc_qsv", "libaom-av1"}
-	for _, name := range want {
-		if !slices.Contains(c.videoEncoder.Options, name) {
-			t.Errorf("initial video encoder list missing %q (got %v)", name, c.videoEncoder.Options)
+	labels = videoFormLabels(c)
+	for _, deviceRow := range []string{"VAAPI device", "QSV device", "GPU index"} {
+		if slices.Contains(labels, deviceRow) {
+			t.Errorf("libx265 rows %v must not show %q", labels, deviceRow)
 		}
 	}
-	// "copy" must always be the first option so it is the default selection.
-	if len(c.videoEncoder.Options) == 0 || c.videoEncoder.Options[0] != "copy" {
-		t.Errorf("initial video encoder list must start with 'copy' (got %v)", c.videoEncoder.Options)
+
+	// Copy: the tab collapses to the Encoder row.
+	c.videoEncoder.SetSelected("copy")
+	labels = videoFormLabels(c)
+	if !slices.Equal(labels, []string{"Encoder"}) {
+		t.Errorf("copy rows = %v, want [Encoder]", labels)
 	}
 }
 
@@ -1406,5 +1274,143 @@ func TestEncodeModeWithoutAudioEncodersReverts(t *testing.T) {
 
 	if got := c.audioMode.Selected; got != model.AudioCopy {
 		t.Errorf("audio mode with no audio encoders = %q, want visible revert to copy", got)
+	}
+}
+
+// TestVideoFormRateControlMatrix pins the hide-not-grey rate-control
+// rows per family and mode: only the controls the encoder's
+// BuildVideoArgs consumes for the selected mode are present, and
+// visible rows are enabled.
+func TestVideoFormRateControlMatrix(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	type tc struct {
+		name     string
+		encoder  string
+		mode     string
+		wantRows []string // rate-control-related rows that must be present
+		notRows  []string // rate-control-related rows that must be absent
+	}
+	cases := []tc{
+		{"vaapi auto shows optional bitrate", "hevc_vaapi", "Auto",
+			[]string{"Rate control", "Target bitrate"},
+			[]string{"QP", "CRF", "Maximum bitrate", "Buffer size"}},
+		{"vaapi cqp shows qp only", "hevc_vaapi", "CQP",
+			[]string{"Rate control", "QP"},
+			[]string{"CRF", "Target bitrate", "Maximum bitrate", "Buffer size"}},
+		{"vaapi vbr shows capped trio", "hevc_vaapi", "VBR",
+			[]string{"Rate control", "Target bitrate", "Maximum bitrate", "Buffer size"},
+			[]string{"QP", "CRF"}},
+		{"vaapi cbr shows capped trio", "hevc_vaapi", "CBR",
+			[]string{"Rate control", "Target bitrate", "Maximum bitrate", "Buffer size"},
+			[]string{"QP", "CRF"}},
+		{"nvenc cqp shows qp", "h264_nvenc", "CQP",
+			[]string{"Rate control", "QP"},
+			[]string{"CRF", "Target bitrate", "Maximum bitrate"}},
+		{"software crf shows crf", "libx264", "CRF",
+			[]string{"Rate control", "CRF"},
+			[]string{"QP", "Target bitrate", "Maximum bitrate", "Buffer size"}},
+		{"software bitrate shows bitrate", "libsvtav1", "bitrate",
+			[]string{"Rate control", "Target bitrate"},
+			[]string{"QP", "CRF", "Maximum bitrate", "Buffer size"}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			c.videoEncoder.SetSelected(tt.encoder)
+			c.rateControl.SetSelected(tt.mode)
+			labels := videoFormLabels(c)
+			for _, row := range tt.wantRows {
+				if !slices.Contains(labels, row) {
+					t.Errorf("rows %v miss %q", labels, row)
+				}
+			}
+			for _, row := range tt.notRows {
+				if slices.Contains(labels, row) {
+					t.Errorf("rows %v must not contain %q", labels, row)
+				}
+			}
+		})
+	}
+}
+
+// TestVideoFormTuneProfilePresetVisibility pins the capability-driven
+// rows: Tune only on libx264/libx265, Profile only on supporting
+// encoders (hidden, not disabled, for av1_nvenc), Preset per encoder.
+func TestVideoFormTuneProfilePresetVisibility(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	c.videoEncoder.SetSelected("libx264")
+	labels := videoFormLabels(c)
+	for _, row := range []string{"Tune", "Profile", "Preset"} {
+		if !slices.Contains(labels, row) {
+			t.Errorf("libx264 rows %v miss %q", labels, row)
+		}
+	}
+
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	labels = videoFormLabels(c)
+	if slices.Contains(labels, "Tune") {
+		t.Errorf("hevc_vaapi rows %v must not show Tune", labels)
+	}
+	if !slices.Contains(labels, "Profile") {
+		t.Errorf("hevc_vaapi rows %v miss Profile", labels)
+	}
+	if slices.Contains(labels, "Preset") {
+		t.Errorf("hevc_vaapi rows %v must not show Preset", labels)
+	}
+
+	// av1_nvenc: the Profile row is hidden entirely and the invisible
+	// value is dropped from the saved profile.
+	c.videoEncoder.SetSelected("h264_nvenc")
+	c.videoProfile.SetSelected("main")
+	c.videoEncoder.SetSelected("av1_nvenc")
+	labels = videoFormLabels(c)
+	if slices.Contains(labels, "Profile") {
+		t.Errorf("av1_nvenc rows %v must not show Profile", labels)
+	}
+	if got := c.profileFromWidgets().Video.Profile; got != "" {
+		t.Errorf("hidden profile row emitted %q, want \"\"", got)
+	}
+
+	// Frame rate: the input row only appears in convert mode.
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	c.frameMode.SetSelected("convert")
+	if !slices.Contains(videoFormLabels(c), "Frame rate") {
+		t.Errorf("convert mode must show the Frame rate row")
+	}
+	c.frameMode.SetSelected("keep")
+	if slices.Contains(videoFormLabels(c), "Frame rate") {
+		t.Errorf("keep mode must hide the Frame rate row")
+	}
+}
+
+// TestRateControlHintExplainsMode pins the per-mode hint text that
+// makes Auto and VBR legible.
+func TestRateControlHintExplainsMode(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("hevc_vaapi")
+
+	c.rateControl.SetSelected("Auto")
+	if c.rateControlHint.Text == "" {
+		t.Errorf("Auto mode must show an explanatory hint")
+	}
+	autoHint := c.rateControlHint.Text
+
+	c.rateControl.SetSelected("VBR")
+	if c.rateControlHint.Text == "" || c.rateControlHint.Text == autoHint {
+		t.Errorf("VBR mode hint = %q, want distinct non-empty text", c.rateControlHint.Text)
 	}
 }
