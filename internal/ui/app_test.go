@@ -746,7 +746,7 @@ func TestProfileFromWidgetsIncludesQSVDeviceAndGPUIndex(t *testing.T) {
 // the previous encoder) cannot be edited away by the user. The
 // widget still feeds profileFromWidgets, so profileFromWidgets would
 // emit the stale profile and nvencEncoder.Validate would reject it —
-// the user is stuck. Switching encoder must clear the field so the
+// the user is stuck. Switching encoder must clear the selection so the
 // round-trip through loadProfile / profileFromWidgets does not
 // contain a value the encoder refuses.
 func TestProfileClearedWhenEncoderDoesNotSupportProfile(t *testing.T) {
@@ -756,17 +756,17 @@ func TestProfileClearedWhenEncoderDoesNotSupportProfile(t *testing.T) {
 	c := testController()
 	c.createWidgets()
 
-	// Two paths leave the Profile field populated: (a) the user
-	// typed/saved a profile on a supporting encoder (e.g. h264_nvenc
+	// Two paths leave the Profile widget populated: (a) the user
+	// picked/saved a profile on a supporting encoder (e.g. h264_nvenc
 	// "main"), then (b) the user picks av1_nvenc. Both paths must
 	// drop the value.
 	t.Run("user switch to av1_nvenc", func(t *testing.T) {
 		c.videoEncoder.SetSelected("h264_nvenc")
-		c.videoProfile.SetText("main")
+		c.videoProfile.SetSelected("main")
 		c.videoEncoder.SetSelected("av1_nvenc")
 
-		if got := c.videoProfile.Text; got != "" {
-			t.Errorf("videoProfile.Text after switch to av1_nvenc = %q, want \"\"", got)
+		if got := profileOptionToValue(c.videoProfile.Selected); got != "" {
+			t.Errorf("videoProfile selection after switch to av1_nvenc = %q, want cleared", got)
 		}
 		if got := c.profileFromWidgets().Video.Profile; got != "" {
 			t.Errorf("profileFromWidgets().Video.Profile after switch to av1_nvenc = %q, want \"\"", got)
@@ -781,8 +781,8 @@ func TestProfileClearedWhenEncoderDoesNotSupportProfile(t *testing.T) {
 		profile.Video.Profile = "main"
 		c.loadProfile(profile)
 
-		if got := c.videoProfile.Text; got != "" {
-			t.Errorf("videoProfile.Text after load = %q, want \"\"", got)
+		if got := profileOptionToValue(c.videoProfile.Selected); got != "" {
+			t.Errorf("videoProfile selection after load = %q, want cleared", got)
 		}
 		if got := c.profileFromWidgets().Video.Profile; got != "" {
 			t.Errorf("profileFromWidgets().Video.Profile after load = %q, want \"\"", got)
@@ -790,16 +790,18 @@ func TestProfileClearedWhenEncoderDoesNotSupportProfile(t *testing.T) {
 	})
 
 	// Sanity check: switching back to a profile-supporting encoder
-	// must not invent a value where the user had none. An empty
-	// field stays empty so the encoder sees the same null state it
-	// would on first launch.
+	// must not invent a value where the user had none. The widget
+	// lands on "(default)" — the visible null state that emits no
+	// -profile:v — rather than keeping a phantom value.
 	t.Run("switching back does not repopulate", func(t *testing.T) {
 		c.videoEncoder.SetSelected("av1_nvenc")
-		c.videoProfile.SetText("") // already empty; ensures SetText("") does not re-fire changed
 
 		c.videoEncoder.SetSelected("h264_nvenc")
-		if got := c.videoProfile.Text; got != "" {
-			t.Errorf("videoProfile.Text after switch back to h264_nvenc = %q, want \"\"", got)
+		if got := profileOptionToValue(c.videoProfile.Selected); got != "" {
+			t.Errorf("videoProfile selection after switch back to h264_nvenc = %q, want \"\"", got)
+		}
+		if got := c.profileFromWidgets().Video.Profile; got != "" {
+			t.Errorf("profileFromWidgets().Video.Profile after switch back = %q, want \"\"", got)
 		}
 	})
 }
@@ -961,5 +963,93 @@ func TestSelectRunnableProfileFallsBackWhenHWFiltered(t *testing.T) {
 	}
 	if got := c.videoEncoder.Selected; got != "libx265" {
 		t.Errorf("selected encoder = %q, want %q", got, "libx265")
+	}
+}
+
+// TestProfileOptionsFollowEncoder pins the per-encoder profile
+// dropdown: options rebuild from the encoder's curated list plus the
+// "(default)" prefix, unsupported encoders empty the list, and the
+// detected build's narrowed list takes precedence when present.
+func TestProfileOptionsFollowEncoder(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	want := []string{"(default)", "main", "main10", "rext"}
+	if !slices.Equal(c.videoProfile.Options, want) {
+		t.Errorf("hevc_vaapi profile options = %v, want %v", c.videoProfile.Options, want)
+	}
+	if got := c.videoProfile.Selected; got != "(default)" {
+		t.Errorf("hevc_vaapi initial profile selection = %q, want %q", got, "(default)")
+	}
+
+	c.videoEncoder.SetSelected("av1_nvenc")
+	if len(c.videoProfile.Options) != 0 {
+		t.Errorf("av1_nvenc profile options = %v, want empty", c.videoProfile.Options)
+	}
+
+	// The detected build's list wins over the curated fallback.
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	c.caps = model.Capabilities{Encoders: map[string]model.Encoder{
+		"hevc_vaapi": {Name: "hevc_vaapi", Media: ffmpeg.MediaVideo, Profiles: []string{"main"}},
+	}}
+	c.updateControlState()
+	if !slices.Equal(c.videoProfile.Options, []string{"(default)", "main"}) {
+		t.Errorf("build-narrowed options = %v, want [(default) main]", c.videoProfile.Options)
+	}
+}
+
+// TestProfileOptionValueMapping covers the "(default)" <-> "" mapping
+// in both directions.
+func TestProfileOptionValueMapping(t *testing.T) {
+	if got := profileValueToOption(""); got != "(default)" {
+		t.Errorf("profileValueToOption(\"\") = %q, want %q", got, "(default)")
+	}
+	if got := profileValueToOption("main"); got != "main" {
+		t.Errorf("profileValueToOption(\"main\") = %q, want %q", got, "main")
+	}
+	if got := profileOptionToValue("(default)"); got != "" {
+		t.Errorf("profileOptionToValue(\"(default)\") = %q, want \"\"", got)
+	}
+	if got := profileOptionToValue("main10"); got != "main10" {
+		t.Errorf("profileOptionToValue(\"main10\") = %q, want %q", got, "main10")
+	}
+}
+
+// TestLoadProfileSeedsProfileOptions pins that loadProfile makes the
+// saved profile value selectable before reading it back: an
+// out-of-list value stays visible in the dropdown (union seeding) so
+// validation — not a silently emptied widget — reports it, and an
+// in-list value is selected verbatim.
+func TestLoadProfileSeedsProfileOptions(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	profile := c.config.Profiles[0]
+	profile.Video.Encoder = "hevc_vaapi"
+	profile.Video.Profile = "main10"
+	c.loadProfile(profile)
+	if got := c.profileFromWidgets().Video.Profile; got != "main10" {
+		t.Errorf("in-list profile round-trip = %q, want main10", got)
+	}
+
+	// A value outside the curated list must survive the load instead
+	// of being silently dropped by SetSelected.
+	profile.Video.Profile = "main444"
+	c.loadProfile(profile)
+	if got := c.videoProfile.Selected; got != "main444" {
+		t.Errorf("out-of-list selection = %q, want main444 kept visible", got)
+	}
+	if !slices.Contains(c.videoProfile.Options, "main444") {
+		t.Errorf("options %v do not contain the out-of-list saved value", c.videoProfile.Options)
+	}
+	if got := c.profileFromWidgets().Video.Profile; got != "main444" {
+		t.Errorf("out-of-list profile round-trip = %q, want main444", got)
 	}
 }

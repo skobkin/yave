@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -109,7 +110,7 @@ type Controller struct {
 	presetSlider       *integerSlider
 	presetControl      *fyne.Container
 	tune               *widget.Entry
-	videoProfile       *widget.Entry
+	videoProfile       *widget.Select
 	frameMode          *widget.Select
 	frameRate          *widget.Entry
 	maxWidth           *widget.Entry
@@ -251,7 +252,8 @@ func (c *Controller) createWidgets() {
 	c.presetSlider.Hide()
 	c.presetControl = container.NewStack(c.preset, c.presetSlider.Object())
 	c.tune = entry(c.changed)
-	c.videoProfile = entry(c.changed)
+	// Profile options are populated per-encoder by populateProfileOptions.
+	c.videoProfile = widget.NewSelect([]string{}, c.changed)
 	c.frameMode = widget.NewSelect([]string{"keep", "convert"}, c.changed)
 	c.frameRate = entry(c.changed)
 	c.maxWidth = numericEntry(c.changed)
@@ -865,7 +867,12 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.bufsize.SetText(p.Video.Bufsize)
 	c.preset.SetText(p.Video.Preset)
 	c.tune.SetText(p.Video.Tune)
-	c.videoProfile.SetText(p.Video.Profile)
+	// Seed the profile options for the just-selected encoder before
+	// anything reads the selection: same Fyne ordering rule as the
+	// rate-control dropdown above (SetSelected silently drops values
+	// missing from Options). populateProfileOptions also performs the
+	// SetSelected when preferred is non-empty.
+	c.populateProfileOptions(p.Video.Profile)
 	c.frameMode.SetSelected(p.Video.FrameRateMode)
 	c.frameRate.SetText(p.Video.FrameRate)
 	c.maxWidth.SetText(intText(p.Video.MaxWidth))
@@ -890,7 +897,7 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			Encoder: c.videoEncoder.Selected, RateControl: c.rateControl.Selected,
 			QP: c.qp.Value(), CRF: c.crf.Value(), Bitrate: c.bitrate.Text,
 			Maxrate: c.maxrate.Text, Bufsize: c.bufsize.Text, Preset: c.presetValue(),
-			Tune: c.tune.Text, Profile: c.videoProfile.Text,
+			Tune: c.tune.Text, Profile: profileOptionToValue(c.videoProfile.Selected),
 			FrameRateMode: c.frameMode.Selected, FrameRate: c.frameRate.Text,
 			MaxWidth: atoi(c.maxWidth.Text), MaxHeight: atoi(c.maxHeight.Text),
 			KeepAspectRatio: c.keepAspect.Checked, PreventUpscaling: c.noUpscale.Checked,
@@ -959,6 +966,88 @@ func (c *Controller) populateRateControlOptions(preferred string) {
 		if c.rateControl.Selected != fallback {
 			c.rateControl.SetSelected(fallback)
 		}
+	}
+}
+
+// profileDefaultOption is the dropdown label standing in for "emit no
+// -profile:v". The empty string is reserved for that state because
+// Profile: "" legitimately means "no flag" in the profile model.
+const profileDefaultOption = "(default)"
+
+func profileValueToOption(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return profileDefaultOption
+	}
+	return value
+}
+
+func profileOptionToValue(option string) string {
+	if option == profileDefaultOption {
+		return ""
+	}
+	return option
+}
+
+// profileChoices returns the profile value list for the encoder: the
+// detected build's narrowed list when available, else the curated
+// list (before detection completes, or when the build enumerates
+// nothing — absence of an enumeration is not evidence of non-support).
+func (c *Controller) profileChoices(ve encoder.VideoEncoder) []string {
+	if m, ok := c.caps.Encoders[ve.Name()]; ok && len(m.Profiles) > 0 {
+		return m.Profiles
+	}
+	return ve.Profiles()
+}
+
+// populateProfileOptions rebuilds the Profile dropdown from the
+// currently-selected encoder's curated (or build-narrowed) list,
+// prefixed with the "(default)" option. preferred (when non-empty) is
+// the value the dropdown should land on after the options exist; the
+// current selection is used when preferred is empty. The preferred and
+// current values are unioned into the options even when outside the
+// curated list, so a hand-edited profile value stays visible and
+// validation — not a silently emptied dropdown — reports it.
+//
+// Callers about to read the selection (loadProfile in particular)
+// must invoke this first: Fyne silently drops a SetSelected whose
+// value isn't already in Options.
+func (c *Controller) populateProfileOptions(preferred string) {
+	encoderName := c.videoEncoder.Selected
+	var ve encoder.VideoEncoder
+	if encoderName != "copy" {
+		if e, ok := encoder.DefaultRegistry().Get(encoderName); ok {
+			ve, _ = e.(encoder.VideoEncoder)
+		}
+	}
+	if ve == nil || !ve.SupportsProfile() {
+		c.videoProfile.Options = []string{}
+		return
+	}
+	options := append([]string{profileDefaultOption}, c.profileChoices(ve)...)
+	// Union the preferred and current values so out-of-list values
+	// stay visible instead of being silently dropped by SetSelected.
+	for _, extra := range []string{profileValueToOption(preferred), c.videoProfile.Selected} {
+		if extra != "" && extra != profileDefaultOption && !slices.Contains(options, extra) {
+			options = append(options, extra)
+		}
+	}
+	c.videoProfile.Options = options
+
+	target := profileValueToOption(preferred)
+	if preferred == "" {
+		target = c.videoProfile.Selected
+	}
+	// An empty selection is represented visibly by "(default)" so the
+	// dropdown never shows the generic placeholder where a real state
+	// belongs.
+	if target == "" {
+		target = profileDefaultOption
+	}
+	// Only SetSelected when the value actually changes; firing
+	// OnChanged from inside updateControlState would re-enter
+	// updateControlState via changed() (see populateRateControlOptions).
+	if c.videoProfile.Selected != target {
+		c.videoProfile.SetSelected(target)
 	}
 }
 
@@ -1037,17 +1126,23 @@ func (c *Controller) updateControlState() {
 	setEnabled(c.presetSlider, ve != nil && supportsPreset && integerPreset)
 
 	setEnabled(c.tune, supportsTune)
-	setEnabled(c.videoProfile, supportsProfile)
-	// av1_nvenc (and any other encoder that does not accept -profile:v)
-	// leaves the Profile widget disabled. A stale value (e.g. "main"
-	// carried over from an h264 profile) is then invisible to the user
-	// but still read by profileFromWidgets, and nvencEncoder.Validate
-	// rejects it as a hard error — the user is stuck. Drop the field
-	// rather than trap them. The Text != "" guard prevents the SetText
-	// from re-firing OnChanged and re-entering updateControlState
-	// (mirrors the populateRateControlOptions guard).
-	if !supportsProfile && c.videoProfile.Text != "" {
-		c.videoProfile.SetText("")
+	if supportsProfile {
+		// The options must exist before any SetSelected; keep them in
+		// sync with the encoder here so encoder switches relist values.
+		c.populateProfileOptions("")
+		c.videoProfile.Enable()
+	} else {
+		// av1_nvenc (and any other encoder that does not accept
+		// -profile:v) leaves the Profile widget disabled. A stale
+		// selection would still feed profileFromWidgets and fail
+		// validation as a hard error — drop it rather than trap the
+		// user. The Selected != "" guard prevents ClearSelected from
+		// re-firing OnChanged and re-entering updateControlState.
+		c.videoProfile.Options = []string{}
+		c.videoProfile.Disable()
+		if c.videoProfile.Selected != "" {
+			c.videoProfile.ClearSelected()
+		}
 	}
 	setEnabled(c.frameMode, ve != nil)
 	setEnabled(c.frameRate, ve != nil && c.frameMode.Selected == "convert")
