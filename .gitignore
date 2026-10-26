@@ -8,3 +8,6 @@
 
 # Build artefacts (local development and goreleaser output)
 /dist
+
+# Local build output
+/yave
