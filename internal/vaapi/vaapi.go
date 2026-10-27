@@ -250,6 +250,27 @@ func (d DeviceInfo) FailsRequirement(required []Profile) bool {
 	return d.Known() && !d.Encodes(required...)
 }
 
+// IsIntelMediaVADriver reports whether a VA driver vendor string
+// mentions Intel. It is only a heuristic for devices whose PCI
+// identity is unknown; a resolved vendor ID supersedes it.
+func IsIntelMediaVADriver(driver string) bool {
+	return strings.Contains(strings.ToLower(driver), "intel")
+}
+
+// IntelGraphicsVerdict reports whether the device is known to be (or
+// not be) an Intel GPU. A resolved PCI vendor ID is definitive
+// (8086); otherwise the VA driver string is consulted as a heuristic;
+// with neither, known is false and callers must stay quiet.
+func (d DeviceInfo) IntelGraphicsVerdict() (isIntel, known bool) {
+	if d.Identity.HasIDs() {
+		return d.Identity.Vendor == "8086", true
+	}
+	if d.Driver == "" {
+		return false, false
+	}
+	return IsIntelMediaVADriver(d.Driver), true
+}
+
 // DescribeDevice renders one device's capabilities relative to the
 // required profiles for error and hint messages, e.g.
 //

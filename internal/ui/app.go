@@ -136,10 +136,13 @@ type Controller struct {
 	// currently resolves to. It is a plain label like rateControlHint so
 	// detection updates change text without rebuilding the form.
 	vaapiDeviceHint *widget.Label
-	gpuIndex        *widget.Entry
-	audioMode       *widget.Select
-	audioEncoder    *widget.Select
-	audioBitrate    *widget.Select
+	// qsvDeviceHint explains which GPU a manual QSV device pick is and
+	// warns when it cannot drive Quick Sync at all.
+	qsvDeviceHint *widget.Label
+	gpuIndex      *widget.Entry
+	audioMode     *widget.Select
+	audioEncoder  *widget.Select
+	audioBitrate  *widget.Select
 	// audioBitrateSeed keeps the loaded profile's bitrate while the
 	// bitrate dropdown is not shown (copy mode): the hidden widget's
 	// selection is empty, and profileFromWidgets falls back to the
@@ -298,6 +301,8 @@ func (c *Controller) createWidgets() {
 	c.qsvDevice = widget.NewSelect([]string{}, c.changed)
 	c.vaapiDeviceHint = widget.NewLabel("")
 	c.vaapiDeviceHint.Wrapping = fyne.TextWrapWord
+	c.qsvDeviceHint = widget.NewLabel("")
+	c.qsvDeviceHint.Wrapping = fyne.TextWrapWord
 	c.gpuIndex = numericEntry(c.changed)
 
 	c.audioMode = widget.NewSelect([]string{model.AudioCopy, model.AudioEncode}, c.changed)
@@ -508,6 +513,7 @@ func (c *Controller) detect() {
 				// would contradict the "no device detected" validation
 				// error the next Start shows.
 				c.updateVAAPIDeviceHint()
+				c.updateQSVDeviceHint()
 			} else {
 				c.applyDetection(caps)
 			}
@@ -1659,6 +1665,7 @@ func (c *Controller) updateControlState() {
 
 	c.rebuildVideoForm()
 	c.updateVAAPIDeviceHint()
+	c.updateQSVDeviceHint()
 
 	// Everything visible is enabled; the form rebuild is what expresses
 	// applicability. The preset control keeps its internal entry/slider
@@ -1808,7 +1815,13 @@ func (c *Controller) videoFormItems() []*widget.FormItem {
 			widget.NewFormItem("", c.vaapiDeviceHint),
 		)
 	case encoder.HWQSV:
-		items = append(items, widget.NewFormItem("QSV device", c.qsvDevice))
+		items = append(items,
+			widget.NewFormItem("QSV device", c.qsvDevice),
+			// Same stable-pointer caption pattern as the VAAPI
+			// hint: added unconditionally in this branch, so the
+			// form signature does not churn.
+			widget.NewFormItem("", c.qsvDeviceHint),
+		)
 	case encoder.HWNVENC:
 		gpuItem := widget.NewFormItem("GPU index", c.gpuIndex)
 		gpuItem.HintText = "NVIDIA GPU to use when several are present"
@@ -2285,6 +2298,33 @@ func (c *Controller) describeVAAPIDevice(node string, ve encoder.VideoEncoder, p
 		}
 	}
 	return text
+}
+
+// updateQSVDeviceHint explains the QSV device selection: which GPU
+// sits behind a manual node, and — because QSV only runs on Intel
+// graphics — a warning when the picked device is definitively not an
+// Intel GPU. The check is deliberately display-only and conservative:
+// a PCI vendor ID is definitive, the VA driver string is a heuristic,
+// and anything else stays quiet. ffmpeg's "(default)" device stays
+// undescribed, since there is nothing reliable to say about a device
+// ffmpeg has not picked yet.
+func (c *Controller) updateQSVDeviceHint() {
+	ve := c.currentVideoEncoder()
+	if ve == nil || ve.HWBackend() != encoder.HWQSV || c.qsvDevice.Selected == "" || c.qsvDevice.Selected == defaultOption {
+		c.qsvDeviceHint.SetText("")
+		return
+	}
+	node := qsvDeviceValue(c.qsvDevice.Selected)
+	d, known := deviceByPath(c.caps, node)
+	if !known {
+		c.qsvDeviceHint.SetText("")
+		return
+	}
+	text := vaapi.DeviceDetail(d)
+	if isIntel, intelKnown := d.IntelGraphicsVerdict(); intelKnown && !isIntel {
+		text = warningPrefix + text + " — not an Intel GPU (QSV requires Intel graphics)"
+	}
+	c.qsvDeviceHint.SetText(text)
 }
 
 // hardwareDevicesSummary renders the probed hardware-encoder backends

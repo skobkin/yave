@@ -2126,3 +2126,127 @@ func TestDeviceSelectionRepinsToCurrentLabel(t *testing.T) {
 		t.Errorf("selection after re-detection = %q, want it unchanged", got)
 	}
 }
+
+func TestQSVDeviceHint(t *testing.T) {
+	tests := []struct {
+		name     string
+		caps     func() model.Capabilities
+		encoder  string
+		device   string // QSV dropdown option to select
+		wantHint string
+	}{
+		{
+			name:     "AMD node warns",
+			caps:     vaapiDualGPUFixture,
+			encoder:  "hevc_qsv",
+			device:   "/dev/dri/renderD129",
+			wantHint: "⚠️ /dev/dri/renderD129 — AMD Renoir [Radeon Vega Series / Radeon Vega Mobile Series] (amdgpu; Mesa Gallium driver (radeonsi)) — not an Intel GPU (QSV requires Intel graphics)",
+		},
+		{
+			name:     "NVIDIA node warns",
+			caps:     vaapiDualGPUFixture,
+			encoder:  "hevc_qsv",
+			device:   "/dev/dri/renderD128",
+			wantHint: "⚠️ /dev/dri/renderD128 — NVIDIA TU116M [GeForce GTX 1660 Ti Mobile] (nvidia; VA-API NVDEC driver [direct backend]) — not an Intel GPU (QSV requires Intel graphics)",
+		},
+		{
+			name: "Intel VA driver stays clean",
+			caps: func() model.Capabilities {
+				caps := vaapiDualGPUFixture()
+				caps.RenderNodes = append(caps.RenderNodes, "/dev/dri/renderD131")
+				caps.VAAPIDevices = append(caps.VAAPIDevices, vaapi.DeviceInfo{Path: "/dev/dri/renderD131", Driver: "Intel iHD"})
+				return caps
+			},
+			encoder:  "hevc_qsv",
+			device:   "/dev/dri/renderD131",
+			wantHint: "/dev/dri/renderD131 (Intel iHD)",
+		},
+		{
+			name: "no evidence stays clean",
+			caps: func() model.Capabilities {
+				caps := vaapiDualGPUFixture()
+				caps.RenderNodes = append(caps.RenderNodes, "/dev/dri/renderD132")
+				caps.VAAPIDevices = append(caps.VAAPIDevices, vaapi.DeviceInfo{Path: "/dev/dri/renderD132"})
+				return caps
+			},
+			encoder:  "hevc_qsv",
+			device:   "/dev/dri/renderD132",
+			wantHint: "/dev/dri/renderD132",
+		},
+		{
+			name:     "default device stays undescribed",
+			caps:     vaapiDualGPUFixture,
+			encoder:  "hevc_qsv",
+			device:   defaultOption,
+			wantHint: "",
+		},
+		{
+			name:     "software encoder hides the hint",
+			caps:     vaapiDualGPUFixture,
+			encoder:  "libx265",
+			device:   defaultOption,
+			wantHint: "",
+		},
+		{
+			name: "node without a probe record stays hidden",
+			caps: func() model.Capabilities {
+				return model.Capabilities{RenderNodes: []string{"/dev/dri/renderD199"}}
+			},
+			encoder:  "hevc_qsv",
+			device:   "/dev/dri/renderD199",
+			wantHint: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := fynetest.NewApp()
+			defer app.Quit()
+			c := testController()
+			c.createWidgets()
+			c.caps = tt.caps()
+			c.updateDeviceOptions()
+			load := c.config.Profiles[0]
+			load.Video.Encoder = tt.encoder
+			load.Video.RateControl = "CQP"
+			load.Video.QP = 28
+			if tt.encoder == "libx265" {
+				load.Video.RateControl = "CRF"
+				load.Video.CRF = 28
+			}
+			c.loadProfile(load)
+			c.qsvDevice.SetSelected(tt.device)
+			if got := c.qsvDeviceHint.Text; got != tt.wantHint {
+				t.Errorf("hint = %q, want %q", got, tt.wantHint)
+			}
+		})
+	}
+}
+
+func TestQSVDeviceHintRowPinsToQSVEncoders(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+	c := deviceCapableController()
+	formHasQSVHint := func() bool {
+		if len(c.videoFormBox.Objects) == 0 {
+			return false
+		}
+		form, ok := c.videoFormBox.Objects[0].(*widget.Form)
+		if !ok {
+			return false
+		}
+		for _, item := range form.Items {
+			if item.Widget == c.qsvDeviceHint {
+				return true
+			}
+		}
+		return false
+	}
+	c.videoEncoder.SetSelected("hevc_qsv")
+	if !formHasQSVHint() {
+		t.Fatalf("hevc_qsv form has no QSV hint caption row")
+	}
+	c.videoEncoder.SetSelected("libx265")
+	if formHasQSVHint() {
+		t.Fatalf("libx265 form still carries the QSV hint caption row")
+	}
+}

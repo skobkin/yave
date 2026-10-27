@@ -422,3 +422,67 @@ func TestFailsRequirement(t *testing.T) {
 		})
 	}
 }
+
+func TestIsIntelMediaVADriver(t *testing.T) {
+	tests := []struct {
+		name   string
+		driver string
+		want   bool
+	}{
+		{"Intel iHD", "Intel iHD driver for Intel(R) Gen Graphics", true},
+		{"intel-media", "intel-media driver", true},
+		{"Mesa radeonsi", "Mesa Gallium driver (radeonsi)", false},
+		{"NVDEC", "VA-API NVDEC driver [direct backend]", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsIntelMediaVADriver(tt.driver); got != tt.want {
+				t.Errorf("IsIntelMediaVADriver(%q) = %v, want %v", tt.driver, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIntelGraphicsVerdict(t *testing.T) {
+	tests := []struct {
+		name    string
+		device  DeviceInfo
+		isIntel bool
+		known   bool
+	}{
+		{
+			name:    "Intel PCI vendor is definitive",
+			device:  DeviceInfo{Driver: "whatever", Identity: DeviceIdentity{Vendor: "8086", Device: "9a49", Driver: "i915"}},
+			isIntel: true,
+			known:   true,
+		},
+		{
+			name:   "AMD PCI vendor is definitively not Intel",
+			device: DeviceInfo{Driver: "Intel iHD", Identity: DeviceIdentity{Vendor: "1002", Device: "1636", Driver: "amdgpu"}},
+			known:  true,
+		},
+		{
+			name:    "driver string heuristic",
+			device:  DeviceInfo{Driver: "Intel iHD driver"},
+			isIntel: true,
+			known:   true,
+		},
+		{
+			name:   "non-Intel driver string",
+			device: DeviceInfo{Driver: "radeonsi"},
+			known:  true,
+		},
+		{
+			name:   "nothing known stays unknown",
+			device: DeviceInfo{Path: "/dev/dri/renderD132"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if isIntel, known := tt.device.IntelGraphicsVerdict(); isIntel != tt.isIntel || known != tt.known {
+				t.Errorf("IntelGraphicsVerdict() = (%v, %v), want (%v, %v)", isIntel, known, tt.isIntel, tt.known)
+			}
+		})
+	}
+}
