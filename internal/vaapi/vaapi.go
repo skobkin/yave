@@ -82,7 +82,24 @@ func (d DeviceInfo) Encodes(profiles ...Profile) bool {
 // SupportsEncoding reports whether the device offers an encoding
 // entrypoint (any of EncodeEntrypoints) for the profile.
 func (d DeviceInfo) SupportsEncoding(p Profile) bool {
-	for _, ep := range d.EntryPoints[p] {
+	return hasEncodingEntrypoint(d.EntryPoints[p])
+}
+
+// HasAnyEncodingEntrypoint reports whether the device offers an
+// encoding entrypoint for any profile it listed — not necessarily one
+// of the required ones. Used to distinguish "cannot encode the
+// requested profile" from "no encoding entrypoint at all" in messages.
+func (d DeviceInfo) HasAnyEncodingEntrypoint() bool {
+	for _, eps := range d.EntryPoints {
+		if hasEncodingEntrypoint(eps) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEncodingEntrypoint(eps []Entrypoint) bool {
+	for _, ep := range eps {
 		for _, enc := range EncodeEntrypoints() {
 			if ep == enc {
 				return true
@@ -168,18 +185,24 @@ func SelectDevice(nodes []string, devices []DeviceInfo, required []Profile) Devi
 //
 //	/dev/dri/renderD129 (Mesa Gallium driver ...) — encodes
 //	/dev/dri/renderD128 (VA-API NVDEC driver) — decode only
-//	/dev/dri/renderD130 — no encoding entrypoint
+//	/dev/dri/renderD130 (Other driver) — encodes other profiles
+//	/dev/dri/renderD132 — no encoding entrypoint
 //	/dev/dri/renderD131 — capabilities unknown (open: permission denied)
 func DescribeDevice(d DeviceInfo, required []Profile) string {
 	if !d.Known() {
 		return fmt.Sprintf("%s — capabilities unknown (%s)", d.Path, d.Err)
 	}
+	// "no encoding entrypoint" is reserved for devices that list no
+	// encoding entrypoint at all; a device that encodes other codecs
+	// must not be described as if vainfo showed it decode-only.
 	capability := "no encoding entrypoint"
 	switch {
 	case d.Encodes(required...):
 		capability = "encodes"
 	case hasAnySupport(d, required):
 		capability = "decode only"
+	case d.HasAnyEncodingEntrypoint():
+		capability = "encodes other profiles"
 	}
 	if d.Driver == "" {
 		return fmt.Sprintf("%s — %s", d.Path, capability)
