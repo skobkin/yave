@@ -351,12 +351,18 @@ func validateVideoForEncoder(result *Result, video model.VideoSettings, ve encod
 
 	// Fold encoder-specific Validate() findings into the result.
 	if issues, err := ve.Validate(video); err == nil {
-		for _, issue := range issues {
-			if issue.Level == encoder.IssueError {
-				result.error(issue.Field, "%s", issue.Message)
-			} else {
-				result.warning(issue.Field, "%s", issue.Message)
-			}
+		foldEncoderIssues(result, issues)
+	}
+}
+
+// foldEncoderIssues folds encoder.Validate findings into the result as
+// errors or warnings by severity. Shared by the video and audio paths.
+func foldEncoderIssues(result *Result, issues []encoder.Issue) {
+	for _, issue := range issues {
+		if issue.Level == encoder.IssueError {
+			result.error(issue.Field, "%s", issue.Message)
+		} else {
+			result.warning(issue.Field, "%s", issue.Message)
 		}
 	}
 }
@@ -482,14 +488,12 @@ func validateAudio(result *Result, audio model.AudioSettings, capabilities model
 		result.error("profile.audio.encoder", "audio encoder %q is not available in the detected FFmpeg build", audio.Encoder)
 	}
 
-	// Bitrate and compression checks read the encoder's own choices
-	// from the registry — the same source the UI dropdowns use — so a
-	// new audio encoder only needs registering to validate correctly.
+	// Bitrate and compression checks come from the encoder itself — the
+	// same source the UI dropdowns read — so a new audio encoder only
+	// needs registering to validate correctly.
 	if ae, ok := lookupAudioEncoder(encoder); ok {
-		if choices := ae.BitrateChoices(); len(choices) > 0 {
-			validateChoice(result, "profile.audio.bitrate", audio.Bitrate, choices...)
-		} else if r, ok := ae.AudioCompressionRange(); ok && !r.Contains(audio.Compression) {
-			result.error("profile.audio.compression", "%s compression level must be between %d and %d", strings.ToUpper(encoder), r.Min, r.Max)
+		if issues, err := ae.Validate(audio); err == nil {
+			foldEncoderIssues(result, issues)
 		}
 	}
 }
@@ -553,12 +557,6 @@ func validateOptionalBitrate(result *Result, field, value string) {
 	value = strings.TrimSpace(value)
 	if value != "" && !bitratePattern.MatchString(value) {
 		result.error(field, "bitrate must be a positive integer with an optional k or M suffix")
-	}
-}
-
-func validateChoice(result *Result, field, value string, choices ...string) {
-	if !oneOf(strings.ToLower(strings.TrimSpace(value)), choices...) {
-		result.error(field, "bitrate must be one of: %s", strings.Join(choices, ", "))
 	}
 }
 
