@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"runtime"
+	"slices"
 	"testing"
 
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 )
 
 func notExist(path string) error {
@@ -281,6 +283,10 @@ func TestFilterUnavailableHWEncoders(t *testing.T) {
 	}
 }
 
+// stubDeviceProbe stands in for the VA-API device prober: no devices,
+// no calls recorded.
+func stubDeviceProbe(context.Context, []string) []vaapi.DeviceInfo { return nil }
+
 func TestDiscoverFiltersHWWithoutDevices(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("device probe is Linux-specific and the test helper is a POSIX shell script")
@@ -301,7 +307,7 @@ printf 'ffprobe version test-2\n'
 	got, err := discover(context.Background(), model.FFmpegConfig{
 		FFmpegPath:  ffmpegPath,
 		FFprobePath: ffprobePath,
-	}, fakeFS(nil, nil, nil))
+	}, fakeFS(nil, nil, nil), stubDeviceProbe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +358,7 @@ printf 'ffprobe version test-2\n'
 	got, err := discover(context.Background(), model.FFmpegConfig{
 		FFmpegPath:  ffmpegPath,
 		FFprobePath: ffprobePath,
-	}, fs)
+	}, fs, stubDeviceProbe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,4 +376,86 @@ printf 'ffprobe version test-2\n'
 	if got.NVENCGPUCount != 2 {
 		t.Errorf("NVENCGPUCount = %d, want 2", got.NVENCGPUCount)
 	}
+}
+
+func TestDiscoverRecordsVAAPIDevices(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("device probe is Linux-specific and the test helper is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	ffmpegPath := writeExecutable(t, dir, "ffmpeg", `#!/bin/sh
+case "$2" in
+  -version) printf 'ffmpeg version test-1\n' ;;
+  -encoders) printf 'Encoders:\n V..... h264_vaapi test\n' ;;
+  -hwaccels) printf 'Hardware acceleration methods:\nvaapi\n' ;;
+  *) exit 2 ;;
+esac
+`)
+	ffprobePath := writeExecutable(t, dir, "ffprobe", `#!/bin/sh
+printf 'ffprobe version test-2\n'
+`)
+	cfg := model.FFmpegConfig{FFmpegPath: ffmpegPath, FFprobePath: ffprobePath}
+	nodes := []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}
+	fs := fakeFS(nil, map[string][]string{driRenderPattern: nodes}, nil)
+
+	t.Run("probe results are carried verbatim in node order", func(t *testing.T) {
+		want := []vaapi.DeviceInfo{
+			{
+				Path:   "/dev/dri/renderD128",
+				Driver: "VA-API NVDEC driver [direct backend]",
+				EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+					vaapi.ProfileHEVCMain: {vaapi.EntrypointVLD},
+				},
+			},
+			{
+				Path:   "/dev/dri/renderD129",
+				Driver: "Mesa Gallium driver (radeonsi)",
+				EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+					vaapi.ProfileHEVCMain: {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+				},
+			},
+		}
+		got, err := discover(context.Background(), cfg, fs, func(_ context.Context, got []string) []vaapi.DeviceInfo {
+			if !slices.Equal(got, nodes) {
+				t.Errorf("prober received nodes %v, want %v", got, nodes)
+			}
+			return want
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.EqualFunc(got.VAAPIDevices, want, func(a, b vaapi.DeviceInfo) bool {
+			return a.Path == b.Path && a.Driver == b.Driver && a.Err == b.Err
+		}) {
+			t.Errorf("VAAPIDevices = %+v, want %+v", got.VAAPIDevices, want)
+		}
+	})
+
+	t.Run("a prober without results keeps discovery healthy", func(t *testing.T) {
+		got, err := discover(context.Background(), cfg, fs, stubDeviceProbe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.VAAPIDevices != nil {
+			t.Errorf("VAAPIDevices = %+v, want nil", got.VAAPIDevices)
+		}
+		if !got.HWVAAPIAvailable || len(got.RenderNodes) != 2 {
+			t.Errorf("nodes=%v vaapi=%v, want both nodes and vaapi available", got.RenderNodes, got.HWVAAPIAvailable)
+		}
+	})
+
+	t.Run("prober is not called without render nodes", func(t *testing.T) {
+		called := false
+		_, err := discover(context.Background(), cfg, fakeFS(nil, nil, nil),
+			func(context.Context, []string) []vaapi.DeviceInfo {
+				called = true
+				return nil
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if called {
+			t.Error("prober must not run when no render nodes were detected")
+		}
+	})
 }

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 )
 
 const (
@@ -26,10 +28,18 @@ const (
 // encoder and hardware-acceleration capabilities, and probes the host for
 // the device nodes the hardware encoder families need.
 func Discover(ctx context.Context, config model.FFmpegConfig) (model.Capabilities, error) {
-	return discover(ctx, config, osFSProbe)
+	return discover(ctx, config, osFSProbe, osVAAPIDeviceProbe)
 }
 
-func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe) (model.Capabilities, error) {
+// vaapiDeviceProber is the seam for the per-device VA-API capability
+// probe; tests inject fakes. The contract is fail-open by construction:
+// it never returns an error, per-device failures travel inside each
+// DeviceInfo as Err.
+type vaapiDeviceProber func(ctx context.Context, nodes []string) []vaapi.DeviceInfo
+
+var osVAAPIDeviceProbe vaapiDeviceProber = vaapi.Probe
+
+func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe, probeDevices vaapiDeviceProber) (model.Capabilities, error) {
 	ffmpegPath, err := ResolveExecutable(config.FFmpegPath, "ffmpeg")
 	if err != nil {
 		return model.Capabilities{}, err
@@ -57,6 +67,13 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe) (model
 	}
 
 	hw := probeHWBackends(fs)
+	// Per-device VA-API probing runs inside the caller's detection
+	// budget; every failure mode degrades to Err-carrying entries, so
+	// discovery itself cannot fail on it.
+	var vaapiDevices []vaapi.DeviceInfo
+	if runtime.GOOS == "linux" && len(hw.renderNodes) > 0 {
+		vaapiDevices = probeDevices(ctx, hw.renderNodes)
+	}
 	encoders := filterUnavailableHWEncoders(ParseEncoders(encodersOutput), hw)
 	narrowProfilesToBuild(ctx, ffmpegPath, encoders)
 	return model.Capabilities{
@@ -72,6 +89,7 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe) (model
 		HWNVENCAvailable: hw.nvenc,
 		NVENCGPUCount:    hw.nvencGPUs,
 		RenderNodes:      hw.renderNodes,
+		VAAPIDevices:     vaapiDevices,
 	}, nil
 }
 

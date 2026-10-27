@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"git.skobk.in/skobkin/yave/internal/vaapi"
+)
 
 const ConfigVersion = 1
 
@@ -42,7 +46,11 @@ type VideoSettings struct {
 	MaxHeight        int    `yaml:"max_height"`
 	KeepAspectRatio  bool   `yaml:"keep_aspect_ratio"`
 	PreventUpscaling bool   `yaml:"prevent_upscaling"`
-	VAAPIDevice      string `yaml:"vaapi_device"`
+	// VAAPIDevice is the render-node path passed to -vaapi_device when
+	// the selected encoder is a VAAPI backend. Empty means "automatic":
+	// yave picks the first probed device that can encode the selected
+	// codec and profile.
+	VAAPIDevice string `yaml:"vaapi_device"`
 	// QSVDevice is the render-node path passed to -init_hw_device qsv=...
 	// when the selected encoder is a QSV backend. Empty means "default".
 	QSVDevice string `yaml:"qsv_device"`
@@ -92,6 +100,12 @@ type Capabilities struct {
 	// RenderNodes lists the DRM render nodes found on the host, sorted.
 	// Linux-only: nil on other platforms and when nothing was found.
 	RenderNodes []string
+	// VAAPIDevices records the per-render-node VA-API probe (driver
+	// string and per-profile entrypoints). Linux-only: nil when probing
+	// was skipped or libva is unavailable. Devices whose capabilities
+	// could not be probed appear with Err set — the node inventory
+	// stays complete either way.
+	VAAPIDevices []vaapi.DeviceInfo
 }
 
 type MediaInfo struct {
