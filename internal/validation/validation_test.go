@@ -3,11 +3,13 @@ package validation_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
@@ -681,4 +683,190 @@ func assertWarningContains(t *testing.T, result validation.Result, field, text s
 		}
 	}
 	t.Fatalf("missing %s warning containing %q; warnings: %#v", field, text, result.Warnings)
+}
+
+// vaapiDeviceFixture mirrors the owner's dual-GPU host from issue #23:
+// renderD128 is an NVIDIA GPU whose VA-API driver decodes only, while
+// renderD129 is an AMD iGPU that encodes H.264 and HEVC.
+func vaapiDeviceFixture() model.Capabilities {
+	caps := capabilities()
+	caps.RenderNodes = []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}
+	caps.VAAPIDevices = []vaapi.DeviceInfo{
+		{
+			Path:   "/dev/dri/renderD128",
+			Driver: "VA-API NVDEC driver [direct backend]",
+			EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+				vaapi.ProfileH264Main: {vaapi.EntrypointVLD},
+				vaapi.ProfileHEVCMain: {vaapi.EntrypointVLD},
+			},
+		},
+		{
+			Path:   "/dev/dri/renderD129",
+			Driver: "Mesa Gallium driver (radeonsi)",
+			EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+				vaapi.ProfileH264Main: {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+				vaapi.ProfileHEVCMain: {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+			},
+		},
+	}
+	return caps
+}
+
+func TestValidateVAAPIDevice(t *testing.T) {
+	vaapiProfile := func(p *model.Profile, encoderName, device, profile string) {
+		p.Video.Encoder = encoderName
+		p.Video.VAAPIDevice = device
+		p.Video.RateControl = "CQP"
+		p.Video.QP = 28
+		p.Video.Profile = profile
+	}
+
+	tests := []struct {
+		name       string
+		caps       func() model.Capabilities
+		encoder    string
+		device     string
+		profile    string
+		wantErr    string
+		wantWarn   string
+		wantNoFlag bool
+	}{
+		{
+			name:       "auto picks the encode-capable device",
+			caps:       vaapiDeviceFixture,
+			encoder:    "hevc_vaapi",
+			device:     "",
+			profile:    "main",
+			wantNoFlag: true,
+		},
+		{
+			name:       "auto with h264 auto profile also resolves",
+			caps:       vaapiDeviceFixture,
+			encoder:    "h264_vaapi",
+			device:     "",
+			profile:    "",
+			wantNoFlag: true,
+		},
+		{
+			name:    "auto with no compatible device is an error naming both",
+			caps:    vaapiDeviceFixture,
+			encoder: "vp9_vaapi",
+			device:  "",
+			profile: "0",
+			wantErr: "no detected VAAPI device can encode vp9_vaapi profile \"0\"",
+		},
+		{
+			name: "auto without probe data fails open",
+			caps: func() model.Capabilities {
+				caps := capabilities()
+				caps.RenderNodes = []string{"/dev/dri/renderD128"}
+				return caps
+			},
+			encoder:    "hevc_vaapi",
+			device:     "",
+			profile:    "main",
+			wantNoFlag: true,
+		},
+		{
+			name: "auto with all probes failed fails open",
+			caps: func() model.Capabilities {
+				caps := capabilities()
+				caps.RenderNodes = []string{"/dev/dri/renderD128"}
+				caps.VAAPIDevices = []vaapi.DeviceInfo{{Path: "/dev/dri/renderD128", Err: "open: permission denied"}}
+				return caps
+			},
+			encoder:    "hevc_vaapi",
+			device:     "",
+			profile:    "main",
+			wantNoFlag: true,
+		},
+		{
+			name: "auto without render nodes is an error",
+			caps: func() model.Capabilities {
+				caps := capabilities()
+				caps.RenderNodes = nil
+				return caps
+			},
+			encoder: "hevc_vaapi",
+			device:  "",
+			profile: "main",
+			wantErr: "no VAAPI render device was detected",
+		},
+		{
+			name:    "manual decode-only device is a warning suggesting automatic",
+			caps:    vaapiDeviceFixture,
+			encoder: "hevc_vaapi",
+			device:  "/dev/dri/renderD128",
+			profile: "main",
+			wantWarn: "the VAAPI device /dev/dri/renderD128 (VA-API NVDEC driver [direct backend]) " +
+				"does not offer encoding for hevc_vaapi profile \"main\"; switch the VAAPI device to automatic",
+		},
+		{
+			name:       "manual encode-capable device is clean",
+			caps:       vaapiDeviceFixture,
+			encoder:    "hevc_vaapi",
+			device:     "/dev/dri/renderD129",
+			profile:    "main",
+			wantNoFlag: true,
+		},
+		{
+			name:       "manual rext requirement resolves via HEVCMain",
+			caps:       vaapiDeviceFixture,
+			encoder:    "hevc_vaapi",
+			device:     "/dev/dri/renderD129",
+			profile:    "rext",
+			wantNoFlag: true,
+		},
+		{
+			name:       "manual device without probe data is clean",
+			caps:       capabilities,
+			encoder:    "hevc_vaapi",
+			device:     "/dev/dri/renderD128",
+			profile:    "main",
+			wantNoFlag: true,
+		},
+		{
+			name: "manual device not among probed devices is clean",
+			caps: func() model.Capabilities {
+				caps := capabilities()
+				caps.RenderNodes = []string{"/dev/dri/renderD130"}
+				caps.VAAPIDevices = []vaapi.DeviceInfo{{Path: "/dev/dri/renderD130", Err: "open: denied"}}
+				return caps
+			},
+			encoder:    "hevc_vaapi",
+			device:     "/dev/dri/renderD131",
+			profile:    "main",
+			wantNoFlag: true,
+		},
+		{
+			name:       "unknown profile value skips the device check",
+			caps:       vaapiDeviceFixture,
+			encoder:    "hevc_vaapi",
+			device:     "",
+			profile:    "main10",
+			wantNoFlag: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			profile := validProfile()
+			vaapiProfile(&profile, tt.encoder, tt.device, tt.profile)
+			result := validation.ValidateProfile(profile, tt.caps(), nil)
+
+			if tt.wantErr != "" {
+				assertErrorContains(t, result, "profile.video.vaapi_device", tt.wantErr)
+			}
+			if tt.wantWarn != "" {
+				assertWarningContains(t, result, "profile.video.vaapi_device", tt.wantWarn)
+			}
+			if tt.wantNoFlag {
+				for _, issue := range append(slices.Clone(result.Errors), result.Warnings...) {
+					if issue.Field == "profile.video.vaapi_device" {
+						t.Errorf("unexpected device issue: %+v", issue)
+					}
+				}
+			}
+		})
+	}
 }

@@ -10,6 +10,9 @@ import (
 func TestBuildCommandVAAPI(t *testing.T) {
 	t.Parallel()
 	profile := model.BuiltinProfiles()[0]
+	// Built-ins ship with an empty (automatic) device; command
+	// generation needs the concrete resolved path.
+	profile.Video.VAAPIDevice = "/dev/dri/renderD128"
 	plan, err := BuildCommand(BuildRequest{
 		FFmpegPath: "/usr/bin/ffmpeg",
 		InputPath:  "/tmp/input file.mkv",
@@ -44,6 +47,7 @@ func TestBuildCommandVAAPI(t *testing.T) {
 func TestBuildCommandAllAudioAndMP4SubtitleWarning(t *testing.T) {
 	t.Parallel()
 	profile := model.BuiltinProfiles()[2]
+	profile.Video.VAAPIDevice = "/dev/dri/renderD128"
 	profile.Audio.CopyAllStreams = true
 	plan, err := BuildCommand(BuildRequest{
 		FFmpegPath: "ffmpeg",
@@ -101,6 +105,7 @@ func TestBuildCommandUsesIntegerBoundaryValues(t *testing.T) {
 
 	profile := model.BuiltinProfiles()[0]
 	profile.Video.Encoder = "av1_vaapi"
+	profile.Video.VAAPIDevice = "/dev/dri/renderD128"
 	profile.Video.RateControl = "CQP"
 	profile.Video.QP = 255
 	profile.Audio.Mode = model.AudioEncode

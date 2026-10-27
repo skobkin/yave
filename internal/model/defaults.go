@@ -38,7 +38,10 @@ func BuiltinProfiles() []Profile {
 			FrameRateMode:    "keep",
 			KeepAspectRatio:  true,
 			PreventUpscaling: true,
-			VAAPIDevice:      "/dev/dri/renderD128",
+			// VAAPIDevice is left empty on purpose: empty means automatic
+			// device selection (see VideoSettings.VAAPIDevice), which lets
+			// multi-GPU hosts use the encode-capable render node instead
+			// of a hardcoded path.
 		},
 		Audio: AudioSettings{
 			Mode:        AudioCopy,

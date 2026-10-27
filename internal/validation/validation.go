@@ -11,6 +11,7 @@ import (
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 )
 
 type Severity string
@@ -76,6 +77,7 @@ func validateProfile(profile model.Profile, capabilities model.Capabilities, med
 	}
 
 	validateVideo(&result, profile.Video, videoEncoder)
+	validateVAAPIDevice(&result, profile.Video, capabilities, videoEncoder)
 	validateBuildProfile(&result, profile.Video, videoEncoder, capabilities)
 	validateProfileBitDepth(&result, profile.Video, videoEncoder, media)
 	validateAudio(&result, profile.Audio, capabilities)
@@ -306,10 +308,9 @@ func validateVideoForEncoder(result *Result, video model.VideoSettings, ve encod
 		}
 	}
 
-	// VAAPI device must be present when the encoder needs one.
-	if ve.HWBackend() == encoder.HWVAAPI && strings.TrimSpace(video.VAAPIDevice) == "" {
-		result.error("profile.video.vaapi_device", "VAAPI device path is required")
-	}
+	// VAAPI device semantics (automatic vs manual, per-device
+	// compatibility) are checked against the capabilities in
+	// validateVAAPIDevice, called from validateProfile.
 
 	switch mode {
 	case "CQP":
@@ -358,6 +359,71 @@ func validateVideoForEncoder(result *Result, video model.VideoSettings, ve encod
 			}
 		}
 	}
+}
+
+// validateVAAPIDevice applies the automatic/manual VAAPI device
+// semantics against the probed per-device capabilities. It runs for
+// every encoder (the VAAPI check is gated inside) so the device check
+// also fires when an invalid rate control would have short-circuited
+// the old in-encoder check.
+//
+// An empty device means automatic: with probe data, a compatible
+// device must exist (hard, actionable error otherwise); without probe
+// data (libva missing, non-Linux, every probe failed) validation fails
+// open, mirroring the fail-open device probing in internal/ffmpeg. A
+// manual device that the probe says cannot encode the selected codec
+// and profile is a warning, not an error: the pick is explicit and the
+// runtime error is loud, so blocking Start would be hostile.
+func validateVAAPIDevice(result *Result, video model.VideoSettings, capabilities model.Capabilities, encoderName string) {
+	required, ok := encoder.RequiredVAProfiles(encoderName, video.Profile)
+	if !ok || len(required) == 0 {
+		// Non-VAAPI encoders and unknown -profile:v values (already
+		// reported by the curated-membership check) have no device
+		// requirement to verify.
+		return
+	}
+
+	device := strings.TrimSpace(video.VAAPIDevice)
+	if device != "" {
+		for _, d := range capabilities.VAAPIDevices {
+			if d.Path != device || !d.Known() {
+				continue
+			}
+			if !d.Encodes(required...) {
+				result.warning("profile.video.vaapi_device",
+					"the VAAPI device %s (%s) does not offer encoding for %s profile %s; switch the VAAPI device to automatic or pick a device that can encode",
+					d.Path, d.Driver, encoderName, displayProfile(video.Profile))
+			}
+			return
+		}
+		// The device is absent from the probe data or its capabilities
+		// are unknown: no noise for an explicit pick.
+		return
+	}
+
+	switch choice := vaapi.SelectDevice(capabilities.RenderNodes, capabilities.VAAPIDevices, required); choice.Status {
+	case vaapi.DeviceNoneCompatible:
+		descriptions := make([]string, 0, len(capabilities.VAAPIDevices))
+		for _, d := range capabilities.VAAPIDevices {
+			descriptions = append(descriptions, vaapi.DescribeDevice(d, required))
+		}
+		result.error("profile.video.vaapi_device",
+			"no detected VAAPI device can encode %s profile %s: %s. Pick a VAAPI device that offers encoding, switch to a software encoder, or install a driver with VA-API encoding support",
+			encoderName, displayProfile(video.Profile), strings.Join(descriptions, "; "))
+	case vaapi.DeviceNoNodes:
+		result.error("profile.video.vaapi_device",
+			"no VAAPI render device was detected; set a VAAPI device explicitly or use another video encoder")
+	}
+}
+
+// displayProfile renders a curated -profile:v value for messages, with
+// the empty (automatic) value spelled out.
+func displayProfile(profile string) string {
+	trimmed := strings.TrimSpace(profile)
+	if trimmed == "" {
+		return "(automatic)"
+	}
+	return strconv.Quote(trimmed)
 }
 
 // videoModeAllowed reports whether mode is one of the modes the
