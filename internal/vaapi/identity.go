@@ -271,6 +271,39 @@ func lookupPCIName(vendor, device string) (deviceName, vendorName string) {
 	return db.devices[vendor][device], db.vendors[vendor]
 }
 
+// knownVendorBrands carries short brands for the PCI vendors that
+// typically back VA-API devices; pci.ids vendor names are wordier
+// ("NVIDIA Corporation", "Advanced Micro Devices, Inc. [AMD/ATI]").
+var knownVendorBrands = map[string]string{
+	"10de": "NVIDIA",
+	"8086": "Intel",
+	"1002": "AMD",
+}
+
+// brand picks the display brand for the PCI vendor: the short known
+// brand, else the pci.ids vendor name, else "".
+func (id DeviceIdentity) brand() string {
+	if brand, ok := knownVendorBrands[id.Vendor]; ok {
+		return brand
+	}
+	return id.VendorName
+}
+
+// FullNameWithBrand renders the full pci.ids device name with a short
+// vendor brand when one resolves
+// ("NVIDIA TU116M [GeForce GTX 1660 Ti Mobile]"), degrading to the
+// tiered DisplayName for identities without a resolved name
+// ("amdgpu 1002:1636") and to "" when nothing is known.
+func (id DeviceIdentity) FullNameWithBrand() string {
+	if id.Name == "" {
+		return id.DisplayName()
+	}
+	if brand := id.brand(); brand != "" {
+		return brand + " " + id.Name
+	}
+	return id.Name
+}
+
 // identifyRenderNode is the seam Probe enriches devices through; tests
 // stub it to stay host-independent.
 var identifyRenderNode = identifyRenderNodeOS

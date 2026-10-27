@@ -9,6 +9,7 @@ package vaapi
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Profile mirrors the C VAProfile enum. The values are ABI constants
@@ -192,18 +193,37 @@ func SelectDevice(nodes []string, devices []DeviceInfo, required []Profile) Devi
 	return DeviceChoice{Path: nodes[0], Status: DeviceFallback}
 }
 
-// DescribeDevice renders one device's capabilities relative to the
-// required profiles for error and hint messages, e.g.
+// DeviceDetail renders the full identity-bearing form used by hints
+// and summaries:
 //
-//	/dev/dri/renderD129 (Mesa Gallium driver ...) — encodes
-//	/dev/dri/renderD128 (VA-API NVDEC driver) — decode only
-//	/dev/dri/renderD130 (Other driver) — encodes other profiles
-//	/dev/dri/renderD132 — no encoding entrypoint
-//	/dev/dri/renderD131 — capabilities unknown (open: permission denied)
-func DescribeDevice(d DeviceInfo, required []Profile) string {
-	if !d.Known() {
-		return fmt.Sprintf("%s — capabilities unknown (%s)", d.Path, d.Err)
+//	/dev/dri/renderD128 — NVIDIA TU116M [GeForce GTX 1660 Ti Mobile] (nvidia; VA-API NVDEC driver [direct backend])
+//
+// Every element degrades independently: the name collapses through the
+// identity tiers and the driver list drops missing entries, down to
+// the bare path when nothing is known.
+func DeviceDetail(d DeviceInfo) string {
+	header := d.Path
+	if name := d.Identity.FullNameWithBrand(); name != "" {
+		header = fmt.Sprintf("%s — %s", d.Path, name)
 	}
+	parts := make([]string, 0, 2)
+	if kernel := d.Identity.Driver; kernel != "" {
+		parts = append(parts, kernel)
+	}
+	if d.Driver != "" && d.Driver != d.Identity.Driver {
+		parts = append(parts, d.Driver)
+	}
+	if len(parts) > 0 {
+		header = fmt.Sprintf("%s (%s)", header, strings.Join(parts, "; "))
+	}
+	return header
+}
+
+// DeviceCapability classifies a known device against the required
+// profiles: "encodes", "encodes other profiles", "decode only", or
+// "no encoding entrypoint". Callers pair it with a rendered device
+// header; DescribeDevice guards unknown-capability devices itself.
+func DeviceCapability(d DeviceInfo, required []Profile) string {
 	// "no encoding entrypoint" is reserved for devices that list no
 	// encoding entrypoint at all; a device that encodes other codecs
 	// must not be described as if vainfo showed it decode-only.
@@ -219,10 +239,32 @@ func DescribeDevice(d DeviceInfo, required []Profile) string {
 	case hasAnySupport(d, required):
 		capability = "decode only"
 	}
-	if d.Driver == "" {
-		return fmt.Sprintf("%s — %s", d.Path, capability)
+	return capability
+}
+
+// DescribeDevice renders one device's capabilities relative to the
+// required profiles for error and hint messages, e.g.
+//
+//	/dev/dri/renderD129 — Renoir (Mesa Gallium driver ...) — encodes
+//	/dev/dri/renderD128 (VA-API NVDEC driver) — decode only
+//	/dev/dri/renderD130 (Other driver) — encodes other profiles
+//	/dev/dri/renderD132 — no encoding entrypoint
+//	/dev/dri/renderD131 — capabilities unknown (open: permission denied)
+//
+// Devices without resolved identity render byte-identically to the
+// plain path form.
+func DescribeDevice(d DeviceInfo, required []Profile) string {
+	if !d.Known() {
+		return fmt.Sprintf("%s — capabilities unknown (%s)", d.Path, d.Err)
 	}
-	return fmt.Sprintf("%s (%s) — %s", d.Path, d.Driver, capability)
+	header := d.Path
+	if name := d.Identity.DisplayName(); name != "" {
+		header = fmt.Sprintf("%s — %s", d.Path, name)
+	}
+	if d.Driver != "" {
+		header = fmt.Sprintf("%s (%s)", header, d.Driver)
+	}
+	return fmt.Sprintf("%s — %s", header, DeviceCapability(d, required))
 }
 
 func hasAnySupport(d DeviceInfo, profiles []Profile) bool {

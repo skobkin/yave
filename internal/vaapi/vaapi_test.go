@@ -244,3 +244,132 @@ func TestEncodeEntrypointsMatchFFmpeg(t *testing.T) {
 		t.Errorf("EncodeEntrypoints() = %v, want %v", got, want)
 	}
 }
+
+func TestDeviceCapability(t *testing.T) {
+	tests := []struct {
+		name    string
+		device  DeviceInfo
+		require []Profile
+		want    string
+	}{
+		{
+			name: "encodes",
+			device: DeviceInfo{
+				Path: "/dev/dri/renderD129", Driver: "radeonsi",
+				EntryPoints: map[Profile][]Entrypoint{ProfileHEVCMain: {EntrypointVLD, EntrypointEncSlice}},
+			},
+			require: []Profile{ProfileHEVCMain},
+			want:    "encodes",
+		},
+		{
+			name: "encodes other profiles",
+			device: DeviceInfo{
+				Path:        "/dev/dri/renderD129",
+				EntryPoints: map[Profile][]Entrypoint{ProfileH264Main: {EntrypointEncSlice}},
+			},
+			require: []Profile{ProfileHEVCMain},
+			want:    "encodes other profiles",
+		},
+		{
+			name: "decode only",
+			device: DeviceInfo{
+				Path:        "/dev/dri/renderD128",
+				EntryPoints: map[Profile][]Entrypoint{ProfileHEVCMain: {EntrypointVLD}},
+			},
+			require: []Profile{ProfileHEVCMain},
+			want:    "decode only",
+		},
+		{
+			name: "no encoding entrypoint",
+			device: DeviceInfo{
+				Path:        "/dev/dri/renderD132",
+				EntryPoints: map[Profile][]Entrypoint{},
+			},
+			require: []Profile{ProfileHEVCMain},
+			want:    "no encoding entrypoint",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DeviceCapability(tt.device, tt.require); got != tt.want {
+				t.Errorf("DeviceCapability() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeviceDetail(t *testing.T) {
+	tests := []struct {
+		name   string
+		device DeviceInfo
+		want   string
+	}{
+		{
+			name: "full identity with brand and drivers",
+			device: DeviceInfo{
+				Path:   "/dev/dri/renderD128",
+				Driver: "VA-API NVDEC driver [direct backend]",
+				Identity: DeviceIdentity{
+					Vendor: "10de", Device: "2191", Driver: "nvidia",
+					Name: "TU116M [GeForce GTX 1660 Ti Mobile]", VendorName: "NVIDIA Corporation",
+				},
+			},
+			want: "/dev/dri/renderD128 — NVIDIA TU116M [GeForce GTX 1660 Ti Mobile] (nvidia; VA-API NVDEC driver [direct backend])",
+		},
+		{
+			name: "kernel driver matching the VA driver is not repeated",
+			device: DeviceInfo{
+				Path:   "/dev/dri/renderD129",
+				Driver: "amdgpu",
+				Identity: DeviceIdentity{
+					Vendor: "1002", Device: "1636", Driver: "amdgpu",
+					Name: "Renoir [Radeon Vega Series / Radeon Vega Mobile Series]", VendorName: "Advanced Micro Devices, Inc. [AMD/ATI]",
+				},
+			},
+			want: "/dev/dri/renderD129 — AMD Renoir [Radeon Vega Series / Radeon Vega Mobile Series] (amdgpu)",
+		},
+		{
+			name: "identity without a resolved name degrades to the tiered form",
+			device: DeviceInfo{
+				Path:     "/dev/dri/renderD130",
+				Identity: DeviceIdentity{Vendor: "10de", Device: "2191", Driver: "nvidia"},
+			},
+			want: "/dev/dri/renderD130 — nvidia 10de:2191 (nvidia)",
+		},
+		{
+			name:   "nothing resolved renders the bare path",
+			device: DeviceInfo{Path: "/dev/dri/renderD131"},
+			want:   "/dev/dri/renderD131",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DeviceDetail(tt.device); got != tt.want {
+				t.Errorf("DeviceDetail() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDescribeDeviceWithIdentity(t *testing.T) {
+	renoir := DeviceInfo{
+		Path: "/dev/dri/renderD129", Driver: "radeonsi",
+		Identity: DeviceIdentity{
+			Vendor: "1002", Device: "1636", Driver: "amdgpu",
+			Name: "Renoir [Radeon Vega Series / Radeon Vega Mobile Series]", VendorName: "Advanced Micro Devices, Inc. [AMD/ATI]",
+		},
+		EntryPoints: map[Profile][]Entrypoint{ProfileHEVCMain: {EntrypointVLD, EntrypointEncSlice}},
+	}
+	if got, want := DescribeDevice(renoir, []Profile{ProfileHEVCMain}), "/dev/dri/renderD129 — Renoir (radeonsi) — encodes"; got != want {
+		t.Errorf("DescribeDevice(renoir) = %q, want %q", got, want)
+	}
+	// Without identity the rendered form stays byte-identical to the
+	// plain path form validation pins.
+	plain := DeviceInfo{
+		Path: "/dev/dri/renderD129", Driver: "radeonsi",
+		EntryPoints: map[Profile][]Entrypoint{ProfileHEVCMain: {EntrypointVLD, EntrypointEncSlice}},
+	}
+	if got, want := DescribeDevice(plain, []Profile{ProfileHEVCMain}), "/dev/dri/renderD129 (radeonsi) — encodes"; got != want {
+		t.Errorf("DescribeDevice(plain) = %q, want %q", got, want)
+	}
+}
