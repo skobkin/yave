@@ -6,7 +6,10 @@
 // with unknown capabilities so callers can fail open.
 package vaapi
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Profile mirrors the C VAProfile enum. The values are ABI constants
 // from libva's va.h, not a Go iota sequence.
@@ -38,12 +41,17 @@ const (
 	EntrypointEncSliceLP Entrypoint = 8
 )
 
+// encodeEntrypoints is the entrypoint set ffmpeg's VAAPI encoder
+// accepts in normal (low_power=auto) mode; see the
+// vaapi_encode_entrypoints_normal table in libavcodec/vaapi_encode.c.
+// It is shared: callers must not mutate the slice they get back.
+var encodeEntrypoints = []Entrypoint{EntrypointEncSlice, EntrypointEncPicture, EntrypointEncSliceLP}
+
 // EncodeEntrypoints returns the entrypoints ffmpeg's VAAPI encoder
 // accepts in normal (low_power=auto) mode; see the
 // vaapi_encode_entrypoints_normal table in libavcodec/vaapi_encode.c.
-func EncodeEntrypoints() []Entrypoint {
-	return []Entrypoint{EntrypointEncSlice, EntrypointEncPicture, EntrypointEncSliceLP}
-}
+// The returned slice is shared, not a fresh copy.
+func EncodeEntrypoints() []Entrypoint { return encodeEntrypoints }
 
 // DeviceInfo describes one render node as seen through libva. It is
 // the vainfo-equivalent payload: the driver's vendor string plus every
@@ -100,10 +108,8 @@ func (d DeviceInfo) HasAnyEncodingEntrypoint() bool {
 
 func hasEncodingEntrypoint(eps []Entrypoint) bool {
 	for _, ep := range eps {
-		for _, enc := range EncodeEntrypoints() {
-			if ep == enc {
-				return true
-			}
+		if slices.Contains(encodeEntrypoints, ep) {
+			return true
 		}
 	}
 	return false
@@ -199,10 +205,13 @@ func DescribeDevice(d DeviceInfo, required []Profile) string {
 	switch {
 	case d.Encodes(required...):
 		capability = "encodes"
+	case d.HasAnyEncodingEntrypoint():
+		// Checked before hasAnySupport: a device that can encode some
+		// other codec must not be described as decode-only, even when
+		// it also decodes one of the required profiles.
+		capability = "encodes other profiles"
 	case hasAnySupport(d, required):
 		capability = "decode only"
-	case d.HasAnyEncodingEntrypoint():
-		capability = "encodes other profiles"
 	}
 	if d.Driver == "" {
 		return fmt.Sprintf("%s — %s", d.Path, capability)

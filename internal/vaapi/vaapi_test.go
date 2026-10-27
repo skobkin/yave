@@ -201,6 +201,18 @@ func TestDescribeDevice(t *testing.T) {
 			want:    "/dev/dri/renderD129 (radeonsi) — encodes other profiles",
 		},
 		{
+			name: "encodes other profiles wins over decode-only for the required list",
+			device: DeviceInfo{
+				Path: "/dev/dri/renderD128", Driver: "NVDEC",
+				EntryPoints: map[Profile][]Entrypoint{
+					ProfileHEVCMain: {EntrypointVLD},
+					ProfileH264Main: {EntrypointVLD, EntrypointEncSlice},
+				},
+			},
+			require: []Profile{ProfileHEVCMain},
+			want:    "/dev/dri/renderD128 (NVDEC) — encodes other profiles",
+		},
+		{
 			name: "no encoding entrypoint",
 			device: DeviceInfo{
 				Path: "/dev/dri/renderD130", Driver: "",

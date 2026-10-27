@@ -2,6 +2,7 @@ package vaapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 )
@@ -46,7 +47,14 @@ var loadLibVA func() (*libvaHandle, error)
 // way.
 func Probe(ctx context.Context, nodes []string) []DeviceInfo {
 	l, err := loadLibVA()
-	if err != nil {
+	// The l == nil arm covers a panic inside the once-guarded loader:
+	// sync.Once records completion even then, leaving both results
+	// zero for every later call. Degrade to unknown capabilities
+	// instead of dereferencing the missing handle.
+	if err != nil || l == nil {
+		if err == nil {
+			err = errors.New("libva handle unavailable")
+		}
 		// No libva: every device is listed with unknown capabilities so
 		// the node inventory stays complete.
 		devices := make([]DeviceInfo, 0, len(nodes))
@@ -111,6 +119,10 @@ func probeNode(l *libvaHandle, path string) DeviceInfo {
 		info.Err = fmt.Sprintf("vaQueryConfigProfiles failed for %s (status %d)", path, st)
 		return info
 	}
+	if numProfiles < 0 || int(numProfiles) > maxProfiles {
+		info.Err = fmt.Sprintf("vaQueryConfigProfiles returned %d profiles for %s (buffer holds %d)", numProfiles, path, maxProfiles)
+		return info
+	}
 
 	maxEntrypoints := int(l.maxNumEntrypoints(display))
 	if maxEntrypoints <= 0 {
@@ -126,6 +138,10 @@ func probeNode(l *libvaHandle, path string) DeviceInfo {
 				continue
 			}
 			info.Err = fmt.Sprintf("vaQueryConfigEntrypoints failed for %s profile %d (status %d)", path, profile, st)
+			return info
+		}
+		if num < 0 || int(num) > maxEntrypoints {
+			info.Err = fmt.Sprintf("vaQueryConfigEntrypoints returned %d entrypoints for %s profile %d (buffer holds %d)", num, path, profile, maxEntrypoints)
 			return info
 		}
 		listed := make([]Entrypoint, num)

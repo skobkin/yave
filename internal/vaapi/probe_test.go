@@ -3,6 +3,7 @@ package vaapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,12 @@ func (f *fakeLibva) handle() *libvaHandle {
 				return st
 			}
 			eps := f.entrypoints[profile]
+			if len(eps) > int(f.maxNumEntrypoints) {
+				// unsafe.Slice trusts the length, so an oversized
+				// fixture would corrupt the heap; fail the test with a
+				// clear message instead.
+				panic(fmt.Sprintf("fixture bug: profile %d lists %d entrypoints, maxNumEntrypoints is %d", profile, len(eps), f.maxNumEntrypoints))
+			}
 			slice := unsafe.Slice(list, len(eps))
 			for i, ep := range eps {
 				slice[i] = ep
@@ -329,5 +336,55 @@ func TestProbeWithoutLibvaListsAllNodesAsUnknown(t *testing.T) {
 		if d.Path != nodes[i] || d.Known() {
 			t.Errorf("device %d = %+v, want the node path with unknown capabilities", i, d)
 		}
+	}
+}
+
+// TestProbeNodeRejectsCountsOutsideBuffer pins the FFI-boundary clamp:
+// a misbehaving driver reporting more entries than the caller-provided
+// buffer (or a negative count) must degrade the device to Err, never
+// panic the slice expressions that consume the count.
+func TestProbeNodeRejectsCountsOutsideBuffer(t *testing.T) {
+	node := probeFile(t)
+	if err := os.WriteFile(node, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f := (&fakeLibva{}).handle()
+	f.queryConfigProfiles = func(_ uintptr, _ *Profile, num *int32) int32 {
+		*num = 999 // success status, count above the buffer capacity
+		return 0
+	}
+	info := probeNode(f, node)
+	if info.Err == "" || !strings.Contains(info.Err, "vaQueryConfigProfiles returned 999") {
+		t.Fatalf("Err = %q, want a count-above-capacity rejection", info.Err)
+	}
+
+	f2 := (&fakeLibva{profiles: []Profile{ProfileHEVCMain}}).handle()
+	f2.queryConfigEntrypoints = func(_ uintptr, _ Profile, _ *Entrypoint, num *int32) int32 {
+		*num = -1
+		return 0
+	}
+	info = probeNode(f2, node)
+	if info.Err == "" || !strings.Contains(info.Err, "returned -1 entrypoints") {
+		t.Fatalf("Err = %q, want a negative count rejection", info.Err)
+	}
+}
+
+// TestProbeDegradesOnNilHandle pins the panic-recovery hole in the
+// once-guarded loader: sync.Once records completion even when the
+// loader panics, so (nil, nil) is a reachable outcome and Probe must
+// degrade to unknown capabilities instead of dereferencing the handle.
+func TestProbeDegradesOnNilHandle(t *testing.T) {
+	orig := loadLibVA
+	t.Cleanup(func() { loadLibVA = orig })
+	loadLibVA = func() (*libvaHandle, error) { return nil, nil }
+
+	devices := Probe(context.Background(), []string{"/dev/dri/renderD128"})
+	if len(devices) != 1 {
+		t.Fatalf("devices = %+v, want one entry", devices)
+	}
+	d := devices[0]
+	if d.Path != "/dev/dri/renderD128" || d.Known() || d.Err == "" {
+		t.Errorf("device = %+v, want the node listed with unknown capabilities", d)
 	}
 }

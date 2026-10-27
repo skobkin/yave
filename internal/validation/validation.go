@@ -396,9 +396,13 @@ func validateVAAPIDevice(result *Result, video model.VideoSettings, capabilities
 				continue
 			}
 			if !d.Encodes(required...) {
+				device := d.Path
+				if d.Driver != "" {
+					device = fmt.Sprintf("%s (%s)", d.Path, d.Driver)
+				}
 				result.warning("profile.video.vaapi_device",
-					"the VAAPI device %s (%s) does not offer encoding for %s profile %s; switch the VAAPI device to automatic or pick a device that can encode",
-					d.Path, d.Driver, encoderName, DisplayProfile(video.Profile))
+					"the VAAPI device %s does not offer encoding for %s profile %s; switch the VAAPI device to automatic, pick a device that can encode, or switch to another video encoder if no device offers encoding",
+					device, encoderName, DisplayProfile(video.Profile))
 			}
 			return
 		}

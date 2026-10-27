@@ -78,15 +78,16 @@ func (e *vaapiEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo)
 // vaapi_encode_h265.c, vaapi_encode_av1.c, vaapi_encode_vp9.c),
 // restricted to the same 8-bit 4:2:0 entries as the curated profile
 // lists above: hevc rext maps to VAProfileHEVCMain at 8-bit, and an
-// empty/auto profile maps to every candidate of the family in
-// ffmpeg's preference order — vaapi_encode auto-selects the first
-// candidate the driver supports, so any one of them keeps the
-// conversion runnable. Unknown values return nil; curated membership
-// is validated elsewhere.
+// empty/auto profile maps to every candidate of the family as a set —
+// vaapi_encode auto-selects whichever candidate the driver supports,
+// so any one of them keeps the conversion runnable (the list order
+// carries no meaning for the any-match device check). Unknown values
+// return nil; curated membership is validated elsewhere.
 func (e *vaapiEncoder) RequiredVAProfiles(profile string) []vaapi.Profile {
+	p := strings.ToLower(strings.TrimSpace(profile))
 	switch e.codecFamily {
 	case "h264":
-		switch strings.ToLower(strings.TrimSpace(profile)) {
+		switch p {
 		case "constrained_baseline":
 			return []vaapi.Profile{vaapi.ProfileH264ConstrainedBaseline}
 		case "main":
@@ -99,18 +100,18 @@ func (e *vaapiEncoder) RequiredVAProfiles(profile string) []vaapi.Profile {
 			}
 		}
 	case "hevc":
-		switch strings.ToLower(strings.TrimSpace(profile)) {
+		switch p {
 		case "main", "rext", "":
 			// 8-bit 4:2:0 rext is encoded as HEVCMain by ffmpeg.
 			return []vaapi.Profile{vaapi.ProfileHEVCMain}
 		}
 	case "av1":
-		switch strings.ToLower(strings.TrimSpace(profile)) {
+		switch p {
 		case "main", "":
 			return []vaapi.Profile{vaapi.ProfileAV1Profile0}
 		}
 	case "vp9":
-		switch strings.ToLower(strings.TrimSpace(profile)) {
+		switch p {
 		case "0", "":
 			return []vaapi.Profile{vaapi.ProfileVP9Profile0}
 		}

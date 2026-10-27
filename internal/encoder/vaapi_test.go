@@ -339,38 +339,37 @@ func TestRequiredVAProfiles(t *testing.T) {
 		encoder    string
 		profile    string
 		wantOK     bool
-		wantPanic  bool
 		wantValues []vaapi.Profile
 	}{
-		{"h264 constrained_baseline", "h264_vaapi", "constrained_baseline", true, false,
+		{"h264 constrained_baseline", "h264_vaapi", "constrained_baseline", true,
 			[]vaapi.Profile{vaapi.ProfileH264ConstrainedBaseline}},
-		{"h264 main", "h264_vaapi", "main", true, false,
+		{"h264 main", "h264_vaapi", "main", true,
 			[]vaapi.Profile{vaapi.ProfileH264Main}},
-		{"h264 high", "h264_vaapi", "high", true, false,
+		{"h264 high", "h264_vaapi", "high", true,
 			[]vaapi.Profile{vaapi.ProfileH264High}},
-		{"h264 auto covers every curated candidate", "h264_vaapi", "", true, false,
+		{"h264 auto covers every curated candidate", "h264_vaapi", "", true,
 			[]vaapi.Profile{vaapi.ProfileH264ConstrainedBaseline, vaapi.ProfileH264Main, vaapi.ProfileH264High}},
-		{"h264 unknown value", "h264_vaapi", "main10", true, false, nil},
-		{"hevc main", "hevc_vaapi", "main", true, false,
+		{"h264 unknown value", "h264_vaapi", "main10", true, nil},
+		{"hevc main", "hevc_vaapi", "main", true,
 			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
-		{"hevc rext maps to HEVCMain at 8-bit 4:2:0", "hevc_vaapi", "rext", true, false,
+		{"hevc rext maps to HEVCMain at 8-bit 4:2:0", "hevc_vaapi", "rext", true,
 			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
-		{"hevc auto", "hevc_vaapi", "", true, false,
+		{"hevc auto", "hevc_vaapi", "", true,
 			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
-		{"hevc unknown value", "hevc_vaapi", "main10", true, false, nil},
-		{"av1 main", "av1_vaapi", "main", true, false,
+		{"hevc unknown value", "hevc_vaapi", "main10", true, nil},
+		{"av1 main", "av1_vaapi", "main", true,
 			[]vaapi.Profile{vaapi.ProfileAV1Profile0}},
-		{"av1 auto", "av1_vaapi", "", true, false,
+		{"av1 auto", "av1_vaapi", "", true,
 			[]vaapi.Profile{vaapi.ProfileAV1Profile0}},
-		{"vp9 profile 0", "vp9_vaapi", "0", true, false,
+		{"vp9 profile 0", "vp9_vaapi", "0", true,
 			[]vaapi.Profile{vaapi.ProfileVP9Profile0}},
-		{"vp9 auto", "vp9_vaapi", "", true, false,
+		{"vp9 auto", "vp9_vaapi", "", true,
 			[]vaapi.Profile{vaapi.ProfileVP9Profile0}},
-		{"case and space insensitive", "hevc_vaapi", "  MAIN ", true, false,
+		{"case and space insensitive", "hevc_vaapi", "  MAIN ", true,
 			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
-		{"non-VAAPI encoder", "libx265", "main", false, false, nil},
-		{"unknown encoder", "mpeg2_vaapi", "main", false, false, nil},
-		{"empty encoder", "", "main", false, false, nil},
+		{"non-VAAPI encoder", "libx265", "main", false, nil},
+		{"unknown encoder", "mpeg2_vaapi", "main", false, nil},
+		{"empty encoder", "", "main", false, nil},
 	}
 
 	for _, tt := range tests {
@@ -383,5 +382,32 @@ func TestRequiredVAProfiles(t *testing.T) {
 				t.Errorf("RequiredVAProfiles(%q, %q) = %v, want %v", tt.encoder, tt.profile, got, tt.wantValues)
 			}
 		})
+	}
+}
+
+// TestCuratedProfilesHaveVAProfileRequirements pins the mapping
+// between the curated -profile:v lists and RequiredVAProfiles: a
+// value added to Profiles() without a mapping case would still
+// validate, render, and emit a command — yet silently skip every
+// VAAPI device-capability check (auto selection would never
+// materialize a device and the command preview would go blank).
+func TestCuratedProfilesHaveVAProfileRequirements(t *testing.T) {
+	for _, name := range []string{"h264_vaapi", "hevc_vaapi", "av1_vaapi", "vp9_vaapi"} {
+		raw, ok := DefaultRegistry().Get(name)
+		if !ok {
+			t.Fatalf("encoder %s missing from the registry", name)
+		}
+		e, ok := raw.(*vaapiEncoder)
+		if !ok {
+			t.Fatalf("%s is not a *vaapiEncoder", name)
+		}
+		for _, value := range e.Profiles() {
+			if got := e.RequiredVAProfiles(value); len(got) == 0 {
+				t.Errorf("%s: curated profile %q has no RequiredVAProfiles mapping", name, value)
+			}
+		}
+		if got := e.RequiredVAProfiles(""); len(got) == 0 {
+			t.Errorf("%s: the empty (automatic) profile has no RequiredVAProfiles mapping", name)
+		}
 	}
 }

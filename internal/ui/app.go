@@ -501,6 +501,12 @@ func (c *Controller) detect() {
 			if err != nil {
 				c.caps = model.Capabilities{}
 				c.detection.SetText("Detection failed: " + err.Error())
+				// Re-derive the derived labels (the automatic-device
+				// hint in particular): with caps emptied, a hint that
+				// still names the previous detection's resolved device
+				// would contradict the "no device detected" validation
+				// error the next Start shows.
+				c.updateVAAPIDeviceHint()
 			} else {
 				c.applyDetection(caps)
 			}
@@ -572,7 +578,12 @@ func (c *Controller) refresh() {
 				Profile:    p,
 				Media:      c.media,
 			})
-			if buildErr == nil {
+			// Explain a blank preview instead of silently keeping the
+			// stale text: automatic device selection makes unreachable
+			// builds (no compatible VAAPI device) a normal preview state.
+			if buildErr != nil {
+				c.command.SetText("Command error: " + buildErr.Error())
+			} else {
 				c.command.SetText(plan.Preview)
 			}
 		}
@@ -995,23 +1006,34 @@ func (c *Controller) videoProfileValue() string {
 	return profileOptionToValue(c.videoProfile.Selected)
 }
 
+// resolveAutoVAAPI resolves what the "(Auto)" device option means for
+// the given encoder and -profile:v value against the current
+// capabilities. ok is false for encoders with no VAAPI device
+// requirement, so callers skip the auto logic entirely.
+func (c *Controller) resolveAutoVAAPI(encoderName, profile string) (choice vaapi.DeviceChoice, ok bool) {
+	required, ok := encoder.RequiredVAProfiles(encoderName, profile)
+	if !ok || len(required) == 0 {
+		return vaapi.DeviceChoice{}, false
+	}
+	return vaapi.SelectDevice(c.caps.RenderNodes, c.caps.VAAPIDevices, required), true
+}
+
 // commandProfile returns the widget state as the profile shape
 // ffmpeg.BuildCommand consumes: an automatic VAAPI device ("") is
-// materialized into the concrete path vaapi.SelectDevice resolves from
-// the current capabilities. profileFromWidgets stays the persisted
-// shape where "" means automatic — Save must keep the Auto intent.
-// SelectDevice is pure and both call sites (the refresh preview and
-// the startConversion run) see identical inputs, so preview,
+// materialized into the concrete path resolveAutoVAAPI picks from the
+// current capabilities. profileFromWidgets stays the persisted shape
+// where "" means automatic — Save must keep the Auto intent.
+// resolveAutoVAAPI is pure and both call sites (the refresh preview
+// and the startConversion run) see identical inputs, so preview,
 // validation (which resolves the same way internally), and the actual
 // run always agree.
 func (c *Controller) commandProfile() model.Profile {
 	p := c.profileFromWidgets()
-	required, ok := encoder.RequiredVAProfiles(p.Video.Encoder, p.Video.Profile)
-	if !ok || strings.TrimSpace(p.Video.VAAPIDevice) != "" {
+	if strings.TrimSpace(p.Video.VAAPIDevice) != "" {
 		return p
 	}
-	choice := vaapi.SelectDevice(c.caps.RenderNodes, c.caps.VAAPIDevices, required)
-	if choice.Path != "" {
+	choice, ok := c.resolveAutoVAAPI(p.Video.Encoder, p.Video.Profile)
+	if ok && choice.Path != "" {
 		p.Video.VAAPIDevice = choice.Path
 	}
 	return p
@@ -1271,7 +1293,7 @@ func firstNonEmpty(values ...string) string {
 // manual picks survive re-detections.
 func (c *Controller) updateDeviceOptions() {
 	nodes := c.caps.RenderNodes
-	c.vaapiDevice.Options = append([]string{vaapiAutoOption}, slices.Clone(nodes)...)
+	c.vaapiDevice.Options = append([]string{vaapiAutoOption}, nodes...)
 	c.qsvDevice.Options = append([]string{defaultOption}, nodes...)
 	c.vaapiDevice.Refresh()
 	c.qsvDevice.Refresh()
@@ -1311,8 +1333,8 @@ func (c *Controller) reconcileDevices(atLoad bool) {
 	// Resolve each dropdown's target: the loaded seed while it is one
 	// of the detected nodes, otherwise the replacement. Only a
 	// non-empty vanished seed counts as replaced (reported + reseeded);
-	// an empty seed keeps its meaning — "no device configured yet" for
-	// VAAPI (validation requires a path) and "ffmpeg's default" for QSV.
+	// an empty seed keeps its meaning — automatic selection for VAAPI
+	// (the "(Auto)" option) and "ffmpeg's default" for QSV.
 	vaapiTarget := c.vaapiDeviceSeed
 	vaapiReplaced := false
 	if !slices.Contains(nodes, vaapiTarget) {
@@ -1587,9 +1609,9 @@ func (c *Controller) updateControlState() {
 	c.maxHeight.Enable()
 	c.keepAspect.Enable()
 	c.noUpscale.Enable()
-	// Device dropdowns without options (no render nodes detected) stay
-	// disabled — their seed fallback still round-trips the saved value
-	// through profileFromWidgets.
+	// The device dropdowns list "(Auto)" / "(default)" even without
+	// detected nodes; the seed fallback in profileFromWidgets still
+	// round-trips the saved value through an empty selection.
 	if len(c.vaapiDevice.Options) > 0 {
 		c.vaapiDevice.Enable()
 	}
@@ -2128,12 +2150,12 @@ func (c *Controller) updateVAAPIDeviceHint() {
 		c.vaapiDeviceHint.SetText("")
 		return
 	}
-	required, ok := encoder.RequiredVAProfiles(ve.Name(), profileOptionToValue(c.videoProfile.Selected))
-	if !ok || len(required) == 0 {
+	profile := profileOptionToValue(c.videoProfile.Selected)
+	choice, ok := c.resolveAutoVAAPI(ve.Name(), profile)
+	if !ok {
 		c.vaapiDeviceHint.SetText("")
 		return
 	}
-	choice := vaapi.SelectDevice(c.caps.RenderNodes, c.caps.VAAPIDevices, required)
 	switch choice.Status {
 	case vaapi.DeviceSelected:
 		if choice.Driver != "" {
