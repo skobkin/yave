@@ -61,9 +61,18 @@ func Probe(ctx context.Context, nodes []string) []DeviceInfo {
 		for _, node := range nodes {
 			devices = append(devices, DeviceInfo{Path: node, Err: err.Error()})
 		}
+		// Identity comes from sysfs, not libva, so it enriches even this
+		// degraded branch: machines without libva still show GPU names.
+		for i := range devices {
+			devices[i].Identity = identifyRenderNode(devices[i].Path)
+		}
 		return devices
 	}
-	return probeWith(ctx, l, nodes)
+	devices := probeWith(ctx, l, nodes)
+	for i := range devices {
+		devices[i].Identity = identifyRenderNode(devices[i].Path)
+	}
+	return devices
 }
 
 // probeWith runs the per-device probe loop against an already loaded

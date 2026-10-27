@@ -62,6 +62,12 @@ type DeviceInfo struct {
 	Path string
 	// Driver is vaQueryVendorString's output; empty when unknown.
 	Driver string
+	// Identity is what sysfs and the PCI ID database say about the GPU
+	// behind the node. Zero when nothing resolved (non-Linux, missing
+	// sysfs attributes, no pci.ids database). Probe populates it for
+	// every returned device — including ones whose VA-API probe failed
+	// (Err set) — so machines without libva still get named devices.
+	Identity DeviceIdentity
 	// EntryPoints maps every profile the device reported to all of its
 	// entrypoints, decode ones included. nil when Err is set.
 	EntryPoints map[Profile][]Entrypoint
