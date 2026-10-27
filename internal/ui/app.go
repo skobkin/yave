@@ -1232,6 +1232,10 @@ func (c *Controller) populateProfileOptions(preferred string) {
 // "(default)", where ffmpeg picks the device.
 const vaapiAutoOption = "(Auto)"
 
+// warningPrefix marks hint lines whose selection cannot serve the
+// current encoder — a visible warning, never a blocker.
+const warningPrefix = "⚠️ "
+
 // vaapiDeviceFromWidgets resolves the VAAPI device for the profile
 // model. An empty dropdown selection (no nodes detected yet, or never
 // selected) falls back to the loaded profile's saved value so a Save
@@ -2254,7 +2258,7 @@ func (c *Controller) updateVAAPIDeviceHint() {
 		}
 		c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: %s (capabilities unknown)", choice.Path))
 	case vaapi.DeviceNoneCompatible:
-		c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: no compatible device for %s profile %s",
+		c.vaapiDeviceHint.SetText(fmt.Sprintf(warningPrefix+"Auto: no compatible device for %s profile %s",
 			ve.Name(), validation.DisplayProfile(profile)))
 	case vaapi.DeviceNoNodes:
 		c.vaapiDeviceHint.SetText("Auto: no VAAPI render device detected")
@@ -2274,7 +2278,11 @@ func (c *Controller) describeVAAPIDevice(node string, ve encoder.VideoEncoder, p
 	}
 	text := vaapi.DeviceDetail(d)
 	if required, ok := encoder.RequiredVAProfiles(ve.Name(), profile); ok && len(required) > 0 {
-		text += " — " + vaapi.DeviceCapability(d, required)
+		if d.FailsRequirement(required) {
+			text = warningPrefix + fmt.Sprintf("%s — does not encode %s profile %s", text, ve.Name(), validation.DisplayProfile(profile))
+		} else {
+			text += " — " + vaapi.DeviceCapability(d, required)
+		}
 	}
 	return text
 }

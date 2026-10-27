@@ -373,3 +373,52 @@ func TestDescribeDeviceWithIdentity(t *testing.T) {
 		t.Errorf("DescribeDevice(plain) = %q, want %q", got, want)
 	}
 }
+
+func TestFailsRequirement(t *testing.T) {
+	tests := []struct {
+		name    string
+		device  DeviceInfo
+		require []Profile
+		want    bool
+	}{
+		{
+			name: "compatible device passes",
+			device: DeviceInfo{
+				Path:        "/dev/dri/renderD129",
+				EntryPoints: map[Profile][]Entrypoint{ProfileHEVCMain: {EntrypointVLD, EntrypointEncSlice}},
+			},
+			require: []Profile{ProfileHEVCMain},
+			want:    false,
+		},
+		{
+			name: "decode-only device fails",
+			device: DeviceInfo{
+				Path:        "/dev/dri/renderD128",
+				EntryPoints: map[Profile][]Entrypoint{ProfileHEVCMain: {EntrypointVLD}},
+			},
+			require: []Profile{ProfileHEVCMain},
+			want:    true,
+		},
+		{
+			name: "device encoding other profiles fails",
+			device: DeviceInfo{
+				Path:        "/dev/dri/renderD129",
+				EntryPoints: map[Profile][]Entrypoint{ProfileH264Main: {EntrypointEncSlice}},
+			},
+			require: []Profile{ProfileHEVCMain},
+			want:    true,
+		},
+		{
+			name:   "unknown capabilities never fail",
+			device: DeviceInfo{Path: "/dev/dri/renderD130", Err: "open: permission denied"},
+			want:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.device.FailsRequirement(tt.require); got != tt.want {
+				t.Errorf("FailsRequirement() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

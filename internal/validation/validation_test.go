@@ -802,6 +802,22 @@ func TestValidateVAAPIDevice(t *testing.T) {
 				"does not offer encoding for hevc_vaapi profile \"main\"; switch the VAAPI device to automatic",
 		},
 		{
+			name: "manual decode-only device with identity warns identically",
+			caps: func() model.Capabilities {
+				caps := vaapiDeviceFixture()
+				caps.VAAPIDevices[0].Identity = vaapi.DeviceIdentity{
+					Vendor: "10de", Device: "2191", Driver: "nvidia",
+					Name: "TU116M [GeForce GTX 1660 Ti Mobile]", VendorName: "NVIDIA Corporation",
+				}
+				return caps
+			},
+			encoder: "hevc_vaapi",
+			device:  "/dev/dri/renderD128",
+			profile: "main",
+			wantWarn: "the VAAPI device /dev/dri/renderD128 (VA-API NVDEC driver [direct backend]) " +
+				"does not offer encoding for hevc_vaapi profile \"main\"; switch the VAAPI device to automatic",
+		},
+		{
 			name:       "manual encode-capable device is clean",
 			caps:       vaapiDeviceFixture,
 			encoder:    "hevc_vaapi",

@@ -392,10 +392,10 @@ func validateVAAPIDevice(result *Result, video model.VideoSettings, capabilities
 	device := strings.TrimSpace(video.VAAPIDevice)
 	if device != "" {
 		for _, d := range capabilities.VAAPIDevices {
-			if d.Path != device || !d.Known() {
+			if d.Path != device {
 				continue
 			}
-			if !d.Encodes(required...) {
+			if d.FailsRequirement(required) {
 				device := d.Path
 				if d.Driver != "" {
 					device = fmt.Sprintf("%s (%s)", d.Path, d.Driver)

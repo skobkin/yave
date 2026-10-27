@@ -242,6 +242,14 @@ func DeviceCapability(d DeviceInfo, required []Profile) string {
 	return capability
 }
 
+// FailsRequirement reports whether a known device cannot serve the
+// required profiles at all: Known but not Encodes. Devices with
+// unknown capabilities never fail — callers treat them as usable,
+// mirroring validation's fail-open behavior.
+func (d DeviceInfo) FailsRequirement(required []Profile) bool {
+	return d.Known() && !d.Encodes(required...)
+}
+
 // DescribeDevice renders one device's capabilities relative to the
 // required profiles for error and hint messages, e.g.
 //

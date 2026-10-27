@@ -1821,7 +1821,7 @@ func TestVAAPIDeviceHint(t *testing.T) {
 			encoder:  "hevc_vaapi",
 			profile:  "main",
 			device:   vaapiAutoOption,
-			wantHint: `Auto: no compatible device for hevc_vaapi profile "main"`,
+			wantHint: `⚠️ Auto: no compatible device for hevc_vaapi profile "main"`,
 		},
 		{
 			name: "auto without nodes reports the gap",
@@ -1844,7 +1844,7 @@ func TestVAAPIDeviceHint(t *testing.T) {
 			caps:     vaapiDualGPUFixture,
 			encoder:  "hevc_vaapi",
 			device:   "GeForce GTX 1660 Ti Mobile (renderD128)",
-			wantHint: "/dev/dri/renderD128 — NVIDIA TU116M [GeForce GTX 1660 Ti Mobile] (nvidia; VA-API NVDEC driver [direct backend]) — decode only",
+			wantHint: "⚠️ /dev/dri/renderD128 — NVIDIA TU116M [GeForce GTX 1660 Ti Mobile] (nvidia; VA-API NVDEC driver [direct backend]) — does not encode hevc_vaapi profile (automatic)",
 		},
 		{
 			name: "manual pick without a probe record stays hidden",
