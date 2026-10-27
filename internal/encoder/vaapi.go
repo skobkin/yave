@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 )
 
 // vaapiEncoder is the shared implementation for the VAAPI video
@@ -70,21 +71,87 @@ func (e *vaapiEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo)
 	return strings.Join(filters, ","), nil
 }
 
+// RequiredVAProfiles maps a curated -profile:v value to the VAProfile
+// or profiles ffmpeg's VAAPI encoder accepts for it through yave's
+// fixed 8-bit 4:2:0 upload chain. The table mirrors the per-codec
+// VAAPIEncodeProfile tables in libavcodec (vaapi_encode_h264.c,
+// vaapi_encode_h265.c, vaapi_encode_av1.c, vaapi_encode_vp9.c),
+// restricted to the same 8-bit 4:2:0 entries as the curated profile
+// lists above: hevc rext maps to VAProfileHEVCMain at 8-bit, and an
+// empty/auto profile maps to every candidate of the family in
+// ffmpeg's preference order — vaapi_encode auto-selects the first
+// candidate the driver supports, so any one of them keeps the
+// conversion runnable. Unknown values return nil; curated membership
+// is validated elsewhere.
+func (e *vaapiEncoder) RequiredVAProfiles(profile string) []vaapi.Profile {
+	switch e.codecFamily {
+	case "h264":
+		switch strings.ToLower(strings.TrimSpace(profile)) {
+		case "constrained_baseline":
+			return []vaapi.Profile{vaapi.ProfileH264ConstrainedBaseline}
+		case "main":
+			return []vaapi.Profile{vaapi.ProfileH264Main}
+		case "high":
+			return []vaapi.Profile{vaapi.ProfileH264High}
+		case "":
+			return []vaapi.Profile{
+				vaapi.ProfileH264ConstrainedBaseline, vaapi.ProfileH264Main, vaapi.ProfileH264High,
+			}
+		}
+	case "hevc":
+		switch strings.ToLower(strings.TrimSpace(profile)) {
+		case "main", "rext", "":
+			// 8-bit 4:2:0 rext is encoded as HEVCMain by ffmpeg.
+			return []vaapi.Profile{vaapi.ProfileHEVCMain}
+		}
+	case "av1":
+		switch strings.ToLower(strings.TrimSpace(profile)) {
+		case "main", "":
+			return []vaapi.Profile{vaapi.ProfileAV1Profile0}
+		}
+	case "vp9":
+		switch strings.ToLower(strings.TrimSpace(profile)) {
+		case "0", "":
+			return []vaapi.Profile{vaapi.ProfileVP9Profile0}
+		}
+	}
+	return nil
+}
+
+// RequiredVAProfiles resolves the VAProfile requirement for an encoder
+// name and curated -profile:v value through the default registry. ok
+// is false for non-VAAPI encoders and unknown names, so callers can
+// skip the device-compatibility logic for everything else.
+func RequiredVAProfiles(encoderName, profile string) ([]vaapi.Profile, bool) {
+	raw, ok := DefaultRegistry().Get(strings.ToLower(strings.TrimSpace(encoderName)))
+	if !ok {
+		return nil, false
+	}
+	va, ok := raw.(*vaapiEncoder)
+	if !ok {
+		return nil, false
+	}
+	return va.RequiredVAProfiles(profile), true
+}
+
 // BuildVideoArgs emits the pre-input -vaapi_device flag plus the
 // per-stream rate-control args. The switch mirrors the prior
 // ffmpeg.buildVideoArgs VAAPI branch.
 //
-// A blank VAAPIDevice is a configuration error, not a "use default"
-// case: -vaapi_device is required for ffmpeg to attach a VAAPI context
-// to the filter graph, and silently dropping it produces an unusable
-// command that fails only when the user runs it. Surface the error
-// here so command generation matches the validation UI.
+// A blank VAAPIDevice means "automatic": validation and the UI resolve
+// it against the probed devices and materialize a concrete path before
+// command generation. Reaching the builder blank therefore means no
+// resolution was possible (no detection, no render nodes), which is
+// still a configuration error rather than a "use default" case —
+// silently dropping the flag produces an unusable command that fails
+// only when the user runs it. Surface the error here so command
+// generation matches the validation UI.
 func (e *vaapiEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) {
 	if v.Encoder == "" {
 		return BuildResult{}, fmt.Errorf("video encoder is empty")
 	}
 	if strings.TrimSpace(v.VAAPIDevice) == "" {
-		return BuildResult{}, fmt.Errorf("VAAPI device path is empty")
+		return BuildResult{}, fmt.Errorf("VAAPI device path is empty (automatic device selection requires capability detection)")
 	}
 	res := BuildResult{}
 	res.PreInputArgs = []string{"-vaapi_device", v.VAAPIDevice}

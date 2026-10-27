@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 )
 
 func TestVAAPIVideoEncodersAreRegistered(t *testing.T) {
@@ -330,4 +331,57 @@ func TestVAAPIBuildArgsParityWithCommandTests(t *testing.T) {
 			t.Errorf("PreInputArgs must not contain -c:v: %#v", res.PreInputArgs)
 		}
 	})
+}
+
+func TestRequiredVAProfiles(t *testing.T) {
+	tests := []struct {
+		name       string
+		encoder    string
+		profile    string
+		wantOK     bool
+		wantPanic  bool
+		wantValues []vaapi.Profile
+	}{
+		{"h264 constrained_baseline", "h264_vaapi", "constrained_baseline", true, false,
+			[]vaapi.Profile{vaapi.ProfileH264ConstrainedBaseline}},
+		{"h264 main", "h264_vaapi", "main", true, false,
+			[]vaapi.Profile{vaapi.ProfileH264Main}},
+		{"h264 high", "h264_vaapi", "high", true, false,
+			[]vaapi.Profile{vaapi.ProfileH264High}},
+		{"h264 auto covers every curated candidate", "h264_vaapi", "", true, false,
+			[]vaapi.Profile{vaapi.ProfileH264ConstrainedBaseline, vaapi.ProfileH264Main, vaapi.ProfileH264High}},
+		{"h264 unknown value", "h264_vaapi", "main10", true, false, nil},
+		{"hevc main", "hevc_vaapi", "main", true, false,
+			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
+		{"hevc rext maps to HEVCMain at 8-bit 4:2:0", "hevc_vaapi", "rext", true, false,
+			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
+		{"hevc auto", "hevc_vaapi", "", true, false,
+			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
+		{"hevc unknown value", "hevc_vaapi", "main10", true, false, nil},
+		{"av1 main", "av1_vaapi", "main", true, false,
+			[]vaapi.Profile{vaapi.ProfileAV1Profile0}},
+		{"av1 auto", "av1_vaapi", "", true, false,
+			[]vaapi.Profile{vaapi.ProfileAV1Profile0}},
+		{"vp9 profile 0", "vp9_vaapi", "0", true, false,
+			[]vaapi.Profile{vaapi.ProfileVP9Profile0}},
+		{"vp9 auto", "vp9_vaapi", "", true, false,
+			[]vaapi.Profile{vaapi.ProfileVP9Profile0}},
+		{"case and space insensitive", "hevc_vaapi", "  MAIN ", true, false,
+			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
+		{"non-VAAPI encoder", "libx265", "main", false, false, nil},
+		{"unknown encoder", "mpeg2_vaapi", "main", false, false, nil},
+		{"empty encoder", "", "main", false, false, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := RequiredVAProfiles(tt.encoder, tt.profile)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !slices.Equal(got, tt.wantValues) {
+				t.Errorf("RequiredVAProfiles(%q, %q) = %v, want %v", tt.encoder, tt.profile, got, tt.wantValues)
+			}
+		})
+	}
 }

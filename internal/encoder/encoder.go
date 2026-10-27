@@ -4,9 +4,11 @@
 // validation.ValidateProfile, and the UI controller.
 //
 // The package is intentionally leaf-level: it depends only on
-// internal/model (for VideoSettings / MediaInfo / AudioSettings). The
-// validation package imports this one for the registry; this package
-// never imports validation.
+// internal/model (for VideoSettings / MediaInfo / AudioSettings) and
+// internal/vaapi (for the VAProfile constants of the VAAPI device
+// mapping; vaapi itself imports nothing internal). The validation
+// package imports this one for the registry; this package never
+// imports validation.
 package encoder
 
 import (
