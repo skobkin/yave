@@ -26,6 +26,7 @@ import (
 	"git.skobk.in/skobkin/yave/internal/resources"
 	"git.skobk.in/skobkin/yave/internal/templates"
 	"git.skobk.in/skobkin/yave/internal/transcode"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
@@ -130,6 +131,10 @@ type Controller struct {
 	// them. reconcileDevices owns every programmatic selection.
 	vaapiDeviceSeed string
 	qsvDeviceSeed   string
+	// vaapiDeviceHint explains what the "(Auto)" device selection
+	// currently resolves to. It is a plain label like rateControlHint so
+	// detection updates change text without rebuilding the form.
+	vaapiDeviceHint *widget.Label
 	gpuIndex        *widget.Entry
 	audioMode       *widget.Select
 	audioEncoder    *widget.Select
@@ -290,6 +295,8 @@ func (c *Controller) createWidgets() {
 	c.noUpscale = widget.NewCheck("Prevent upscaling", func(bool) { c.changed("") })
 	c.vaapiDevice = widget.NewSelect([]string{}, c.changed)
 	c.qsvDevice = widget.NewSelect([]string{}, c.changed)
+	c.vaapiDeviceHint = widget.NewLabel("")
+	c.vaapiDeviceHint.Wrapping = fyne.TextWrapWord
 	c.gpuIndex = numericEntry(c.changed)
 
 	c.audioMode = widget.NewSelect([]string{model.AudioCopy, model.AudioEncode}, c.changed)
@@ -515,8 +522,12 @@ func (c *Controller) applyDetection(caps model.Capabilities) {
 	c.caps = caps
 	c.config.FFmpeg.FFmpegPath = caps.FFmpegPath
 	c.config.FFmpeg.FFprobePath = caps.FFprobePath
-	c.detection.SetText(fmt.Sprintf("%s\n%s\nHardware acceleration: %s\nHardware devices: %s",
-		caps.FFmpegVersion, caps.FFprobeVersion, strings.Join(caps.HWAccels, ", "), hardwareDevicesSummary(caps)))
+	summary := fmt.Sprintf("%s\n%s\nHardware acceleration: %s\nHardware devices: %s",
+		caps.FFmpegVersion, caps.FFprobeVersion, strings.Join(caps.HWAccels, ", "), hardwareDevicesSummary(caps))
+	if devices := vaapiDevicesSummary(caps); devices != "" {
+		summary += "\nVAAPI devices: " + devices
+	}
+	c.detection.SetText(summary)
 	c.updateEncoderOptions()
 	c.updateDeviceOptions()
 	c.reconcileDevices(false)
@@ -533,7 +544,9 @@ func (c *Controller) changed(string) {
 }
 
 func (c *Controller) refresh() {
-	p := c.profileFromWidgets()
+	// Materialize the automatic VAAPI device so the previewed command
+	// shows the resolved -vaapi_device, not the empty auto value.
+	p := c.commandProfile()
 	c.outputPath = ""
 	c.command.SetText("")
 	if c.inputPath != "" {
@@ -583,11 +596,15 @@ func (c *Controller) startConversion() {
 		c.showRunError("Validation failed", strings.Join(messages, "\n"))
 		return
 	}
+	// The run uses the materialized profile (automatic VAAPI device
+	// resolved to a concrete path); validation above deliberately saw
+	// the raw profile so its auto semantics could apply.
+	cp := c.commandProfile()
 	start := func(overwrite bool) {
 		plan, buildErr := ffmpeg.BuildCommand(ffmpeg.BuildRequest{
 			FFmpegPath: c.config.FFmpeg.FFmpegPath,
 			InputPath:  c.inputPath, OutputPath: resolved,
-			Profile: p, Media: c.media, Overwrite: overwrite,
+			Profile: cp, Media: c.media, Overwrite: overwrite,
 		})
 		if buildErr != nil {
 			c.showRunError("Command generation failed", buildErr.Error())
@@ -978,6 +995,28 @@ func (c *Controller) videoProfileValue() string {
 	return profileOptionToValue(c.videoProfile.Selected)
 }
 
+// commandProfile returns the widget state as the profile shape
+// ffmpeg.BuildCommand consumes: an automatic VAAPI device ("") is
+// materialized into the concrete path vaapi.SelectDevice resolves from
+// the current capabilities. profileFromWidgets stays the persisted
+// shape where "" means automatic — Save must keep the Auto intent.
+// SelectDevice is pure and both call sites (the refresh preview and
+// the startConversion run) see identical inputs, so preview,
+// validation (which resolves the same way internally), and the actual
+// run always agree.
+func (c *Controller) commandProfile() model.Profile {
+	p := c.profileFromWidgets()
+	required, ok := encoder.RequiredVAProfiles(p.Video.Encoder, p.Video.Profile)
+	if !ok || strings.TrimSpace(p.Video.VAAPIDevice) != "" {
+		return p
+	}
+	choice := vaapi.SelectDevice(c.caps.RenderNodes, c.caps.VAAPIDevices, required)
+	if choice.Path != "" {
+		p.Video.VAAPIDevice = choice.Path
+	}
+	return p
+}
+
 func (c *Controller) profileFromWidgets() model.Profile {
 	audioMode := c.audioMode.Selected
 	audioEncoder := c.audioEncoder.Selected
@@ -1005,14 +1044,14 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			KeepAspectRatio: c.keepAspect.Checked, PreventUpscaling: c.noUpscale.Checked,
 			// When no nodes were detected (detection failure,
 			// non-Linux, pre-detect window) the dropdown selection is
-			// empty; fall back to the loaded profile's saved path so a
+			// empty; fall back to the loaded profile's saved value so a
 			// Save in that state keeps the configured device instead of
 			// wiping it from config.yaml. The seed only backfills an
-			// empty selection: an explicit "(default)" pick maps to the
-			// empty path and must win over the seed, or the model would
-			// silently keep the pre-pick device while the dropdown
-			// shows "(default)".
-			VAAPIDevice: firstNonEmpty(c.vaapiDevice.Selected, c.vaapiDeviceSeed),
+			// empty selection: an explicit "(Auto)" pick maps to the
+			// empty (automatic) value and must win over the seed, or
+			// the model would silently keep the pre-pick device while
+			// the dropdown shows "(Auto)".
+			VAAPIDevice: vaapiDeviceFromWidgets(c),
 			QSVDevice:   qsvDeviceFromWidgets(c),
 			GPUIndex:    atoi(c.gpuIndex.Text),
 		},
@@ -1164,6 +1203,35 @@ func (c *Controller) populateProfileOptions(preferred string) {
 	}
 }
 
+// vaapiAutoOption is the dropdown label standing in for "automatic
+// VAAPI device selection": yave picks the first probed render node
+// that can encode the selected codec and profile. Distinct from QSV's
+// "(default)", where ffmpeg picks the device.
+const vaapiAutoOption = "(Auto)"
+
+// vaapiDeviceValue maps a VAAPI device dropdown option to the profile
+// value: "(Auto)" stands for the empty path, which triggers automatic
+// selection upstream (validation resolves it; command generation
+// materializes it via commandProfile).
+func vaapiDeviceValue(option string) string {
+	if option == vaapiAutoOption {
+		return ""
+	}
+	return option
+}
+
+// vaapiDeviceFromWidgets resolves the VAAPI device for the profile
+// model. An empty dropdown selection (no nodes detected yet, or never
+// selected) falls back to the loaded profile's saved value so a Save
+// cannot wipe it; any visible selection — "(Auto)" included — is
+// authoritative and maps through vaapiDeviceValue.
+func vaapiDeviceFromWidgets(c *Controller) string {
+	if c.vaapiDevice.Selected == "" {
+		return c.vaapiDeviceSeed
+	}
+	return vaapiDeviceValue(c.vaapiDevice.Selected)
+}
+
 // qsvDeviceValue maps a QSV device dropdown option to the profile
 // value: "(default)" stands for the empty path, which tells ffmpeg to
 // pick its default device.
@@ -1203,7 +1271,7 @@ func firstNonEmpty(values ...string) string {
 // manual picks survive re-detections.
 func (c *Controller) updateDeviceOptions() {
 	nodes := c.caps.RenderNodes
-	c.vaapiDevice.Options = slices.Clone(nodes)
+	c.vaapiDevice.Options = append([]string{vaapiAutoOption}, slices.Clone(nodes)...)
 	c.qsvDevice.Options = append([]string{defaultOption}, nodes...)
 	c.vaapiDevice.Refresh()
 	c.qsvDevice.Refresh()
@@ -1221,14 +1289,18 @@ func (c *Controller) updateDeviceOptions() {
 // fills an empty selection (a load that ran before nodes were known)
 // and applies replacements.
 //
-// A non-empty seed that no longer exists among the detected nodes is
-// replaced (first node for VAAPI, the default device for QSV) and
-// reported once via popup dialog; the seed is updated to the
-// replacement so later detections stay quiet.
+// An empty VAAPI seed means automatic selection and is a valid target
+// (the "(Auto)" option), like an empty QSV seed meaning ffmpeg's
+// default. A non-empty seed that no longer exists among the detected
+// nodes is replaced (automatic selection for VAAPI — the picker can
+// then choose a compatible node once capabilities are known; the
+// default device for QSV) and reported once via popup dialog; the
+// seed is updated to the replacement so later detections stay quiet.
 //
 // With no detected nodes (detection failure, non-Linux, pre-detect
-// window) reconciliation is a no-op: the dropdowns stay disabled and
-// profileFromWidgets falls back to the seeds, so nothing is lost.
+// window) reconciliation is a no-op: the dropdowns list only "(Auto)"
+// / "(default)" and profileFromWidgets falls back to the seeds, so
+// nothing is lost.
 func (c *Controller) reconcileDevices(atLoad bool) {
 	nodes := c.caps.RenderNodes
 	if len(nodes) == 0 {
@@ -1244,11 +1316,13 @@ func (c *Controller) reconcileDevices(atLoad bool) {
 	vaapiTarget := c.vaapiDeviceSeed
 	vaapiReplaced := false
 	if !slices.Contains(nodes, vaapiTarget) {
-		vaapiTarget = nodes[0]
+		// An empty seed means automatic selection — a valid target
+		// shown as "(Auto)", kept rather than force-picked to a node.
+		vaapiTarget = vaapiAutoOption
 		if c.vaapiDeviceSeed != "" {
 			vaapiReplaced = true
-			notes = append(notes, fmt.Sprintf("The VAAPI device %s was not detected; using %s instead.", c.vaapiDeviceSeed, vaapiTarget))
-			c.vaapiDeviceSeed = vaapiTarget
+			notes = append(notes, fmt.Sprintf("The VAAPI device %s was not detected; using automatic selection instead.", c.vaapiDeviceSeed))
+			c.vaapiDeviceSeed = ""
 		}
 	}
 	qsvTarget := c.qsvDeviceSeed
@@ -1492,6 +1566,7 @@ func (c *Controller) updateControlState() {
 	}
 
 	c.rebuildVideoForm()
+	c.updateVAAPIDeviceHint()
 
 	// Everything visible is enabled; the form rebuild is what expresses
 	// applicability. The preset control keeps its internal entry/slider
@@ -1633,7 +1708,13 @@ func (c *Controller) videoFormItems() []*widget.FormItem {
 	)
 	switch ve.HWBackend() {
 	case encoder.HWVAAPI:
-		items = append(items, widget.NewFormItem("VAAPI device", c.vaapiDevice))
+		items = append(items,
+			widget.NewFormItem("VAAPI device", c.vaapiDevice),
+			// The hint is a stable-pointer caption row (like the
+			// rate-control hint): it is added unconditionally within
+			// this branch, so the form signature does not churn.
+			widget.NewFormItem("", c.vaapiDeviceHint),
+		)
 	case encoder.HWQSV:
 		items = append(items, widget.NewFormItem("QSV device", c.qsvDevice))
 	case encoder.HWNVENC:
@@ -2014,6 +2095,70 @@ func issueMessages(result validation.Result) []string {
 		items = append(items, "Warning: "+issue.Message)
 	}
 	return items
+}
+
+// vaapiDevicesSummary renders the probed VAAPI devices for the
+// detection card, e.g. "/dev/dri/renderD128 (VA-API NVDEC driver),
+// /dev/dri/renderD129 (Mesa Gallium driver ...)". Devices whose probe
+// failed are shown as unavailable. Empty when nothing was probed.
+func vaapiDevicesSummary(caps model.Capabilities) string {
+	if len(caps.VAAPIDevices) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(caps.VAAPIDevices))
+	for _, d := range caps.VAAPIDevices {
+		switch {
+		case !d.Known():
+			parts = append(parts, fmt.Sprintf("%s (unavailable: %s)", d.Path, d.Err))
+		case d.Driver != "":
+			parts = append(parts, fmt.Sprintf("%s (%s)", d.Path, d.Driver))
+		default:
+			parts = append(parts, d.Path)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// updateVAAPIDeviceHint explains what the "(Auto)" device selection
+// currently resolves to — the auto-selected device must be visible.
+// Hidden (empty text) for manual picks and non-VAAPI encoders.
+func (c *Controller) updateVAAPIDeviceHint() {
+	ve := c.currentVideoEncoder()
+	if ve == nil || ve.HWBackend() != encoder.HWVAAPI || c.vaapiDevice.Selected != vaapiAutoOption {
+		c.vaapiDeviceHint.SetText("")
+		return
+	}
+	required, ok := encoder.RequiredVAProfiles(ve.Name(), profileOptionToValue(c.videoProfile.Selected))
+	if !ok || len(required) == 0 {
+		c.vaapiDeviceHint.SetText("")
+		return
+	}
+	choice := vaapi.SelectDevice(c.caps.RenderNodes, c.caps.VAAPIDevices, required)
+	switch choice.Status {
+	case vaapi.DeviceSelected:
+		if choice.Driver != "" {
+			c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: %s — %s", choice.Path, choice.Driver))
+		} else {
+			c.vaapiDeviceHint.SetText("Auto: " + choice.Path)
+		}
+	case vaapi.DeviceFallback:
+		c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: %s (capabilities unknown)", choice.Path))
+	case vaapi.DeviceNoneCompatible:
+		c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: no compatible device for %s profile %s",
+			ve.Name(), displayProfile(profileOptionToValue(c.videoProfile.Selected))))
+	case vaapi.DeviceNoNodes:
+		c.vaapiDeviceHint.SetText("Auto: no VAAPI render device detected")
+	}
+}
+
+// displayProfile renders a curated -profile:v value for messages, with
+// the empty (automatic) value spelled out.
+func displayProfile(profile string) string {
+	trimmed := strings.TrimSpace(profile)
+	if trimmed == "" {
+		return "(automatic)"
+	}
+	return strconv.Quote(trimmed)
 }
 
 // hardwareDevicesSummary renders the probed hardware-encoder backends

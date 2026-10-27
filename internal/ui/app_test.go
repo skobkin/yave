@@ -16,6 +16,7 @@ import (
 	"git.skobk.in/skobkin/yave/internal/ffmpeg"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/templates"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
@@ -892,21 +893,25 @@ func TestApplyDetectionSequence(t *testing.T) {
 
 	// The runnable fallback was loaded; its saved device was not
 	// detected either, so the load-time reconciliation replaced it
-	// with the first node and reseeded.
+	// with automatic selection and reseeded to empty. (The pinned
+	// ordering of the detection sequence is unchanged by the
+	// automatic-device feature; only the replacement target moved
+	// from the first node to "(Auto)", which lets the capability
+	// picker choose a compatible node once devices are probed.)
 	if got := c.profile.Selected; got != "Good" {
 		t.Errorf("selected profile after detection = %q, want the runnable fallback %q", got, "Good")
 	}
-	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD128" {
-		t.Errorf("device selection after detection = %q, want the replacement /dev/dri/renderD128", got)
+	if got := c.vaapiDevice.Selected; got != vaapiAutoOption {
+		t.Errorf("device selection after detection = %q, want the replacement %q", got, vaapiAutoOption)
 	}
-	if c.vaapiDeviceSeed != "/dev/dri/renderD128" {
-		t.Errorf("device seed after detection = %q, want updated to the replacement", c.vaapiDeviceSeed)
+	if c.vaapiDeviceSeed != "" {
+		t.Errorf("device seed after detection = %q, want updated to the empty automatic value", c.vaapiDeviceSeed)
 	}
 
 	// Re-applying the same capabilities stays quiet: nothing flips
 	// back to a saved-but-absent path.
 	c.applyDetection(caps)
-	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD128" {
+	if got := c.vaapiDevice.Selected; got != vaapiAutoOption {
 		t.Errorf("device selection after re-application = %q, want unchanged", got)
 	}
 	if got := c.profile.Selected; got != "Good" {
@@ -1013,8 +1018,8 @@ func TestDeviceOptionsFromDetectedNodes(t *testing.T) {
 	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}}
 	c.updateDeviceOptions()
 
-	if !slices.Equal(c.vaapiDevice.Options, []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}) {
-		t.Errorf("vaapiDevice options = %v, want the detected nodes", c.vaapiDevice.Options)
+	if !slices.Equal(c.vaapiDevice.Options, []string{vaapiAutoOption, "/dev/dri/renderD128", "/dev/dri/renderD129"}) {
+		t.Errorf("vaapiDevice options = %v, want (Auto) plus the detected nodes", c.vaapiDevice.Options)
 	}
 	if !slices.Equal(c.qsvDevice.Options, []string{"(default)", "/dev/dri/renderD128", "/dev/dri/renderD129"}) {
 		t.Errorf("qsvDevice options = %v, want (default) plus the detected nodes", c.qsvDevice.Options)
@@ -1023,9 +1028,10 @@ func TestDeviceOptionsFromDetectedNodes(t *testing.T) {
 
 // TestReconcileDevicesReplacesMissingSeed covers the load-time case:
 // a saved device that no longer exists among the detected nodes is
-// replaced with the first node (QSV: the default device) and the seed
-// is updated so later detections stay quiet. The window is nil in
-// tests, so the notification path must be skipped safely.
+// replaced with automatic selection (QSV: the default device) and the
+// seed is updated to the empty auto value so later detections stay
+// quiet. The window is nil in tests, so the notification path must be
+// skipped safely.
 func TestReconcileDevicesReplacesMissingSeed(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
@@ -1035,24 +1041,23 @@ func TestReconcileDevicesReplacesMissingSeed(t *testing.T) {
 	c.qsvDeviceSeed = "/dev/dri/renderD99"
 	c.reconcileDevices(true)
 
-	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD128" {
-		t.Errorf("vaapiDevice selection = %q, want the first detected node", got)
+	if got := c.vaapiDevice.Selected; got != vaapiAutoOption {
+		t.Errorf("vaapiDevice selection = %q, want the replacement %q", got, vaapiAutoOption)
 	}
-	if c.vaapiDeviceSeed != "/dev/dri/renderD128" {
-		t.Errorf("vaapiDeviceSeed = %q, want updated to the replacement", c.vaapiDeviceSeed)
+	if c.vaapiDeviceSeed != "" {
+		t.Errorf("vaapiDeviceSeed = %q, want updated to the empty automatic value", c.vaapiDeviceSeed)
 	}
 	if got := c.qsvDevice.Selected; got != "(default)" {
 		t.Errorf("qsvDevice selection = %q, want (default)", got)
 	}
-	if got := c.profileFromWidgets().Video.VAAPIDevice; got != "/dev/dri/renderD128" {
-		t.Errorf("profile VAAPI device = %q, want the replacement", got)
+	if got := c.profileFromWidgets().Video.VAAPIDevice; got != "" {
+		t.Errorf("profile VAAPI device = %q, want the empty automatic value", got)
 	}
 
 	// A second reconcile must stay quiet about the (now valid) seed:
 	// the replacement selection is kept and no further change occurs.
-	c.vaapiDevice.SetSelected("/dev/dri/renderD128")
 	c.reconcileDevices(false)
-	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD128" {
+	if got := c.vaapiDevice.Selected; got != vaapiAutoOption {
 		t.Errorf("vaapiDevice selection after re-reconcile = %q, want unchanged", got)
 	}
 }
@@ -1710,4 +1715,272 @@ func TestOutputTemplateHelpText(t *testing.T) {
 	if strings.Contains(help, "\t") {
 		t.Errorf("help text must align with spaces, not tabs")
 	}
+}
+
+// vaapiDualGPUFixture mirrors the owner's dual-GPU host from issue #23:
+// renderD128 is an NVIDIA GPU whose VA-API driver decodes only, while
+// renderD129 is an AMD iGPU that encodes H.264 and HEVC.
+func vaapiDualGPUFixture() model.Capabilities {
+	return model.Capabilities{
+		RenderNodes: []string{"/dev/dri/renderD128", "/dev/dri/renderD129"},
+		VAAPIDevices: []vaapi.DeviceInfo{
+			{
+				Path:   "/dev/dri/renderD128",
+				Driver: "VA-API NVDEC driver [direct backend]",
+				EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+					vaapi.ProfileH264Main: {vaapi.EntrypointVLD},
+					vaapi.ProfileHEVCMain: {vaapi.EntrypointVLD},
+				},
+			},
+			{
+				Path:   "/dev/dri/renderD129",
+				Driver: "Mesa Gallium driver (radeonsi)",
+				EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+					vaapi.ProfileH264Main: {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+					vaapi.ProfileHEVCMain: {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+				},
+			},
+		},
+	}
+}
+
+// TestVAAPIAutoPickOverridesSeed mirrors TestQSVDefaultPickOverridesSeed
+// for the VAAPI side: after a load applied the saved device, an
+// explicit "(Auto)" pick must map to the empty value. The seed only
+// backfills an empty dropdown selection.
+func TestVAAPIAutoPickOverridesSeed(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.caps = vaapiDualGPUFixture()
+	c.updateDeviceOptions()
+	profile := c.config.Profiles[0]
+	profile.Video.Encoder = "hevc_vaapi"
+	profile.Video.VAAPIDevice = "/dev/dri/renderD129"
+	c.loadProfile(profile)
+
+	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD129" {
+		t.Fatalf("loaded VAAPI device selection = %q, want the saved node", got)
+	}
+	c.vaapiDevice.SetSelected(vaapiAutoOption)
+	if got := c.profileFromWidgets().Video.VAAPIDevice; got != "" {
+		t.Errorf("VAAPI device with explicit (Auto) pick = %q, want \"\"", got)
+	}
+}
+
+func TestVAAPIDeviceHint(t *testing.T) {
+	tests := []struct {
+		name     string
+		caps     func() model.Capabilities
+		encoder  string
+		profile  string
+		device   string // dropdown option to select
+		wantHint string
+	}{
+		{
+			name:     "auto resolves to the encode-capable device with its driver",
+			caps:     vaapiDualGPUFixture,
+			encoder:  "hevc_vaapi",
+			device:   vaapiAutoOption,
+			wantHint: "Auto: /dev/dri/renderD129 — Mesa Gallium driver (radeonsi)",
+		},
+		{
+			name: "auto without probe data falls back to the first node",
+			caps: func() model.Capabilities {
+				caps := vaapiDualGPUFixture()
+				caps.VAAPIDevices = nil
+				return caps
+			},
+			encoder:  "hevc_vaapi",
+			device:   vaapiAutoOption,
+			wantHint: "Auto: /dev/dri/renderD128 (capabilities unknown)",
+		},
+		{
+			name: "auto with no compatible device says so",
+			caps: func() model.Capabilities {
+				fixture := vaapiDualGPUFixture()
+				fixture.VAAPIDevices = fixture.VAAPIDevices[:1] // decode-only node only
+				return fixture
+			},
+			encoder:  "hevc_vaapi",
+			profile:  "main",
+			device:   vaapiAutoOption,
+			wantHint: `Auto: no compatible device for hevc_vaapi profile "main"`,
+		},
+		{
+			name: "auto without nodes reports the gap",
+			caps: func() model.Capabilities {
+				return model.Capabilities{}
+			},
+			encoder:  "hevc_vaapi",
+			device:   vaapiAutoOption,
+			wantHint: "Auto: no VAAPI render device detected",
+		},
+		{
+			name:     "manual pick hides the hint",
+			caps:     vaapiDualGPUFixture,
+			encoder:  "hevc_vaapi",
+			device:   "/dev/dri/renderD129",
+			wantHint: "",
+		},
+		{
+			name:     "software encoder hides the hint",
+			caps:     vaapiDualGPUFixture,
+			encoder:  "libx265",
+			device:   vaapiAutoOption,
+			wantHint: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := fynetest.NewApp()
+			defer app.Quit()
+
+			c := testController()
+			c.createWidgets()
+			c.caps = tt.caps()
+			c.updateDeviceOptions()
+
+			load := c.config.Profiles[0]
+			load.Video.Encoder = tt.encoder
+			load.Video.RateControl = "CQP"
+			load.Video.QP = 28
+			if tt.encoder == "libx265" {
+				load.Video.RateControl = "CRF"
+				load.Video.CRF = 28
+			}
+			c.loadProfile(load)
+			c.videoProfile.SetSelected(tt.profile)
+			c.vaapiDevice.SetSelected(tt.device)
+
+			if got := c.vaapiDeviceHint.Text; got != tt.wantHint {
+				t.Errorf("hint = %q, want %q", got, tt.wantHint)
+			}
+		})
+	}
+}
+
+func TestCommandProfileMaterializesAuto(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	load := func(c *Controller, device string) {
+		profile := c.config.Profiles[0]
+		profile.Video.Encoder = "hevc_vaapi"
+		profile.Video.RateControl = "CQP"
+		profile.Video.QP = 28
+		profile.Video.VAAPIDevice = device
+		c.loadProfile(profile)
+	}
+
+	t.Run("auto resolves through the probed devices", func(t *testing.T) {
+		c := testController()
+		c.createWidgets()
+		c.caps = vaapiDualGPUFixture()
+		c.updateDeviceOptions()
+		load(c, "")
+
+		if got := c.profileFromWidgets().Video.VAAPIDevice; got != "" {
+			t.Fatalf("persisted shape = %q, want the empty automatic value", got)
+		}
+		if got := c.commandProfile().Video.VAAPIDevice; got != "/dev/dri/renderD129" {
+			t.Errorf("command shape = %q, want the encode-capable /dev/dri/renderD129", got)
+		}
+	})
+
+	t.Run("auto without probe data falls back to the first node", func(t *testing.T) {
+		c := testController()
+		c.createWidgets()
+		c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128"}}
+		c.updateDeviceOptions()
+		load(c, "")
+
+		if got := c.commandProfile().Video.VAAPIDevice; got != "/dev/dri/renderD128" {
+			t.Errorf("command shape = %q, want the first node", got)
+		}
+	})
+
+	t.Run("auto without nodes stays empty", func(t *testing.T) {
+		c := testController()
+		c.createWidgets()
+		load(c, "")
+
+		if got := c.commandProfile().Video.VAAPIDevice; got != "" {
+			t.Errorf("command shape = %q, want empty without nodes", got)
+		}
+	})
+
+	t.Run("manual pick passes through untouched", func(t *testing.T) {
+		c := testController()
+		c.createWidgets()
+		c.caps = vaapiDualGPUFixture()
+		c.updateDeviceOptions()
+		load(c, "/dev/dri/renderD128")
+
+		if got := c.commandProfile().Video.VAAPIDevice; got != "/dev/dri/renderD128" {
+			t.Errorf("command shape = %q, want the manual pick", got)
+		}
+	})
+}
+
+func TestVAAPIDevicesSummary(t *testing.T) {
+	tests := []struct {
+		name string
+		caps model.Capabilities
+		want string
+	}{
+		{name: "no devices", caps: model.Capabilities{}, want: ""},
+		{
+			name: "drivers are rendered per device",
+			caps: vaapiDualGPUFixture(),
+			want: "/dev/dri/renderD128 (VA-API NVDEC driver [direct backend]), " +
+				"/dev/dri/renderD129 (Mesa Gallium driver (radeonsi))",
+		},
+		{
+			name: "failed probes are marked unavailable",
+			caps: model.Capabilities{VAAPIDevices: []vaapi.DeviceInfo{
+				{Path: "/dev/dri/renderD130", Err: "open: permission denied"},
+			}},
+			want: "/dev/dri/renderD130 (unavailable: open: permission denied)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := vaapiDevicesSummary(tt.caps); got != tt.want {
+				t.Errorf("vaapiDevicesSummary() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestVAAPIDeviceHintRowPinsToVAAPIEncoders pins the caption row: the
+// hint label lives in the form only while a VAAPI encoder is selected,
+// and the label pointer stays stable so the form does not rebuild on
+// every state tick.
+func TestVAAPIDeviceHintRowPinsToVAAPIEncoders(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := deviceCapableController()
+	c.videoEncoder.SetSelected("hevc_vaapi")
+	if !formContainsWidget(c.videoFormItems(), c.vaapiDeviceHint) {
+		t.Error("VAAPI form must carry the vaapiDeviceHint label row")
+	}
+
+	c.videoEncoder.SetSelected("libx265")
+	if formContainsWidget(c.videoFormItems(), c.vaapiDeviceHint) {
+		t.Error("software form must not carry the device hint row")
+	}
+}
+
+func formContainsWidget(items []*widget.FormItem, w fyne.CanvasObject) bool {
+	for _, item := range items {
+		if item.Widget == w {
+			return true
+		}
+	}
+	return false
 }
