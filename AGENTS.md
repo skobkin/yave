@@ -83,7 +83,7 @@ When summarizing completed work, also provide a recommended commit message.
 - List the exact automated checks and manual GUI/media workflows performed.
 - Include screenshots for material UI changes.
 - Call out changes to profile schema, defaults, generated FFmpeg commands, stream mapping, or output paths because they may affect existing users.
-- If asked to do a full work on an issue, do fetch and work in a separate branch based on latest `origin/master`.
+- If asked to do a full work on an issue, do fetch and work in a separate branch based on latest `origin/master`. If the session is already on a feature branch (especially one with an open pull request), `origin/master` is behind in-flight work the issue builds on, or if unsure for other reasons, ask the user — ideally during planning — whether to continue on the existing branch or start a new one instead of choosing unilaterally.
 
 ## Configuration and Runtime Data
 
