@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -1231,17 +1232,6 @@ func (c *Controller) populateProfileOptions(preferred string) {
 // "(default)", where ffmpeg picks the device.
 const vaapiAutoOption = "(Auto)"
 
-// vaapiDeviceValue maps a VAAPI device dropdown option to the profile
-// value: "(Auto)" stands for the empty path, which triggers automatic
-// selection upstream (validation resolves it; command generation
-// materializes it via commandProfile).
-func vaapiDeviceValue(option string) string {
-	if option == vaapiAutoOption {
-		return ""
-	}
-	return option
-}
-
 // vaapiDeviceFromWidgets resolves the VAAPI device for the profile
 // model. An empty dropdown selection (no nodes detected yet, or never
 // selected) falls back to the loaded profile's saved value so a Save
@@ -1251,7 +1241,58 @@ func vaapiDeviceFromWidgets(c *Controller) string {
 	if c.vaapiDevice.Selected == "" {
 		return c.vaapiDeviceSeed
 	}
-	return vaapiDeviceValue(c.vaapiDevice.Selected)
+	return vaapiDeviceValue(c.caps, c.vaapiDevice.Selected)
+}
+
+// deviceByPath returns the probed VA-API device for a render-node
+// path, ok false when the node has no probe record.
+func deviceByPath(caps model.Capabilities, node string) (vaapi.DeviceInfo, bool) {
+	for _, d := range caps.VAAPIDevices {
+		if d.Path == node {
+			return d, true
+		}
+	}
+	return vaapi.DeviceInfo{}, false
+}
+
+// vaapiDeviceOption renders the VAAPI dropdown label for a render
+// node: the GPU identity first, the node basename in parentheses —
+// "GeForce GTX 1660 Ti Mobile (renderD128)". A path means nothing to
+// the person choosing, so the full path never appears; nodes without
+// resolved identity fall back to the bare basename.
+func vaapiDeviceOption(caps model.Capabilities, node string) string {
+	base := filepath.Base(node)
+	if d, ok := deviceByPath(caps, node); ok {
+		if name := d.Identity.DisplayName(); name != "" {
+			return name + " (" + base + ")"
+		}
+	}
+	return base
+}
+
+// vaapiDeviceValue maps a VAAPI device dropdown option back to the
+// render-node path stored in the profile. "(Auto)" maps to ""; the
+// current option label, a bare node path, a bare basename, or a stale
+// label carrying the node's basename all resolve to the node;
+// anything else passes through unchanged, keeping the historical
+// fail-open behavior for values outside the detected set.
+func vaapiDeviceValue(caps model.Capabilities, option string) string {
+	if option == vaapiAutoOption {
+		return ""
+	}
+	for _, node := range caps.RenderNodes {
+		if option == node || option == filepath.Base(node) || option == vaapiDeviceOption(caps, node) {
+			return node
+		}
+	}
+	// Stale label from an older capabilities snapshot: the basename in
+	// parentheses is still authoritative.
+	for _, node := range caps.RenderNodes {
+		if strings.HasSuffix(option, " ("+filepath.Base(node)+")") {
+			return node
+		}
+	}
+	return option
 }
 
 // qsvDeviceValue maps a QSV device dropdown option to the profile
@@ -1293,8 +1334,28 @@ func firstNonEmpty(values ...string) string {
 // manual picks survive re-detections.
 func (c *Controller) updateDeviceOptions() {
 	nodes := c.caps.RenderNodes
-	c.vaapiDevice.Options = append([]string{vaapiAutoOption}, nodes...)
+	options := make([]string, 0, len(nodes)+1)
+	options = append(options, vaapiAutoOption)
+	for _, node := range nodes {
+		options = append(options, vaapiDeviceOption(c.caps, node))
+	}
+	c.vaapiDevice.Options = options
 	c.qsvDevice.Options = append([]string{defaultOption}, nodes...)
+
+	// Re-pin a visible selection whose option label changed with the
+	// capabilities: a bare value picked before detection, or a label
+	// from an older snapshot. Guarded so SetSelected fires at most one
+	// OnChanged per capabilities change, and idempotent — a selection
+	// already on its current label is left alone, which is what
+	// reconcileDevices' guard then sees. updateControlState never
+	// rebuilds device options, so no re-entry follows.
+	if sel := c.vaapiDevice.Selected; sel != "" && sel != vaapiAutoOption {
+		if node := vaapiDeviceValue(c.caps, sel); slices.Contains(nodes, node) {
+			if label := vaapiDeviceOption(c.caps, node); label != sel {
+				c.vaapiDevice.SetSelected(label)
+			}
+		}
+	}
 	c.vaapiDevice.Refresh()
 	c.qsvDevice.Refresh()
 }
@@ -1335,9 +1396,14 @@ func (c *Controller) reconcileDevices(atLoad bool) {
 	// non-empty vanished seed counts as replaced (reported + reseeded);
 	// an empty seed keeps its meaning — automatic selection for VAAPI
 	// (the "(Auto)" option) and "ffmpeg's default" for QSV.
+	// Seeds stay bare paths; only the dropdown target is rendered as
+	// the node's current option label.
 	vaapiTarget := c.vaapiDeviceSeed
+	if slices.Contains(nodes, vaapiTarget) {
+		vaapiTarget = vaapiDeviceOption(c.caps, vaapiTarget)
+	}
 	vaapiReplaced := false
-	if !slices.Contains(nodes, vaapiTarget) {
+	if !slices.Contains(nodes, c.vaapiDeviceSeed) {
 		// An empty seed means automatic selection — a valid target
 		// shown as "(Auto)", kept rather than force-picked to a node.
 		vaapiTarget = vaapiAutoOption

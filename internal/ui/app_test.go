@@ -1018,7 +1018,7 @@ func TestDeviceOptionsFromDetectedNodes(t *testing.T) {
 	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}}
 	c.updateDeviceOptions()
 
-	if !slices.Equal(c.vaapiDevice.Options, []string{vaapiAutoOption, "/dev/dri/renderD128", "/dev/dri/renderD129"}) {
+	if !slices.Equal(c.vaapiDevice.Options, []string{vaapiAutoOption, "renderD128", "renderD129"}) {
 		t.Errorf("vaapiDevice options = %v, want (Auto) plus the detected nodes", c.vaapiDevice.Options)
 	}
 	if !slices.Equal(c.qsvDevice.Options, []string{"(default)", "/dev/dri/renderD128", "/dev/dri/renderD129"}) {
@@ -1076,13 +1076,13 @@ func TestReconcileDevicesKeepsManualChoice(t *testing.T) {
 	c.videoEncoder.SetSelected("hevc_vaapi")
 	c.reconcileDevices(true) // applies seed / first node
 	first := c.vaapiDevice.Selected
-	c.vaapiDevice.SetSelected("/dev/dri/renderD129")
+	c.vaapiDevice.SetSelected("renderD129")
 
 	// Detect-time: same nodes, seed still points at the load-time
 	// value — the manual pick must survive.
 	c.reconcileDevices(false)
-	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD129" {
-		t.Errorf("vaapiDevice selection after detect-time reconcile = %q, want manual /dev/dri/renderD129 (load selection was %q)", got, first)
+	if got := c.vaapiDevice.Selected; got != "renderD129" {
+		t.Errorf("vaapiDevice selection after detect-time reconcile = %q, want manual renderD129 (load selection was %q)", got, first)
 	}
 }
 
@@ -1108,8 +1108,8 @@ func TestReconcileDevicesAppliesPendingSeed(t *testing.T) {
 	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}}
 	c.updateDeviceOptions()
 	c.reconcileDevices(false) // the detect() sequence
-	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD129" {
-		t.Errorf("pending seed selection = %q, want /dev/dri/renderD129", got)
+	if got := c.vaapiDevice.Selected; got != "renderD129" {
+		t.Errorf("pending seed selection = %q, want the renderD129 option", got)
 	}
 }
 
@@ -1188,8 +1188,8 @@ func TestLoadProfileAppliesSavedDeviceOverStaleSelection(t *testing.T) {
 	second.Video.VAAPIDevice = "/dev/dri/renderD129"
 	c.loadProfile(second)
 
-	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD129" {
-		t.Errorf("VAAPI selection after switching profiles = %q, want the loaded profile's /dev/dri/renderD129", got)
+	if got := c.vaapiDevice.Selected; got != "renderD129" {
+		t.Errorf("VAAPI selection after switching profiles = %q, want the loaded profile's renderD129 option", got)
 	}
 	if got := c.profileFromWidgets().Video.VAAPIDevice; got != "/dev/dri/renderD129" {
 		t.Errorf("profile VAAPI device after switching profiles = %q, want the loaded profile's path", got)
@@ -1727,6 +1727,13 @@ func vaapiDualGPUFixture() model.Capabilities {
 			{
 				Path:   "/dev/dri/renderD128",
 				Driver: "VA-API NVDEC driver [direct backend]",
+				Identity: vaapi.DeviceIdentity{
+					Vendor:     "10de",
+					Device:     "2191",
+					Driver:     "nvidia",
+					Name:       "TU116M [GeForce GTX 1660 Ti Mobile]",
+					VendorName: "NVIDIA Corporation",
+				},
 				EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
 					vaapi.ProfileH264Main: {vaapi.EntrypointVLD},
 					vaapi.ProfileHEVCMain: {vaapi.EntrypointVLD},
@@ -1735,6 +1742,13 @@ func vaapiDualGPUFixture() model.Capabilities {
 			{
 				Path:   "/dev/dri/renderD129",
 				Driver: "Mesa Gallium driver (radeonsi)",
+				Identity: vaapi.DeviceIdentity{
+					Vendor:     "1002",
+					Device:     "1636",
+					Driver:     "amdgpu",
+					Name:       "Renoir [Radeon Vega Series / Radeon Vega Mobile Series]",
+					VendorName: "Advanced Micro Devices, Inc. [AMD/ATI]",
+				},
 				EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
 					vaapi.ProfileH264Main: {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
 					vaapi.ProfileHEVCMain: {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
@@ -1761,8 +1775,8 @@ func TestVAAPIAutoPickOverridesSeed(t *testing.T) {
 	profile.Video.VAAPIDevice = "/dev/dri/renderD129"
 	c.loadProfile(profile)
 
-	if got := c.vaapiDevice.Selected; got != "/dev/dri/renderD129" {
-		t.Fatalf("loaded VAAPI device selection = %q, want the saved node", got)
+	if got := c.vaapiDevice.Selected; got != vaapiDeviceOption(c.caps, "/dev/dri/renderD129") {
+		t.Fatalf("loaded VAAPI device selection = %q, want the saved node's option", got)
 	}
 	c.vaapiDevice.SetSelected(vaapiAutoOption)
 	if got := c.profileFromWidgets().Video.VAAPIDevice; got != "" {
@@ -1822,7 +1836,7 @@ func TestVAAPIDeviceHint(t *testing.T) {
 			name:     "manual pick hides the hint",
 			caps:     vaapiDualGPUFixture,
 			encoder:  "hevc_vaapi",
-			device:   "/dev/dri/renderD129",
+			device:   "Renoir (renderD129)",
 			wantHint: "",
 		},
 		{
@@ -1983,4 +1997,103 @@ func formContainsWidget(items []*widget.FormItem, w fyne.CanvasObject) bool {
 		}
 	}
 	return false
+}
+
+// TestVAAPIDeviceOptionsShowGPUNames pins the labeled forms: identified
+// nodes render name-first with the basename in parentheses, tier-2
+// identities fall back to driver and IDs, and unidentified nodes keep
+// the bare basename.
+func TestVAAPIDeviceOptionsShowGPUNames(t *testing.T) {
+	caps := vaapiDualGPUFixture()
+	want := []string{vaapiAutoOption, "GeForce GTX 1660 Ti Mobile (renderD128)", "Renoir (renderD129)"}
+	options := make([]string, 0, len(caps.RenderNodes)+1)
+	options = append(options, vaapiAutoOption)
+	for _, node := range caps.RenderNodes {
+		options = append(options, vaapiDeviceOption(caps, node))
+	}
+	if !slices.Equal(options, want) {
+		t.Errorf("labeled options = %v, want %v", options, want)
+	}
+
+	tier2 := model.Capabilities{
+		RenderNodes: []string{"/dev/dri/renderD128"},
+		VAAPIDevices: []vaapi.DeviceInfo{
+			{Path: "/dev/dri/renderD128", Identity: vaapi.DeviceIdentity{Vendor: "10de", Device: "2191", Driver: "nvidia"}},
+		},
+	}
+	if got := vaapiDeviceOption(tier2, "/dev/dri/renderD128"); got != "nvidia 10de:2191 (renderD128)" {
+		t.Errorf("tier-2 option = %q", got)
+	}
+
+	mixed := model.Capabilities{
+		RenderNodes:  []string{"/dev/dri/renderD128", "/dev/dri/renderD129"},
+		VAAPIDevices: vaapiDualGPUFixture().VAAPIDevices[1:],
+	}
+	if got := vaapiDeviceOption(mixed, "/dev/dri/renderD128"); got != "renderD128" {
+		t.Errorf("unidentified option = %q", got)
+	}
+	if got := vaapiDeviceOption(mixed, "/dev/dri/renderD129"); got != "Renoir (renderD129)" {
+		t.Errorf("identified option = %q", got)
+	}
+}
+
+// TestVAAPIDeviceOptionValues pins the label-to-path inversion the
+// profile round-trip depends on: current labels, stale labels, bare
+// paths, and bare basenames all resolve to the node.
+func TestVAAPIDeviceOptionValues(t *testing.T) {
+	fixture := vaapiDualGPUFixture()
+	tests := []struct {
+		name   string
+		caps   model.Capabilities
+		option string
+		want   string
+	}{
+		{"auto maps to empty", fixture, vaapiAutoOption, ""},
+		{"current label maps to the node", fixture, "Renoir (renderD129)", "/dev/dri/renderD129"},
+		{"bare basename maps to the node", fixture, "renderD128", "/dev/dri/renderD128"},
+		{"bare path maps to the node", fixture, "/dev/dri/renderD129", "/dev/dri/renderD129"},
+		{"stale label resolves via the basename", fixture, "Old Name (renderD129)", "/dev/dri/renderD129"},
+		{"unknown option passes through", fixture, "somewhere-else", "somewhere-else"},
+		{"unidentified node label maps back", model.Capabilities{RenderNodes: []string{"/dev/dri/renderD128"}}, "renderD128", "/dev/dri/renderD128"},
+	}
+	for _, tt := range tests {
+		if got := vaapiDeviceValue(tt.caps, tt.option); got != tt.want {
+			t.Errorf("%s: vaapiDeviceValue(%q) = %q, want %q", tt.name, tt.option, got, tt.want)
+		}
+	}
+}
+
+// TestDeviceSelectionRepinsToCurrentLabel pins the capabilities-
+// transition contract: a selection made before detection follows its
+// node to the labeled option while the profile value stays the bare
+// path, and re-applying identical capabilities stays quiet.
+func TestDeviceSelectionRepinsToCurrentLabel(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+	c := testController()
+	c.createWidgets()
+
+	// Before detection the options are bare basenames; select one.
+	c.caps = model.Capabilities{RenderNodes: []string{"/dev/dri/renderD129"}}
+	c.updateDeviceOptions()
+	c.vaapiDevice.SetSelected("renderD129")
+
+	// Detection lands with identity: the same node's option becomes
+	// the labeled form, and the selection must follow it while the
+	// profile value stays the bare path.
+	c.caps = vaapiDualGPUFixture()
+	c.updateDeviceOptions()
+	if got := c.vaapiDevice.Selected; got != "Renoir (renderD129)" {
+		t.Errorf("selection after detection = %q, want the labeled option", got)
+	}
+	if got := c.profileFromWidgets().Video.VAAPIDevice; got != "/dev/dri/renderD129" {
+		t.Errorf("profile value after detection = %q, want the bare path", got)
+	}
+
+	// Re-applying identical capabilities must stay quiet: the guarded
+	// re-pin is idempotent.
+	c.updateDeviceOptions()
+	if got := c.vaapiDevice.Selected; got != "Renoir (renderD129)" {
+		t.Errorf("selection after re-detection = %q, want it unchanged", got)
+	}
 }
