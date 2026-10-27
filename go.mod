@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	fyne.io/fyne/v2 v2.8.2
 	fyne.io/systray v1.12.3-0.20260810170012-af4e8e793ec4
+	github.com/ebitengine/purego v0.11.2
 	go.yaml.in/yaml/v3 v3.0.4
 )
 
