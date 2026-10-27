@@ -1798,7 +1798,7 @@ func TestVAAPIDeviceHint(t *testing.T) {
 			caps:     vaapiDualGPUFixture,
 			encoder:  "hevc_vaapi",
 			device:   vaapiAutoOption,
-			wantHint: "Auto: /dev/dri/renderD129 — Mesa Gallium driver (radeonsi)",
+			wantHint: "Auto: /dev/dri/renderD129 — AMD Renoir [Radeon Vega Series / Radeon Vega Mobile Series] (amdgpu; Mesa Gallium driver (radeonsi))",
 		},
 		{
 			name: "auto without probe data falls back to the first node",
@@ -1833,10 +1833,28 @@ func TestVAAPIDeviceHint(t *testing.T) {
 			wantHint: "Auto: no VAAPI render device detected",
 		},
 		{
-			name:     "manual pick hides the hint",
+			name:     "manual pick describes the device",
 			caps:     vaapiDualGPUFixture,
 			encoder:  "hevc_vaapi",
 			device:   "Renoir (renderD129)",
+			wantHint: "/dev/dri/renderD129 — AMD Renoir [Radeon Vega Series / Radeon Vega Mobile Series] (amdgpu; Mesa Gallium driver (radeonsi)) — encodes",
+		},
+		{
+			name:     "manual decode-only pick says so",
+			caps:     vaapiDualGPUFixture,
+			encoder:  "hevc_vaapi",
+			device:   "GeForce GTX 1660 Ti Mobile (renderD128)",
+			wantHint: "/dev/dri/renderD128 — NVIDIA TU116M [GeForce GTX 1660 Ti Mobile] (nvidia; VA-API NVDEC driver [direct backend]) — decode only",
+		},
+		{
+			name: "manual pick without a probe record stays hidden",
+			caps: func() model.Capabilities {
+				caps := vaapiDualGPUFixture()
+				caps.VAAPIDevices = nil
+				return caps
+			},
+			encoder:  "hevc_vaapi",
+			device:   "renderD129",
 			wantHint: "",
 		},
 		{
@@ -1950,8 +1968,8 @@ func TestVAAPIDevicesSummary(t *testing.T) {
 		{
 			name: "drivers are rendered per device",
 			caps: vaapiDualGPUFixture(),
-			want: "/dev/dri/renderD128 (VA-API NVDEC driver [direct backend]), " +
-				"/dev/dri/renderD129 (Mesa Gallium driver (radeonsi))",
+			want: "/dev/dri/renderD128 (GeForce GTX 1660 Ti Mobile; VA-API NVDEC driver [direct backend]), " +
+				"/dev/dri/renderD129 (Renoir; Mesa Gallium driver (radeonsi))",
 		},
 		{
 			name: "failed probes are marked unavailable",
@@ -1959,6 +1977,17 @@ func TestVAAPIDevicesSummary(t *testing.T) {
 				{Path: "/dev/dri/renderD130", Err: "open: permission denied"},
 			}},
 			want: "/dev/dri/renderD130 (unavailable: open: permission denied)",
+		},
+		{
+			name: "failed probes keep their identity",
+			caps: model.Capabilities{VAAPIDevices: []vaapi.DeviceInfo{
+				{
+					Path:     "/dev/dri/renderD131",
+					Err:      "open: permission denied",
+					Identity: vaapi.DeviceIdentity{Vendor: "1002", Device: "1636", Driver: "amdgpu", Name: "Renoir [Radeon Vega Series / Radeon Vega Mobile Series]"},
+				},
+			}},
+			want: "/dev/dri/renderD131 (Renoir; unavailable: open: permission denied)",
 		},
 	}
 	for _, tt := range tests {

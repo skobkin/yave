@@ -2186,37 +2186,51 @@ func issueMessages(result validation.Result) []string {
 }
 
 // vaapiDevicesSummary renders the probed VAAPI devices for the
-// detection card, e.g. "/dev/dri/renderD128 (VA-API NVDEC driver),
-// /dev/dri/renderD129 (Mesa Gallium driver ...)". Devices whose probe
-// failed are shown as unavailable. Empty when nothing was probed.
+// detection card, e.g. "/dev/dri/renderD129 (Renoir; Mesa Gallium
+// driver (radeonsi))". Devices whose probe failed are shown as
+// unavailable. Empty when nothing was probed.
 func vaapiDevicesSummary(caps model.Capabilities) string {
 	if len(caps.VAAPIDevices) == 0 {
 		return ""
 	}
 	parts := make([]string, 0, len(caps.VAAPIDevices))
 	for _, d := range caps.VAAPIDevices {
+		details := make([]string, 0, 2)
+		if name := d.Identity.DisplayName(); name != "" {
+			details = append(details, name)
+		}
 		switch {
 		case !d.Known():
-			parts = append(parts, fmt.Sprintf("%s (unavailable: %s)", d.Path, d.Err))
+			details = append(details, "unavailable: "+d.Err)
 		case d.Driver != "":
-			parts = append(parts, fmt.Sprintf("%s (%s)", d.Path, d.Driver))
-		default:
-			parts = append(parts, d.Path)
+			details = append(details, d.Driver)
 		}
+		if len(details) == 0 {
+			parts = append(parts, d.Path)
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s)", d.Path, strings.Join(details, "; ")))
 	}
 	return strings.Join(parts, ", ")
 }
 
-// updateVAAPIDeviceHint explains what the "(Auto)" device selection
-// currently resolves to — the auto-selected device must be visible.
-// Hidden (empty text) for manual picks and non-VAAPI encoders.
+// updateVAAPIDeviceHint explains the device selection: what "(Auto)"
+// resolves to, and for manual picks which GPU sits behind the node
+// and whether it can serve the current encoder. Hidden for non-VAAPI
+// encoders, and for manual picks whose node has no probe record —
+// identity travels inside the probe, so without one there is nothing
+// reliable to say.
 func (c *Controller) updateVAAPIDeviceHint() {
 	ve := c.currentVideoEncoder()
-	if ve == nil || ve.HWBackend() != encoder.HWVAAPI || c.vaapiDevice.Selected != vaapiAutoOption {
+	if ve == nil || ve.HWBackend() != encoder.HWVAAPI || c.vaapiDevice.Selected == "" {
 		c.vaapiDeviceHint.SetText("")
 		return
 	}
 	profile := profileOptionToValue(c.videoProfile.Selected)
+	if c.vaapiDevice.Selected != vaapiAutoOption {
+		c.vaapiDeviceHint.SetText(c.describeVAAPIDevice(vaapiDeviceValue(c.caps, c.vaapiDevice.Selected), ve, profile))
+		return
+	}
 	choice, ok := c.resolveAutoVAAPI(ve.Name(), profile)
 	if !ok {
 		c.vaapiDeviceHint.SetText("")
@@ -2224,19 +2238,45 @@ func (c *Controller) updateVAAPIDeviceHint() {
 	}
 	switch choice.Status {
 	case vaapi.DeviceSelected:
+		if d, known := deviceByPath(c.caps, choice.Path); known {
+			c.vaapiDeviceHint.SetText("Auto: " + vaapi.DeviceDetail(d))
+			return
+		}
 		if choice.Driver != "" {
 			c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: %s — %s", choice.Path, choice.Driver))
 		} else {
 			c.vaapiDeviceHint.SetText("Auto: " + choice.Path)
 		}
 	case vaapi.DeviceFallback:
+		if d, known := deviceByPath(c.caps, choice.Path); known {
+			c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: %s (capabilities unknown)", vaapi.DeviceDetail(d)))
+			return
+		}
 		c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: %s (capabilities unknown)", choice.Path))
 	case vaapi.DeviceNoneCompatible:
 		c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: no compatible device for %s profile %s",
-			ve.Name(), validation.DisplayProfile(profileOptionToValue(c.videoProfile.Selected))))
+			ve.Name(), validation.DisplayProfile(profile)))
 	case vaapi.DeviceNoNodes:
 		c.vaapiDeviceHint.SetText("Auto: no VAAPI render device detected")
 	}
+}
+
+// describeVAAPIDevice renders one manual device selection for the
+// hint: the full identity detail, plus the capability verdict for the
+// current encoder when a profile requirement is known.
+func (c *Controller) describeVAAPIDevice(node string, ve encoder.VideoEncoder, profile string) string {
+	d, known := deviceByPath(c.caps, node)
+	if !known {
+		return ""
+	}
+	if !d.Known() {
+		return fmt.Sprintf("%s — capabilities unknown (%s)", d.Path, d.Err)
+	}
+	text := vaapi.DeviceDetail(d)
+	if required, ok := encoder.RequiredVAProfiles(ve.Name(), profile); ok && len(required) > 0 {
+		text += " — " + vaapi.DeviceCapability(d, required)
+	}
+	return text
 }
 
 // hardwareDevicesSummary renders the probed hardware-encoder backends
