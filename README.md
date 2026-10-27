@@ -3,7 +3,9 @@
 YAVE (Yet Another Video Encoder) is a focused desktop FFmpeg transcoding
 frontend written in Go and Fyne. It exposes a curated set of modern software
 and VAAPI encoders, reusable YAML profiles, safe output templates, transparent
-FFmpeg commands, progress reporting, logs, and cancellation.
+FFmpeg commands, progress reporting, logs, and cancellation. On multi-GPU
+systems YAVE probes each render node through libva and automatically picks a
+VAAPI device that can actually encode the selected codec.
 
 ## Requirements
 
@@ -13,8 +15,13 @@ FFmpeg commands, progress reporting, logs, and cancellation.
   - OpenGL development files
   - X11 development files
   - `libgl1-mesa-dev` and `xorg-dev` on Debian/Ubuntu
-- A usable VAAPI render device, normally `/dev/dri/renderD128`, for VAAPI
-  profiles
+- A VAAPI render device (`/dev/dri/renderD*`) for VAAPI profiles. When
+  `libva.so.2` and `libva-drm.so.2` are installed, YAVE probes every render
+  node and, with the device set to `(Auto)`, uses the first one that can
+  encode the chosen codec and profile — decode-only nodes (for example
+  NVIDIA's VA-API wrapper) are skipped. Without libva, automatic mode falls
+  back to the first render node. An explicit `vaapi_device` in a profile
+  always overrides the automatic choice.
 
 ## Build and run
 
