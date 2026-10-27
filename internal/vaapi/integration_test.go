@@ -35,7 +35,7 @@ func TestVAAPIDeviceProbeIntegration(t *testing.T) {
 		t.Fatalf("got %d devices for %d nodes", len(devices), len(nodes))
 	}
 	for _, d := range devices {
-		t.Logf("%s driver=%q err=%q", d.Path, d.Driver, d.Err)
+		t.Logf("%s driver=%q err=%q identity=%+v display=%q", d.Path, d.Driver, d.Err, d.Identity, d.Identity.DisplayName())
 		if !d.Known() {
 			continue
 		}
