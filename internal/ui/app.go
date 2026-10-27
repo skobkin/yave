@@ -2145,20 +2145,10 @@ func (c *Controller) updateVAAPIDeviceHint() {
 		c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: %s (capabilities unknown)", choice.Path))
 	case vaapi.DeviceNoneCompatible:
 		c.vaapiDeviceHint.SetText(fmt.Sprintf("Auto: no compatible device for %s profile %s",
-			ve.Name(), displayProfile(profileOptionToValue(c.videoProfile.Selected))))
+			ve.Name(), validation.DisplayProfile(profileOptionToValue(c.videoProfile.Selected))))
 	case vaapi.DeviceNoNodes:
 		c.vaapiDeviceHint.SetText("Auto: no VAAPI render device detected")
 	}
-}
-
-// displayProfile renders a curated -profile:v value for messages, with
-// the empty (automatic) value spelled out.
-func displayProfile(profile string) string {
-	trimmed := strings.TrimSpace(profile)
-	if trimmed == "" {
-		return "(automatic)"
-	}
-	return strconv.Quote(trimmed)
 }
 
 // hardwareDevicesSummary renders the probed hardware-encoder backends

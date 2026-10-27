@@ -398,7 +398,7 @@ func validateVAAPIDevice(result *Result, video model.VideoSettings, capabilities
 			if !d.Encodes(required...) {
 				result.warning("profile.video.vaapi_device",
 					"the VAAPI device %s (%s) does not offer encoding for %s profile %s; switch the VAAPI device to automatic or pick a device that can encode",
-					d.Path, d.Driver, encoderName, displayProfile(video.Profile))
+					d.Path, d.Driver, encoderName, DisplayProfile(video.Profile))
 			}
 			return
 		}
@@ -415,16 +415,16 @@ func validateVAAPIDevice(result *Result, video model.VideoSettings, capabilities
 		}
 		result.error("profile.video.vaapi_device",
 			"no detected VAAPI device can encode %s profile %s: %s. Pick a VAAPI device that offers encoding, switch to a software encoder, or install a driver with VA-API encoding support",
-			encoderName, displayProfile(video.Profile), strings.Join(descriptions, "; "))
+			encoderName, DisplayProfile(video.Profile), strings.Join(descriptions, "; "))
 	case vaapi.DeviceNoNodes:
 		result.error("profile.video.vaapi_device",
 			"no VAAPI render device was detected; set a VAAPI device explicitly or use another video encoder")
 	}
 }
 
-// displayProfile renders a curated -profile:v value for messages, with
+// DisplayProfile renders a curated -profile:v value for messages, with
 // the empty (automatic) value spelled out.
-func displayProfile(profile string) string {
+func DisplayProfile(profile string) string {
 	trimmed := strings.TrimSpace(profile)
 	if trimmed == "" {
 		return "(automatic)"
