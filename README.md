@@ -50,12 +50,25 @@ Linux the default path is:
 ```
 
 The file is human-readable YAML and contains profiles, the startup default,
-and FFmpeg executable paths. Built-in profiles are installed when no profile
-configuration exists.
+FFmpeg executable paths, and update-check settings. Built-in profiles are
+installed when no profile configuration exists.
 
 YAVE validates saved profiles against the encoders reported by the current
 FFmpeg build. Unavailable or incompatible settings remain editable, but
 conversion cannot start until validation errors are resolved.
+
+## Update checks
+
+Release builds check git.skobk.in for new YAVE releases at startup and every
+12 hours, and the "Check for updates…" tray action runs a manual check any
+time. When a newer release is found, YAVE shows a dialog with the changelog
+and a link to the release page; nothing is installed automatically.
+
+Automatic checks are controlled by the `updates.check_automatically` setting
+in `config.yaml` (enabled by default) and a matching toggle in the settings
+dialog. Builds without a stamped version — including `go build -o yave
+./cmd/yave` — are development builds and never check automatically; the tray
+action stays available.
 
 ## Output templates
 
