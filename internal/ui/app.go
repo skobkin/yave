@@ -232,7 +232,10 @@ func (c *Controller) configureTray(desk desktop.App) {
 	c.trayProgress = newTrayProgressIndicator(desk.SetSystemTrayIcon)
 	c.trayApp = desk
 	c.trayCheckItem = fyne.NewMenuItem("Check for updates…", func() {
-		fyne.Do(c.checkForUpdates) // systray callbacks run off the UI thread
+		// Fyne's tray menus already dispatch item actions onto the UI
+		// thread; the fyne.Do keeps that true even for a backend that
+		// delivers them off-thread, as the icon tap handler below needs.
+		fyne.Do(c.checkForUpdates)
 	})
 	c.trayQuitItem = fyne.NewMenuItem("Quit", c.requestQuit)
 	c.trayQuitItem.IsQuit = true
