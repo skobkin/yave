@@ -11,9 +11,12 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/storage"
 	fynetest "fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 
 	updates "github.com/skobkin/go4updates"
+	"github.com/skobkin/go4updates/ui/fyne/markdown"
 
 	"git.skobk.in/skobkin/yave/internal/app"
 	"git.skobk.in/skobkin/yave/internal/model"
@@ -314,4 +317,107 @@ func TestUpdateChecksEnabled(t *testing.T) {
 	if updateChecksEnabled(cfg, "0.4.0") {
 		t.Fatal("expected the config toggle to disable automatic checks")
 	}
+}
+
+// mustParseURI parses raw into a fyne.URI, failing the test on a bad value.
+func mustParseURI(t *testing.T, raw string) fyne.URI {
+	t.Helper()
+	parsed, err := storage.ParseURI(raw)
+	if err != nil {
+		t.Fatalf("parsing URI %q: %v", raw, err)
+	}
+
+	return parsed
+}
+
+// findImageSegments collects every stock image segment in a segment tree,
+// including the table cells go4updates' own rewriter skips.
+func findImageSegments(segments []widget.RichTextSegment) []*widget.ImageSegment {
+	var found []*widget.ImageSegment
+	for _, segment := range segments {
+		switch current := segment.(type) {
+		case *widget.ImageSegment:
+			found = append(found, current)
+		case *widget.ListSegment:
+			found = append(found, findImageSegments(current.Items)...)
+		case *widget.ParagraphSegment:
+			found = append(found, findImageSegments(current.Texts)...)
+		case *widget.TableSegment:
+			for _, row := range current.Headers {
+				found = append(found, findImageSegments(row)...)
+			}
+			for _, cells := range current.Rows {
+				for _, cell := range cells {
+					found = append(found, findImageSegments(cell)...)
+				}
+			}
+		}
+	}
+
+	return found
+}
+
+// A release note image inside a GFM table survives go4updates' rewriter on
+// Fyne 2.8 and would fetch its URL synchronously on the UI thread during the
+// dialog's first layout; withoutRemoteImages must catch exactly that case.
+func TestWithoutRemoteImagesCoversTableCells(t *testing.T) {
+	notes := markdown.NewRichText(
+		"| before | after |\n| --- | --- |\n| ![old](https://example.com/old.png) | plain |\n",
+		markdown.Options{},
+	)
+
+	if before := findImageSegments(notes.Segments); len(before) != 1 {
+		t.Fatalf("stock image segments in the parsed table = %d, want 1 (the unrewritten cell)", len(before))
+	}
+
+	notes.Segments = withoutRemoteImages(notes.Segments)
+
+	if remaining := findImageSegments(notes.Segments); len(remaining) != 0 {
+		t.Fatalf("stock image segments after sanitizing = %d, want 0", len(remaining))
+	}
+}
+
+func TestWithoutRemoteImages(t *testing.T) {
+	remoteImage := &widget.ImageSegment{Source: mustParseURI(t, "https://example.com/badge.png")}
+	localImage := &widget.ImageSegment{Source: mustParseURI(t, "file:///tmp/picture.png")}
+	plain := &widget.TextSegment{Text: "plain"}
+
+	t.Run("replaces remote images everywhere including table cells", func(t *testing.T) {
+		table := &widget.TableSegment{
+			Headers: [][]widget.RichTextSegment{{remoteImage, plain}},
+			Rows:    [][][]widget.RichTextSegment{{{remoteImage}, {plain}}},
+		}
+		nested := &widget.ListSegment{Items: []widget.RichTextSegment{
+			&widget.ParagraphSegment{Texts: []widget.RichTextSegment{remoteImage}},
+		}}
+
+		out := withoutRemoteImages([]widget.RichTextSegment{table, nested})
+
+		if remaining := findImageSegments(out); len(remaining) != 0 {
+			t.Fatalf("image segments after sanitizing = %d, want 0", len(remaining))
+		}
+		sanitized := out[0].(*widget.TableSegment)
+		cell := sanitized.Rows[0][0]
+		if len(cell) != 1 {
+			t.Fatalf("sanitized cell segments = %d, want 1", len(cell))
+		}
+		placeholder, ok := cell[0].(*widget.TextSegment)
+		if !ok || placeholder.Text != "[image]" {
+			t.Fatalf("sanitized cell segment = %T, want the [image] placeholder", cell[0])
+		}
+	})
+
+	t.Run("keeps local images and leaves the input untouched", func(t *testing.T) {
+		paragraph := &widget.ParagraphSegment{Texts: []widget.RichTextSegment{localImage, plain}}
+		original := []widget.RichTextSegment{paragraph, &widget.ImageSegment{}}
+
+		out := withoutRemoteImages(original)
+
+		if remaining := findImageSegments(out); len(remaining) != 2 {
+			t.Fatalf("image segments after sanitizing = %d, want the local and schemeless ones", len(remaining))
+		}
+		if remaining := findImageSegments(original); len(remaining) != 2 {
+			t.Fatalf("original image segments = %d, want 2 (the input must not be mutated)", len(remaining))
+		}
+	})
 }
