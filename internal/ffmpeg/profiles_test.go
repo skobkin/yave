@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 )
 
 func TestParseProfileValues(t *testing.T) {
@@ -88,7 +89,9 @@ func TestIntersectProfiles(t *testing.T) {
 // with a fake ffmpeg: h264_vaapi's enumeration misses
 // constrained_baseline, so the capability list narrows; libx264
 // enumerates nothing and keeps its curated list; a probe failure
-// (exit 2) also keeps the curated list.
+// (exit 2) also keeps the curated list. The filesystem and device
+// seams are stubbed so the outcome does not depend on the test
+// host exposing DRM render nodes.
 func TestDiscoverNarrowsProfiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test helper is a POSIX shell script")
@@ -113,10 +116,22 @@ esac
 printf 'ffprobe version test-2\n'
 `)
 
-	got, err := Discover(context.Background(), model.FFmpegConfig{
+	// A fake render node keeps h264_vaapi past the hardware
+	// availability filter on hosts without /dev/dri; device
+	// capability probing is not what this test exercises.
+	fs := fsProbe{
+		stat: osFSProbe.stat,
+		glob: func(pattern string) ([]string, error) {
+			if pattern == driRenderPattern {
+				return []string{driRenderNode}, nil
+			}
+			return osFSProbe.glob(pattern)
+		},
+	}
+	got, err := discover(context.Background(), model.FFmpegConfig{
 		FFmpegPath:  ffmpegPath,
 		FFprobePath: ffprobePath,
-	})
+	}, fs, func(context.Context, []string) []vaapi.DeviceInfo { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
