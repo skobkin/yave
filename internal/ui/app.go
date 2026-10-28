@@ -1839,16 +1839,15 @@ func (c *Controller) videoFormItems() []*widget.FormItem {
 // rebuilding on every changed() tick. None of the widgets placed in
 // these forms implement fyne.Validatable, so a rebuild cannot leak
 // stale validation state.
-func rebuildFormOnSignature(box *fyne.Container, signature *string, items []*widget.FormItem) bool {
+func rebuildFormOnSignature(box *fyne.Container, signature *string, items []*widget.FormItem) {
 	newSig := formItemsSignature(items)
 	if *signature == newSig {
-		return false
+		return
 	}
 	*signature = newSig
 	box.RemoveAll()
 	box.Add(widget.NewForm(items...))
 	box.Refresh()
-	return true
 }
 
 // formItemsSignature builds a comparable key from a form item list so
@@ -1859,7 +1858,7 @@ func formItemsSignature(items []*widget.FormItem) string {
 	for _, item := range items {
 		b.WriteString(item.Text)
 		b.WriteString("\x00")
-		b.WriteString(fmt.Sprintf("%p", item.Widget))
+		fmt.Fprintf(&b, "%p", item.Widget)
 		b.WriteString("\x00")
 	}
 	return b.String()
@@ -2151,19 +2150,6 @@ func mustPresetRange(encoder string) validation.IntegerRange {
 func mustAudioCompressionRange(encoder string) validation.IntegerRange {
 	r, _ := validation.AudioCompressionRange(encoder)
 	return r
-}
-
-type disableable interface {
-	Enable()
-	Disable()
-}
-
-func setEnabled(w disableable, enabled bool) {
-	if enabled {
-		w.Enable()
-	} else {
-		w.Disable()
-	}
 }
 
 func atoi(value string) int {

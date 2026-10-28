@@ -97,12 +97,12 @@ func probeWith(ctx context.Context, l *libvaHandle, nodes []string) []DeviceInfo
 func probeNode(l *libvaHandle, path string) DeviceInfo {
 	info := DeviceInfo{Path: path}
 
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	f, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // G304: path is a probed DRM render node
 	if err != nil {
 		info.Err = fmt.Sprintf("open %s: %v", path, err)
 		return info
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // best-effort close of the probe fd, like vainfo's cleanup
 
 	display := l.getDisplayDRM(int(f.Fd()))
 	if display == 0 {

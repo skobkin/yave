@@ -62,11 +62,11 @@ func (f *fakeLibva) handle() *libvaHandle {
 			if f.queryProfilesStatus != 0 {
 				return f.queryProfilesStatus
 			}
-			n := int32(len(f.profiles))
+			n := int32(len(f.profiles)) //nolint:gosec // G115: fixture profile counts are tiny
 			if f.queryProfilesNum != 0 {
 				n = f.queryProfilesNum
 			}
-			slice := unsafe.Slice(list, n)
+			slice := unsafe.Slice(list, n) //nolint:gosec // G103: purego callback receives a raw C array pointer
 			for i := int32(0); i < n; i++ {
 				slice[i] = f.profiles[i]
 			}
@@ -84,11 +84,9 @@ func (f *fakeLibva) handle() *libvaHandle {
 				// clear message instead.
 				panic(fmt.Sprintf("fixture bug: profile %d lists %d entrypoints, maxNumEntrypoints is %d", profile, len(eps), f.maxNumEntrypoints))
 			}
-			slice := unsafe.Slice(list, len(eps))
-			for i, ep := range eps {
-				slice[i] = ep
-			}
-			*num = int32(len(eps))
+			slice := unsafe.Slice(list, len(eps)) //nolint:gosec // G103: purego callback receives a raw C array pointer
+			copy(slice, eps)
+			*num = int32(len(eps)) //nolint:gosec // G115: fixture entrypoint counts are tiny
 			return 0
 		},
 		queryVendorString: func(uintptr) string { return f.vendor },

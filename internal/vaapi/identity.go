@@ -95,7 +95,7 @@ func readSysfsIdentity(root, node string) DeviceIdentity {
 	dir := filepath.Join(root, filepath.Base(node), "device")
 	// uevent carries every attribute at once; parse it before falling
 	// back to the per-attribute files.
-	if b, err := os.ReadFile(filepath.Join(dir, "uevent")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(dir, "uevent")); err == nil { //nolint:gosec // G304: sysfs path under the kernel-provided class root
 		for _, line := range strings.Split(string(b), "\n") {
 			key, value, ok := strings.Cut(line, "=")
 			if !ok {
@@ -127,7 +127,7 @@ func readSysfsIdentity(root, node string) DeviceIdentity {
 // readSysfsHex reads a sysfs attribute holding a value like "0x10de"
 // and returns the lowercase bare hex digits; "" on any error.
 func readSysfsHex(path string) string {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // G304: sysfs attribute path under the class root
 	if err != nil {
 		return ""
 	}
