@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -2248,5 +2249,37 @@ func TestQSVDeviceHintRowPinsToQSVEncoders(t *testing.T) {
 	c.videoEncoder.SetSelected("libx265")
 	if formHasQSVHint() {
 		t.Fatalf("libx265 form still carries the QSV hint caption row")
+	}
+}
+
+// The settings dialog must not be shown at its bare minimum size: the wide
+// "Check for updates automatically" label column would otherwise leave the
+// FFmpeg and ffprobe path entries a clipped sliver at the panel edge.
+func TestShowSettingsDialogKeepsUsableEntryWidth(t *testing.T) {
+	application := fynetest.NewApp()
+	defer application.Quit()
+
+	c := &Controller{
+		window: application.NewWindow("settings"),
+		config: model.Config{},
+	}
+	// The pop-up cannot exceed its canvas; match the production window size
+	// so the requested dialog width is not clamped away.
+	c.window.Resize(fyne.NewSize(1050, 760))
+
+	c.showSettings()
+
+	top := c.window.Canvas().Overlays().Top()
+	if top == nil {
+		t.Fatal("expected the settings dialog overlay to be shown")
+	}
+	// dialog's base wraps the panel in an internal overlay container whose
+	// exported Content field holds the dialog's modal pop-up.
+	popup, ok := reflect.ValueOf(top).Elem().FieldByName("Content").Interface().(fyne.CanvasObject)
+	if !ok {
+		t.Fatalf("overlay top = %T, want a dialog container with Content", top)
+	}
+	if width := popup.Size().Width; width < 560 {
+		t.Fatalf("settings dialog width = %.0f, want at least 560", width)
 	}
 }

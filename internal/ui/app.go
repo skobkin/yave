@@ -2080,6 +2080,11 @@ func (c *Controller) showSettings() {
 		c.applyUpdateCheckSetting(checkUpdates.Checked)
 		c.detect()
 	}, c.window)
+	// Without an explicit size the dialog sits at its minimum, where the
+	// wide "Check for updates automatically" label column leaves the two
+	// path entries only a sliver of width; 560px matches the profile-name
+	// dialog and gives the entries room for full executable paths.
+	form.Resize(fyne.NewSize(560, 260))
 	form.Show()
 }
 
