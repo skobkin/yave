@@ -14,7 +14,10 @@ VAAPI device that can actually encode the selected codec.
 - Linux desktop development libraries required by Fyne:
   - OpenGL development files
   - X11 development files
-  - `libgl1-mesa-dev` and `xorg-dev` on Debian/Ubuntu
+  - Wayland client and xkbcommon development files (Fyne 2.8 builds
+    the Wayland backend by default on Linux)
+  - `libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev` on
+    Debian/Ubuntu
 - A VAAPI render device (`/dev/dri/renderD*`) for VAAPI profiles. When
   `libva.so.2` and `libva-drm.so.2` are installed, YAVE probes every render
   node and, with the device set to `(Auto)`, uses the first one that can
