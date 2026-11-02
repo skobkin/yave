@@ -7,6 +7,8 @@ FFmpeg commands, progress reporting, logs, and cancellation. On multi-GPU
 systems YAVE probes each render node through libva and automatically picks a
 VAAPI device that can actually encode the selected codec.
 
+![YAVE main window](docs/images/ui_main_video.webp)
+
 ## Requirements
 
 - Go 1.26 or newer
