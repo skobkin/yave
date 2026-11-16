@@ -25,7 +25,7 @@ func writeJPEG(t *testing.T, dir, name string, width, height int) string {
 		}
 	}
 	path := filepath.Join(dir, name)
-	file, err := os.Create(path)
+	file, err := os.Create(path) //nolint:gosec // G304: path comes from t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,16 +38,16 @@ func writeJPEG(t *testing.T, dir, name string, width, height int) string {
 
 // writeFakeFFmpeg installs a shell script recording its arguments and
 // running `body`. POSIX-only, like the discovery test helpers.
-func writeFakeFFmpeg(t *testing.T, dir, name, body string) string {
+func writeFakeFFmpeg(t *testing.T, dir, body string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("test helper is a POSIX shell script")
 	}
-	argsFile := filepath.Join(dir, name+".args")
+	argsFile := filepath.Join(dir, "ffmpeg.args")
 	script := "#!/bin/sh\n" +
 		`printf '%s\n' "$@" >> ` + strconv.Quote(argsFile) + "\n" +
 		body + "\n"
-	return writeExecutable(t, dir, name, script)
+	return writeExecutable(t, dir, "ffmpeg", script)
 }
 
 func writeExecutable(t *testing.T, dir, name, content string) string {
@@ -63,7 +63,7 @@ func writeExecutable(t *testing.T, dir, name, content string) string {
 // across its invocations.
 func readArgs(t *testing.T, argsFile string) []string {
 	t.Helper()
-	data, err := os.ReadFile(argsFile)
+	data, err := os.ReadFile(argsFile) //nolint:gosec // G304: path comes from t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestThumbnailExtractsAndDecodes(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	jpegPath := writeJPEG(t, dir, "frame.jpg", 64, 32)
-	fake := writeFakeFFmpeg(t, dir, "ffmpeg", `cat `+strconv.Quote(jpegPath))
+	fake := writeFakeFFmpeg(t, dir, `cat `+strconv.Quote(jpegPath))
 
 	extractor := NewExtractor(fake)
 	frame, err := extractor.Thumbnail(context.Background(), "/tmp/input.mkv", 5*time.Second, 96)
@@ -109,7 +109,7 @@ func TestPreviewPreservesAspectAndCapsWidth(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	jpegPath := writeJPEG(t, dir, "frame.jpg", 48, 16)
-	fake := writeFakeFFmpeg(t, dir, "ffmpeg", `cat `+strconv.Quote(jpegPath))
+	fake := writeFakeFFmpeg(t, dir, `cat `+strconv.Quote(jpegPath))
 
 	frame, err := NewExtractor(fake).Preview(context.Background(), "/tmp/input.mkv", 0, 320)
 	if err != nil {
@@ -127,7 +127,7 @@ func TestPreviewPreservesAspectAndCapsWidth(t *testing.T) {
 func TestExtractionGuards(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	fake := writeFakeFFmpeg(t, dir, "ffmpeg", `exit 0`)
+	fake := writeFakeFFmpeg(t, dir, `exit 0`)
 	if _, err := NewExtractor(fake).Thumbnail(context.Background(), "/tmp/in.mkv", 0, 0); err == nil {
 		t.Error("zero height must be rejected without running ffmpeg")
 	}
@@ -145,7 +145,7 @@ func TestExtractionGuards(t *testing.T) {
 func TestExtractionFFmpegFailure(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	fake := writeFakeFFmpeg(t, dir, "ffmpeg", `echo 'some ffmpeg error' >&2
+	fake := writeFakeFFmpeg(t, dir, `echo 'some ffmpeg error' >&2
 exit 1`)
 	_, err := NewExtractor(fake).Thumbnail(context.Background(), "/tmp/in.mkv", time.Second, 96)
 	if err == nil {
@@ -159,7 +159,7 @@ exit 1`)
 func TestExtractionNonJPEGOutput(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	fake := writeFakeFFmpeg(t, dir, "ffmpeg", `printf 'definitely not a jpeg'`)
+	fake := writeFakeFFmpeg(t, dir, `printf 'definitely not a jpeg'`)
 	if _, err := NewExtractor(fake).Preview(context.Background(), "/tmp/in.mkv", 0, 320); err == nil {
 		t.Fatal("expected a decode error for non-JPEG output")
 	}
@@ -172,7 +172,7 @@ func TestExtractionOversizedDimensions(t *testing.T) {
 	// it before any large allocation. Crafting one by truncating a
 	// valid JPEG after its SOF marker keeps the test fast.
 	jpegPath := writeJPEG(t, dir, "big.jpg", 32, 32)
-	fake := writeFakeFFmpeg(t, dir, "ffmpeg", `head -c 400 `+strconv.Quote(jpegPath)+` 2>/dev/null || cat `+strconv.Quote(jpegPath))
+	fake := writeFakeFFmpeg(t, dir, `head -c 400 `+strconv.Quote(jpegPath)+` 2>/dev/null || cat `+strconv.Quote(jpegPath))
 	if _, err := NewExtractor(fake).Thumbnail(context.Background(), "/tmp/in.mkv", 0, 96); err == nil {
 		t.Fatal("expected an error for truncated/invalid image data")
 	}
@@ -187,7 +187,7 @@ func TestExtractionCancellation(t *testing.T) {
 	// Flood both pipes, then idle: cancellation must kill the process
 	// so both drains reach EOF and Wait returns — no deadlock on full
 	// pipes.
-	fake := writeFakeFFmpeg(t, dir, "ffmpeg", `head -c 4000000 /dev/zero
+	fake := writeFakeFFmpeg(t, dir, `head -c 4000000 /dev/zero
 head -c 4000000 /dev/zero 1>&2
 sleep 5 >/dev/null 2>&1`)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -216,7 +216,7 @@ func TestExtractionStdoutOverflow(t *testing.T) {
 	// must stop buffering at the limit, cancel the process, drain, and
 	// return the bounded oversize error promptly instead of waiting on
 	// a blocked writer.
-	fake := writeFakeFFmpeg(t, dir, "ffmpeg", `head -c 9000000 /dev/zero
+	fake := writeFakeFFmpeg(t, dir, `head -c 9000000 /dev/zero
 sleep 5 >/dev/null 2>&1`)
 	start := time.Now()
 	_, err := NewExtractor(fake).Thumbnail(context.Background(), "/tmp/in.mkv", 0, 96)
@@ -232,12 +232,12 @@ sleep 5 >/dev/null 2>&1`)
 func TestLimitedTail(t *testing.T) {
 	t.Parallel()
 	tail := &limitedTail{limit: 8}
-	tail.Write([]byte("1234567890abcdefghij"))
+	_, _ = tail.Write([]byte("1234567890abcdefghij"))
 	if got := tail.String(); got != "…cdefghij" {
 		t.Errorf("tail = %q, want %q", got, "…cdefghij")
 	}
 	small := &limitedTail{limit: 100}
-	small.Write([]byte("short"))
+	_, _ = small.Write([]byte("short"))
 	if got := small.String(); got != "short" {
 		t.Errorf("tail = %q, want %q", got, "short")
 	}

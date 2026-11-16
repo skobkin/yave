@@ -32,7 +32,7 @@ func TestTrimIntegration(t *testing.T) {
 	input := dir + "/input.mp4"
 	// 6-second test pattern with a sine audio track: enough room to cut
 	// [1s, 4s] out of the middle.
-	generate := exec.CommandContext(context.Background(), ffmpegPath, []string{
+	generate := exec.CommandContext(context.Background(), ffmpegPath, []string{ //nolint:gosec // G204: integration test drives the locally discovered FFmpeg with t.TempDir paths
 		"-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "testsrc2=duration=6:size=320x240:rate=30",
 		"-f", "lavfi", "-i", "sine=frequency=440:duration=6",
@@ -62,7 +62,7 @@ func TestTrimIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := exec.CommandContext(context.Background(), plan.Executable, plan.Args...)
+	run := exec.CommandContext(context.Background(), plan.Executable, plan.Args...) //nolint:gosec // G204: the command under test, generated from test fixtures
 	if out, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("running trimmed conversion: %v: %s", err, out)
 	}
@@ -102,7 +102,7 @@ func TestTrimIntegration(t *testing.T) {
 // CSV parse (test-only; the model carries no per-stream duration).
 func streamDurations(t *testing.T, ffprobePath, output string) (time.Duration, time.Duration) {
 	t.Helper()
-	cmd := exec.CommandContext(context.Background(), ffprobePath, []string{
+	cmd := exec.CommandContext(context.Background(), ffprobePath, []string{ //nolint:gosec // G204: locally discovered ffprobe on a t.TempDir file
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=duration",
@@ -113,7 +113,7 @@ func streamDurations(t *testing.T, ffprobePath, output string) (time.Duration, t
 	if err != nil {
 		t.Fatalf("probing video duration: %v", err)
 	}
-	cmd = exec.CommandContext(context.Background(), ffprobePath, []string{
+	cmd = exec.CommandContext(context.Background(), ffprobePath, []string{ //nolint:gosec // G204: locally discovered ffprobe on a t.TempDir file
 		"-v", "error",
 		"-select_streams", "a:0",
 		"-show_entries", "stream=duration",
