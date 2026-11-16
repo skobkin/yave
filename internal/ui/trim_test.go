@@ -1058,9 +1058,10 @@ func TestLazyNoPreviewWorkWithoutMedia(t *testing.T) {
 }
 
 // TestTrimTabLayout pins the space-saving tab composition: no heading
-// cards, the frame preview at the top of the tab inside a centering
-// row, the timestamps overlaid on a translucent chip over the image,
-// and In/Out/Duration/Reset sharing one row.
+// cards, an expanding frame preview cell at the top with every control
+// glued to the bottom edge of the tab by a Border layout, the
+// timestamps overlaid on a translucent chip over the image, and
+// In/Out/Duration/Reset sharing one row.
 func TestTrimTabLayout(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
@@ -1078,12 +1079,25 @@ func TestTrimTabLayout(t *testing.T) {
 		t.Fatalf("trim tab content is %T, want a container", trimTab.Content)
 	}
 
-	var centering *fyne.Container
-	var boundaries *fyne.Container
-	var chip *canvas.Rectangle
-	isSpacer := func(obj fyne.CanvasObject) bool {
-		return reflect.TypeOf(obj) == reflect.TypeOf(layout.NewSpacer())
+	borderType := reflect.TypeOf(layout.NewBorderLayout(nil, nil, nil, nil))
+	if reflect.TypeOf(content.Layout) != borderType {
+		t.Fatalf("trim tab layout is %T, want a Border layout", content.Layout)
 	}
+	// container.NewBorder appends the non-nil slots after the center,
+	// so the children are [preview cell, bottom controls].
+	if len(content.Objects) != 2 {
+		t.Fatalf("trim tab children = %d, want [preview, controls]", len(content.Objects))
+	}
+	previewCell, ok := content.Objects[0].(*fyne.Container)
+	if !ok {
+		t.Fatalf("border center is %T, want the preview cell container", content.Objects[0])
+	}
+	controls, ok := content.Objects[1].(*fyne.Container)
+	if !ok {
+		t.Fatalf("border bottom is %T, want the controls container", content.Objects[1])
+	}
+
+	var boundaries *fyne.Container
 	containsAll := func(objs []fyne.CanvasObject, want ...fyne.CanvasObject) bool {
 		for _, w := range want {
 			found := false
@@ -1101,10 +1115,7 @@ func TestTrimTabLayout(t *testing.T) {
 	}
 	var walk func(box *fyne.Container)
 	walk = func(box *fyne.Container) {
-		if len(box.Objects) == 3 && isSpacer(box.Objects[0]) && isSpacer(box.Objects[2]) {
-			centering = box
-		}
-		if containsAll(box.Objects, c.trimIn, c.trimOut, c.trimReset) {
+		if containsAll(box.Objects, c.trimReset) {
 			boundaries = box
 		}
 		for _, obj := range box.Objects {
@@ -1113,6 +1124,19 @@ func TestTrimTabLayout(t *testing.T) {
 				walk(o)
 			case *widget.Card:
 				t.Errorf("trim tab must not contain heading cards, found %q", o.Title)
+			}
+		}
+	}
+	walk(content)
+
+	// The chip lives inside the preview cell, over the image's top edge.
+	var chip *canvas.Rectangle
+	var findChip func(box *fyne.Container)
+	findChip = func(box *fyne.Container) {
+		for _, obj := range box.Objects {
+			switch o := obj.(type) {
+			case *fyne.Container:
+				findChip(o)
 			case *canvas.Rectangle:
 				if n := color.NRGBAModel.Convert(o.FillColor).(color.NRGBA); n.A < 0xff {
 					chip = o
@@ -1120,29 +1144,35 @@ func TestTrimTabLayout(t *testing.T) {
 			}
 		}
 	}
-	walk(content)
+	findChip(previewCell)
 
-	if centering == nil {
-		t.Fatal("preview section must sit in a [spacer, cell, spacer] row so the image centers")
-	}
-	if content.Objects[0] != fyne.CanvasObject(centering) {
-		t.Errorf("frame preview must be the first tab content, found %T", content.Objects[0])
-	}
-	if chip == nil {
-		t.Fatal("preview timestamps must be drawn on a translucent (alpha < 255) chip")
-	}
 	if boundaries == nil {
 		t.Fatal("In, Out and Reset must share one row container")
 	}
-	want := []fyne.CanvasObject{
-		centering, c.previewStatus, c.trimEnable, c.trimTimeline, c.trimMessage, boundaries,
+	// The controls VBox is glued to the bottom edge, in this order.
+	wantControls := []fyne.CanvasObject{
+		c.previewStatus, c.trimEnable, c.trimTimeline, c.trimMessage, boundaries,
 	}
-	if len(content.Objects) != len(want) {
-		t.Fatalf("trim tab rows = %d, want %d", len(content.Objects), len(want))
+	if len(controls.Objects) != len(wantControls) {
+		t.Fatalf("bottom controls hold %d rows, want %d", len(controls.Objects), len(wantControls))
 	}
-	for i, w := range want {
-		if content.Objects[i] != w {
-			t.Errorf("trim tab row %d = %T, want %T", i, content.Objects[i], w)
+	for i, w := range wantControls {
+		if controls.Objects[i] != w {
+			t.Errorf("bottom control row %d = %T, want %T", i, controls.Objects[i], w)
 		}
+	}
+
+	// The preview cell fills the center slot and stretches the image to
+	// the whole cell — resizing the tab resizes the preview image.
+	previewCell.Resize(fyne.NewSize(800, 450))
+	if got := c.previewImage.Size(); got != fyne.NewSize(800, 450) {
+		t.Errorf("preview image size after resize = %v, want the whole 800x450 cell", got)
+	}
+	if c.previewImage.FillMode != canvas.ImageFillContain {
+		t.Error("preview image must letterbox (ImageFillContain) inside the expanding cell")
+	}
+	// The chip lives inside the preview cell, over the image's top edge.
+	if chip == nil {
+		t.Fatal("preview timestamps must be drawn on a translucent (alpha < 255) chip over the preview image")
 	}
 }

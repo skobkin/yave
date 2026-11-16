@@ -27,17 +27,20 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	// The trim tab deliberately uses no heading cards: the section
 	// titles ("Trim", "Frame preview", "Boundaries") cost vertical
 	// space without saying anything the tab name doesn't. The frame
-	// preview leads because it is the visual anchor of the tab, and the
+	// preview leads and expands: a Border layout glues every control
+	// (status, enable check, timeline, message, boundary row) to the
+	// bottom edge and gives all remaining space to the preview cell,
+	// so resizing the window only resizes the preview image. The
 	// boundary fields share one row with the duration and Reset so the
 	// whole tab fits next to the timeline without scrolling.
-	trimTab := container.NewVBox(
-		trimPreviewSection(c),
+	controls := container.NewVBox(
 		c.previewStatus,
 		c.trimEnable,
 		c.trimTimeline,
 		c.trimMessage,
 		trimBoundariesRow(c),
 	)
+	trimTab := container.NewBorder(nil, controls, nil, nil, trimPreviewSection(c))
 
 	outputTab := container.NewVBox(
 		widget.NewForm(
@@ -71,10 +74,11 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	return container.NewBorder(c.profileBar(), c.buildStatusBar(), nil, nil, c.tabs)
 }
 
-// trimPreviewSection composes the frame preview: the image in a fixed
-// 320x180 cell centered horizontally, with the rendered-frame and
-// hover timestamps drawn on a translucent chip over the image's top
-// edge instead of on their own row below it.
+// trimPreviewSection composes the frame preview: the image fills the
+// whole cell — ImageFillContain letterboxes the frame inside it and
+// centers it, so the cell can follow the window size — with the
+// rendered-frame and hover timestamps drawn on a translucent chip
+// pinned to the image's top edge instead of on their own row below it.
 func trimPreviewSection(c *Controller) fyne.CanvasObject {
 	chip := container.NewStack(
 		overlayChipRectangle(),
@@ -83,13 +87,12 @@ func trimPreviewSection(c *Controller) fyne.CanvasObject {
 		)),
 	)
 	// The VBox pins the chip to the top edge: box layouts stack from
-	// the top, so the chip keeps its own (label-sized) height while the
-	// Stack stretches the image to fill the whole cell.
-	cell := container.NewStack(
-		container.NewGridWrap(fyne.NewSize(320, 180), c.previewImage),
+	// the top, so the chip keeps its own (label-sized) height at the
+	// top of the cell while the Stack stretches the image underneath.
+	return container.NewStack(
+		c.previewImage,
 		container.NewVBox(chip),
 	)
-	return container.NewHBox(layout.NewSpacer(), cell, layout.NewSpacer())
 }
 
 // overlayChipRectangle is the translucent background behind the preview

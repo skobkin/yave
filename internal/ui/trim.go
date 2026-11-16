@@ -25,8 +25,8 @@ const (
 	hoverDebounce        = 200 * time.Millisecond // hover previews trail the pointer
 	hoverQuantum         = 250 * time.Millisecond // hover previews may approximate
 	previewCacheBytes    = 64 << 20               // 64 MiB of decoded frames
-	previewMaxEntryBytes = 2 << 20                // a single decoded preview frame
-	previewImageWidth    = 320
+	previewMaxEntryBytes = 4 << 20                // a single decoded preview frame (640-wide portrait ≈ 2.9 MiB)
+	previewImageWidth    = 640                    // the preview cell expands with the window; 320 would upscale
 	thumbStripCount      = 10
 	thumbStripHeight     = 48
 	thumbMaxWorkers      = 2
