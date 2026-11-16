@@ -42,6 +42,11 @@ type softwareEncoder struct {
 	supportsProfile bool
 	// profiles is the curated -profile:v value list; see Profiles().
 	profiles []string
+	// presets and tunes are the curated categorical preset / tune value
+	// lists; see Presets() and Tunes(). Both stay empty for
+	// integer-preset encoders — their slider is the curated control.
+	presets []string
+	tunes   []string
 	// rateControlModes lists the modes exposed by the UI dropdown.
 	rateControlModes   []RateControl
 	defaultRateControl RateControl
@@ -80,6 +85,8 @@ func (e *softwareEncoder) SupportsProfile() bool { return e.supportsProfile }
 func (e *softwareEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *softwareEncoder) DefaultPreset() string { return e.presetDefault }
 func (e *softwareEncoder) Profiles() []string    { return e.profiles }
+func (e *softwareEncoder) Presets() []string     { return e.presets }
+func (e *softwareEncoder) Tunes() []string       { return e.tunes }
 
 // VideoFilter returns the filter chain for software encoders. When
 // scaling is requested a scale= filter is emitted; when frame-rate
@@ -158,6 +165,14 @@ func softwareVideoEncoders() []Encoder {
 			presetFlag: "-preset", presetKind: "categorical", presetName: "preset",
 			supportsTune: true, supportsProfile: true,
 			profiles: []string{"main", "main10", "main12"},
+			// Presets are the x265 --preset names (verified by one-frame
+			// test encodes on the reference build). Tunes are the names
+			// ffmpeg's libx265 wrapper maps itself — unlike the x265 CLI's
+			// --tune list, the wrapper handles every name on any libx265
+			// build, so "animation" is safe to curate even though older
+			// x265 CLI builds do not list it.
+			presets: []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo"},
+			tunes:   []string{"psnr", "ssim", "grain", "fastdecode", "animation", "zerolatency"},
 			// libx265 supports CRF only — matches prior behaviour.
 			rateControlModes:   []RateControl{RCCRF},
 			defaultRateControl: RCCRF,

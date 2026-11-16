@@ -110,17 +110,26 @@ type Controller struct {
 	bufsize            *widget.Entry
 	preset             *widget.Entry
 	presetSlider       *integerSlider
-	presetControl      *fyne.Container
-	tune               *widget.Entry
-	videoProfile       *widget.Select
-	frameMode          *widget.Select
-	frameRate          *widget.Entry
-	maxWidth           *widget.Entry
-	maxHeight          *widget.Entry
-	keepAspect         *widget.Check
-	noUpscale          *widget.Check
-	vaapiDevice        *widget.Select
-	qsvDevice          *widget.Select
+	// presetSelect shows the curated preset list when the selected
+	// encoder curates one (Presets()); otherwise the free-text entry or
+	// the integer slider applies. All three live in presetControl.
+	presetSelect  *widget.Select
+	presetControl *fyne.Container
+	tune          *widget.Entry
+	// tuneSelect shows the curated tune list when the selected encoder
+	// curates one (Tunes()); tuneControl stacks it with the free-text
+	// entry.
+	tuneSelect   *widget.Select
+	tuneControl  *fyne.Container
+	videoProfile *widget.Select
+	frameMode    *widget.Select
+	frameRate    *widget.Entry
+	maxWidth     *widget.Entry
+	maxHeight    *widget.Entry
+	keepAspect   *widget.Check
+	noUpscale    *widget.Check
+	vaapiDevice  *widget.Select
+	qsvDevice    *widget.Select
 	// vaapiDeviceSeed / qsvDeviceSeed record the device paths the
 	// loaded profile specified. Startup order is loadProfile → detect,
 	// so the dropdowns have no options yet at load time; reconciliation

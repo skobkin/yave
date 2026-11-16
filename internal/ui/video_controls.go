@@ -97,27 +97,63 @@ func (c *Controller) updateControlState() {
 	}
 	integerPreset := presetOK && presetR.Max >= presetR.Min
 
-	// Preset: toggle between text entry and integer slider. When
-	// switching to an integer-preset encoder, sync the slider from the
-	// text field if the user had a numeric value there.
+	// Preset: toggle between curated dropdown, text entry and integer
+	// slider. When switching to an integer-preset encoder, sync the
+	// slider from the text field if the user had a numeric value there.
+	// Entering a curated encoder seeds the dropdown from the text field
+	// while the dropdown has no selection yet, so a preset picked for
+	// the previous categorical encoder carries over when the new encoder
+	// knows the same name.
 	//
-	// Both the text field and the slider are gated on SupportsPreset
-	// (i.e. the encoder actually emits a preset flag). Encoders like
-	// VAAPI that have no preset flag must not expose a writable field
-	// here, because the saved value would never reach ffmpeg.
+	// All three controls are gated on SupportsPreset (i.e. the encoder
+	// actually emits a preset flag). Encoders like VAAPI that have no
+	// preset flag must not expose a writable field here, because the
+	// saved value would never reach ffmpeg.
 	switch {
 	case !supportsPreset:
 		c.presetSlider.Hide()
 		c.preset.Hide()
+		c.presetSelect.Hide()
 	case integerPreset:
 		if value, err := strconv.Atoi(strings.TrimSpace(c.preset.Text)); err == nil {
 			c.presetSlider.SetValue(value)
 		}
 		c.preset.Hide()
+		c.presetSelect.Hide()
 		c.presetSlider.Show()
+	case len(ve.Presets()) > 0:
+		// Seed from the text field only on first entry: once the
+		// dropdown holds a selection (including "(default)") that
+		// selection is the state — re-seeding from the stale hidden
+		// entry would snap the value back on every updateControlState.
+		preferred := ""
+		if c.presetSelect.Selected == "" {
+			preferred = c.preset.Text
+		}
+		populateCuratedOptions(c.presetSelect, ve.Presets(), preferred)
+		c.preset.Hide()
+		c.presetSlider.Hide()
+		c.presetSelect.Show()
 	default:
 		c.presetSlider.Hide()
+		c.presetSelect.Hide()
 		c.preset.Show()
+	}
+
+	// Tune mirrors the preset toggle: a curated list shows the dropdown,
+	// everyone else the free-text entry. Row visibility itself is
+	// expressed by the form rebuild; only the stack children need the
+	// explicit toggle.
+	if ve != nil && ve.SupportsTune() && len(ve.Tunes()) > 0 {
+		preferred := ""
+		if c.tuneSelect.Selected == "" {
+			preferred = c.tune.Text
+		}
+		populateCuratedOptions(c.tuneSelect, ve.Tunes(), preferred)
+		c.tune.Hide()
+		c.tuneSelect.Show()
+	} else {
+		c.tuneSelect.Hide()
 	}
 
 	if supportsProfile {
@@ -159,7 +195,9 @@ func (c *Controller) updateControlState() {
 	c.bufsize.Enable()
 	c.preset.Enable()
 	c.presetSlider.Enable()
+	c.presetSelect.Enable()
 	c.tune.Enable()
+	c.tuneSelect.Enable()
 	c.videoProfile.Enable()
 	c.frameMode.Enable()
 	c.frameRate.Enable()
@@ -269,7 +307,7 @@ func (c *Controller) videoFormItems() []*widget.FormItem {
 		items = append(items, widget.NewFormItem("Preset", c.presetControl))
 	}
 	if ve.SupportsTune() {
-		items = append(items, widget.NewFormItem("Tune", c.tune))
+		items = append(items, widget.NewFormItem("Tune", c.tuneControl))
 	}
 	if ve.SupportsProfile() {
 		items = append(items, widget.NewFormItem("Profile", c.videoProfile))
@@ -369,10 +407,44 @@ func (c *Controller) updateIntegerRanges() {
 }
 
 func (c *Controller) presetValue() string {
+	if ve := c.currentVideoEncoder(); ve != nil && len(ve.Presets()) > 0 {
+		return profileOptionToValue(c.presetSelect.Selected)
+	}
 	if r, ok := validation.PresetRange(c.videoEncoder.Selected); ok && r.Max >= r.Min {
 		return strconv.Itoa(c.presetSlider.Value())
 	}
 	return c.preset.Text
+}
+
+// tuneValue reads the tune state: the curated dropdown when the encoder
+// curates one, the free-text entry otherwise. "(default)" maps to the
+// empty string — the builder omits -tune when it is empty.
+func (c *Controller) tuneValue() string {
+	if ve := c.currentVideoEncoder(); ve != nil && len(ve.Tunes()) > 0 {
+		return profileOptionToValue(c.tuneSelect.Selected)
+	}
+	return c.tune.Text
+}
+
+// populatePresetOptions seeds the preset dropdown from the encoder's
+// curated list. preferred (when non-empty) is the value the dropdown
+// should land on after the options exist.
+func (c *Controller) populatePresetOptions(preferred string) {
+	if ve := c.currentVideoEncoder(); ve != nil && len(ve.Presets()) > 0 {
+		populateCuratedOptions(c.presetSelect, ve.Presets(), preferred)
+		return
+	}
+	c.presetSelect.Options = []string{}
+}
+
+// populateTuneOptions seeds the tune dropdown from the encoder's
+// curated list; see populatePresetOptions.
+func (c *Controller) populateTuneOptions(preferred string) {
+	if ve := c.currentVideoEncoder(); ve != nil && len(ve.Tunes()) > 0 {
+		populateCuratedOptions(c.tuneSelect, ve.Tunes(), preferred)
+		return
+	}
+	c.tuneSelect.Options = []string{}
 }
 
 func (c *Controller) updateEncoderOptions() {

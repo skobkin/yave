@@ -62,6 +62,12 @@ func (e *nvencEncoder) SupportsProfile() bool { return e.supportsProfile }
 func (e *nvencEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *nvencEncoder) DefaultPreset() string { return e.presetDefault }
 func (e *nvencEncoder) Profiles() []string    { return e.profiles }
+
+// The curated NVENC preset list is offered as a dropdown by its own UI
+// change; until then the interface requires a value and the UI keeps
+// the free-text entry.
+func (e *nvencEncoder) Presets() []string { return nil }
+func (e *nvencEncoder) Tunes() []string   { return nil }
 func (e *nvencEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }

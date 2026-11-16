@@ -64,6 +64,12 @@ func (e *qsvEncoder) SupportsProfile() bool { return e.supportsProfile }
 func (e *qsvEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *qsvEncoder) DefaultPreset() string { return e.presetDefault }
 func (e *qsvEncoder) Profiles() []string    { return e.profiles }
+
+// The curated QSV preset list is offered as a dropdown by its own UI
+// change; until then the interface requires a value and the UI keeps
+// the free-text entry.
+func (e *qsvEncoder) Presets() []string { return nil }
+func (e *qsvEncoder) Tunes() []string   { return nil }
 func (e *qsvEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }

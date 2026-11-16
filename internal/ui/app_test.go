@@ -396,8 +396,14 @@ func TestSVTPresetSwitchesControlsAndPreservesCategoricalValue(t *testing.T) {
 	}
 
 	c.videoEncoder.SetSelected("libx265")
-	if !c.preset.Visible() || c.presetSlider.Visible() {
-		t.Fatal("x265 should show only the categorical preset entry")
+	// libx265 curates its preset names, so the value moves into the
+	// dropdown — carried over from the x264 text field ("slow" is a
+	// shared x264/x265 name), not silently reset.
+	if !c.presetSelect.Visible() || c.preset.Visible() || c.presetSlider.Visible() {
+		t.Fatal("x265 should show only the curated preset dropdown")
+	}
+	if got := c.presetSelect.Selected; got != "slow" {
+		t.Fatalf("carried-over preset selection = %q, want slow", got)
 	}
 	if got := c.profileFromWidgets().Video.Preset; got != "slow" {
 		t.Fatalf("categorical preset = %q, want slow", got)
@@ -422,6 +428,9 @@ func TestVAAPIPresetFieldHidden(t *testing.T) {
 	if c.presetSlider.Visible() {
 		t.Errorf("hevc_vaapi must not show the integer preset slider")
 	}
+	if c.presetSelect.Visible() {
+		t.Errorf("hevc_vaapi must not show the curated preset dropdown (it has no preset flag)")
+	}
 	// Either hidden (our path) or disabled is acceptable. The bug
 	// we're guarding against is the previous behaviour: enabled and
 	// visible despite the encoder doing nothing with the value.
@@ -434,6 +443,81 @@ func TestVAAPIPresetFieldHidden(t *testing.T) {
 	c.videoEncoder.SetSelected("libx264")
 	if !c.preset.Visible() || c.presetSlider.Visible() {
 		t.Errorf("libx264 must show the categorical preset entry after VAAPI")
+	}
+}
+
+// TestLibx265CuratedPresetAndTuneDropdowns pins the libx265 dropdown
+// behavior: curated options prefixed by "(default)", "(default)"
+// emitting no flag value, round-trips through loadProfile, and
+// out-of-list profile values staying visible instead of being silently
+// dropped.
+func TestLibx265CuratedPresetAndTuneDropdowns(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("libx265")
+
+	wantPresets := []string{"(default)", "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo"}
+	if !slices.Equal(c.presetSelect.Options, wantPresets) {
+		t.Fatalf("preset options = %v, want %v", c.presetSelect.Options, wantPresets)
+	}
+	wantTunes := []string{"(default)", "psnr", "ssim", "grain", "fastdecode", "animation", "zerolatency"}
+	if !slices.Equal(c.tuneSelect.Options, wantTunes) {
+		t.Fatalf("tune options = %v, want %v", c.tuneSelect.Options, wantTunes)
+	}
+	if !c.tuneSelect.Visible() || c.tune.Visible() {
+		t.Fatal("x265 should show the curated tune dropdown")
+	}
+
+	c.presetSelect.SetSelected("slow")
+	c.tuneSelect.SetSelected("grain")
+	got := c.profileFromWidgets().Video
+	if got.Preset != "slow" || got.Tune != "grain" {
+		t.Fatalf("profile preset/tune = %q/%q, want slow/grain", got.Preset, got.Tune)
+	}
+
+	// "(default)" stands for the empty string: the builder omits both
+	// flags when they are empty.
+	c.presetSelect.SetSelected("(default)")
+	c.tuneSelect.SetSelected("(default)")
+	got = c.profileFromWidgets().Video
+	if got.Preset != "" || got.Tune != "" {
+		t.Fatalf("(default) preset/tune = %q/%q, want empty", got.Preset, got.Tune)
+	}
+
+	// Round-trip: a saved profile's values land in the dropdowns.
+	profile := c.config.Profiles[0]
+	profile.Video.Encoder = "libx265"
+	profile.Video.Preset = "veryslow"
+	profile.Video.Tune = "zerolatency"
+	c.loadProfile(profile)
+	if c.presetSelect.Selected != "veryslow" || c.tuneSelect.Selected != "zerolatency" {
+		t.Fatalf("loaded selections = %q/%q, want veryslow/zerolatency", c.presetSelect.Selected, c.tuneSelect.Selected)
+	}
+	if got := c.profileFromWidgets().Video; got.Preset != "veryslow" || got.Tune != "zerolatency" {
+		t.Fatalf("round-tripped preset/tune = %q/%q", got.Preset, got.Tune)
+	}
+
+	// An empty saved value lands on "(default)", not on the previous
+	// profile's selection.
+	profile.Video.Preset = ""
+	profile.Video.Tune = ""
+	c.loadProfile(profile)
+	if c.presetSelect.Selected != "(default)" || c.tuneSelect.Selected != "(default)" {
+		t.Fatalf("empty saved preset/tune selections = %q/%q, want (default)", c.presetSelect.Selected, c.tuneSelect.Selected)
+	}
+
+	// A hand-edited out-of-list value must stay visible so it keeps
+	// round-tripping rather than being silently emptied.
+	profile.Video.Preset = "exotic"
+	c.loadProfile(profile)
+	if c.presetSelect.Selected != "exotic" {
+		t.Fatalf("out-of-list preset selection = %q, want exotic", c.presetSelect.Selected)
+	}
+	if got := c.profileFromWidgets().Video.Preset; got != "exotic" {
+		t.Fatalf("out-of-list preset round-trip = %q, want exotic", got)
 	}
 }
 

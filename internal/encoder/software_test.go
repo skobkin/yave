@@ -109,6 +109,37 @@ func TestSoftwareVideoEncoderMetadata(t *testing.T) {
 	}
 }
 
+// TestCuratedPresetsAndTunes pins which software encoders curate
+// preset/tune value lists. Curated lists become UI dropdowns; an empty
+// list keeps the free-text entry (or the integer slider for
+// integer-preset encoders, which must never curate).
+func TestCuratedPresetsAndTunes(t *testing.T) {
+	x265Presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo"}
+	x265Tunes := []string{"psnr", "ssim", "grain", "fastdecode", "animation", "zerolatency"}
+	tests := []struct {
+		name    string
+		presets []string
+		tunes   []string
+	}{
+		{name: "libx264"},
+		{name: "libx265", presets: x265Presets, tunes: x265Tunes},
+		{name: "libsvtav1"},
+		{name: "libvpx-vp9"},
+		{name: "libaom-av1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ve := findVideo(t, tt.name)
+			if !slices.Equal(ve.Presets(), tt.presets) {
+				t.Errorf("Presets() = %v, want %v", ve.Presets(), tt.presets)
+			}
+			if !slices.Equal(ve.Tunes(), tt.tunes) {
+				t.Errorf("Tunes() = %v, want %v", ve.Tunes(), tt.tunes)
+			}
+		})
+	}
+}
+
 func TestLibX264BuildArgs(t *testing.T) {
 	ve := findVideo(t, "libx264")
 	res, err := ve.BuildVideoArgs(model.VideoSettings{Encoder: "libx264", RateControl: "CRF", CRF: 23, Preset: "medium", Tune: "film", Profile: "high"})

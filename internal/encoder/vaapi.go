@@ -39,8 +39,13 @@ func (e *vaapiEncoder) PresetRange() (IntegerRange, bool) { return IntegerRange{
 func (e *vaapiEncoder) SupportsTune() bool                { return false }
 func (e *vaapiEncoder) SupportsProfile() bool             { return true }
 func (e *vaapiEncoder) SupportsPreset() bool              { return false }
-func (e *vaapiEncoder) DefaultPreset() string             { return "" }
-func (e *vaapiEncoder) Profiles() []string                { return e.profiles }
+
+// The VAAPI encoders have no preset or tune flags in ffmpeg, so there
+// is nothing to curate.
+func (e *vaapiEncoder) Presets() []string     { return nil }
+func (e *vaapiEncoder) Tunes() []string       { return nil }
+func (e *vaapiEncoder) DefaultPreset() string { return "" }
+func (e *vaapiEncoder) Profiles() []string    { return e.profiles }
 func (e *vaapiEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCAuto, RCCQP, RCVBR, RCCBR}
 }

@@ -54,8 +54,18 @@ func (c *Controller) createWidgets() {
 	c.preset = entry(c.changed)
 	c.presetSlider = newIntegerSlider(mustPresetRange("libsvtav1"), 6, c.changed)
 	c.presetSlider.Hide()
-	c.presetControl = container.NewStack(c.preset, c.presetSlider.Object())
+	// Encoders with a curated preset list (Presets()) show the dropdown
+	// instead of the free-text entry; exactly one stack child is visible
+	// at a time (updateControlState owns the toggle).
+	c.presetSelect = widget.NewSelect([]string{}, c.changed)
+	c.presetSelect.Hide()
+	c.presetControl = container.NewStack(c.preset, c.presetSlider.Object(), c.presetSelect)
 	c.tune = entry(c.changed)
+	// Same stack pattern as the preset control: encoders with a curated
+	// tune list (Tunes()) show the dropdown, everyone else the entry.
+	c.tuneSelect = widget.NewSelect([]string{}, c.changed)
+	c.tuneSelect.Hide()
+	c.tuneControl = container.NewStack(c.tune, c.tuneSelect)
 	// Profile options are populated per-encoder by populateProfileOptions.
 	c.videoProfile = widget.NewSelect([]string{}, c.changed)
 	c.frameMode = widget.NewSelect([]string{"keep", "convert"}, c.changed)

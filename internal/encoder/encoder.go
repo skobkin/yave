@@ -211,6 +211,21 @@ type VideoEncoder interface {
 	// returned slice is shared state and must be treated as immutable.
 	Profiles() []string
 
+	// Presets lists the curated categorical preset values the UI offers
+	// for this encoder (e.g. libx265's ultrafast..placebo), in display
+	// order. An empty list means yave curates no preset values and the
+	// UI keeps a free-text entry (still gated on SupportsPreset);
+	// integer-preset encoders always return an empty list — their
+	// PresetRange slider is the curated control. The returned slice is
+	// shared state and must be treated as immutable.
+	Presets() []string
+
+	// Tunes lists the curated -tune values the UI offers for this
+	// encoder, in display order. An empty list means the UI keeps a
+	// free-text entry (still gated on SupportsTune). The returned slice
+	// is shared state and must be treated as immutable.
+	Tunes() []string
+
 	// VideoFilter returns the filter chain to follow -vf, including any
 	// frame-rate conversion, soft scaling, format conversion, hw upload,
 	// and hardware scaling. Empty string means no -vf is emitted.

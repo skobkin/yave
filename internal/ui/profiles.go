@@ -54,6 +54,20 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.bufsize.SetText(p.Video.Bufsize)
 	c.preset.SetText(p.Video.Preset)
 	c.tune.SetText(p.Video.Tune)
+	// Seed the preset/tune dropdown options for the just-selected
+	// encoder before anything reads the selection — same Fyne ordering
+	// rule as the rate-control dropdown above. Same empty-value rule
+	// too: a profile saved without a preset/tune must land on
+	// "(default)", not keep the previously loaded profile's selection
+	// (which would be emitted for this profile and persisted by Save).
+	if p.Video.Preset == "" && c.presetSelect.Selected != "" {
+		c.presetSelect.ClearSelected()
+	}
+	c.populatePresetOptions(p.Video.Preset)
+	if p.Video.Tune == "" && c.tuneSelect.Selected != "" {
+		c.tuneSelect.ClearSelected()
+	}
+	c.populateTuneOptions(p.Video.Tune)
 	// Seed the profile options for the just-selected encoder before
 	// anything reads the selection: same Fyne ordering rule as the
 	// rate-control dropdown above (SetSelected silently drops values
@@ -161,7 +175,7 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			Encoder: c.videoEncoder.Selected, RateControl: c.rateControl.Selected,
 			QP: c.qp.Value(), CRF: c.crf.Value(), Bitrate: c.bitrate.Text,
 			Maxrate: c.maxrate.Text, Bufsize: c.bufsize.Text, Preset: c.presetValue(),
-			Tune: c.tune.Text, Profile: c.videoProfileValue(),
+			Tune: c.tuneValue(), Profile: c.videoProfileValue(),
 			FrameRateMode: c.frameMode.Selected, FrameRate: c.frameRate.Text,
 			MaxWidth: atoi(c.maxWidth.Text), MaxHeight: atoi(c.maxHeight.Text),
 			KeepAspectRatio: c.keepAspect.Checked, PreventUpscaling: c.noUpscale.Checked,
@@ -205,6 +219,44 @@ func profileOptionToValue(option string) string {
 		return ""
 	}
 	return option
+}
+
+// populateCuratedOptions fills a dropdown with a curated value list
+// prefixed by "(default)". preferred (when non-empty) is the value the
+// dropdown should land on after the options exist; the current
+// selection is used when preferred is empty. The preferred and current
+// values are unioned into the options even when outside the curated
+// list, so a hand-edited profile value stays visible instead of being
+// silently dropped by SetSelected.
+//
+// Callers about to read the selection (loadProfile in particular) must
+// invoke this first: Fyne silently drops a SetSelected whose value
+// isn't already in Options.
+func populateCuratedOptions(sel *widget.Select, curated []string, preferred string) {
+	options := append([]string{defaultOption}, curated...)
+	for _, extra := range []string{profileValueToOption(preferred), sel.Selected} {
+		if extra != "" && extra != defaultOption && !slices.Contains(options, extra) {
+			options = append(options, extra)
+		}
+	}
+	sel.Options = options
+
+	target := profileValueToOption(preferred)
+	if preferred == "" {
+		target = sel.Selected
+	}
+	// An empty selection is represented visibly by "(default)" so the
+	// dropdown never shows the generic placeholder where a real state
+	// belongs.
+	if target == "" {
+		target = defaultOption
+	}
+	// Only SetSelected when the value actually changes; firing OnChanged
+	// from inside updateControlState would re-enter updateControlState
+	// via changed() (see populateRateControlOptions).
+	if sel.Selected != target {
+		sel.SetSelected(target)
+	}
 }
 
 // profileChoices returns the profile value list for the encoder: the
