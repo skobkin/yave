@@ -293,11 +293,11 @@ func TestBuildCommandTrim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsPair(plan.Args, "-ss", "10.000") {
-		t.Errorf("missing -ss 10.000 in %#v", plan.Args)
+	if !containsPair(plan.Args, "-ss", "10.000000") {
+		t.Errorf("missing -ss 10.000000 in %#v", plan.Args)
 	}
-	if !containsPair(plan.Args, "-t", "60.000") {
-		t.Errorf("missing -t 60.000 in %#v", plan.Args)
+	if !containsPair(plan.Args, "-t", "60.000000") {
+		t.Errorf("missing -t 60.000000 in %#v", plan.Args)
 	}
 	// -ss's value sits immediately before -i (input-side), after the
 	// pre-input hardware flags.
@@ -329,7 +329,7 @@ func TestBuildCommandTrim(t *testing.T) {
 	if plan.Args[len(plan.Args)-1] != "/tmp/output.mkv" {
 		t.Errorf("output path must stay last: %#v", plan.Args)
 	}
-	if !strings.Contains(plan.Preview, "-ss 10.000") {
+	if !strings.Contains(plan.Preview, "-ss 10.000000") {
 		t.Errorf("preview missing trimmed seek: %q", plan.Preview)
 	}
 }
@@ -385,7 +385,7 @@ func TestBuildCommandTrimCopy(t *testing.T) {
 	if !containsPair(plan.Args, "-c:v", "copy") {
 		t.Errorf("video copy missing: %#v", plan.Args)
 	}
-	if !containsPair(plan.Args, "-ss", "2.000") || !containsPair(plan.Args, "-t", "3.000") {
+	if !containsPair(plan.Args, "-ss", "2.000000") || !containsPair(plan.Args, "-t", "3.000000") {
 		t.Errorf("copy+trim must keep -ss/-t: %#v", plan.Args)
 	}
 	if slices.Contains(plan.Args, "-vf") {
@@ -397,21 +397,43 @@ func TestBuildCommandTrimSubSecond(t *testing.T) {
 	t.Parallel()
 	profile := model.BuiltinProfiles()[0]
 	profile.Video.VAAPIDevice = "/dev/dri/renderD128"
-	plan, err := BuildCommand(BuildRequest{
-		FFmpegPath: "ffmpeg",
-		InputPath:  "/tmp/input.mkv",
-		OutputPath: "/tmp/output.mkv",
-		Profile:    profile,
-		Trim:       model.TrimSelection{Segments: []model.TimeRange{{Start: time.Millisecond, End: 1500 * time.Millisecond}}},
-	})
-	if err != nil {
-		t.Fatal(err)
+
+	// Sub-millisecond truncation matters for frame accuracy: ffmpeg's
+	// input-side -ss drops frames strictly before the target, so a
+	// 29.97 fps frame at 66.667 ms formatted with millisecond rounding
+	// becomes 0.067 — past the frame — and the seek skips it.
+	cases := []struct {
+		name    string
+		start   time.Duration
+		end     time.Duration
+		wantSS  string
+		wantEnd string
+	}{
+		{"millisecond", time.Millisecond, 1500 * time.Millisecond, "0.001000", "1.499000"},
+		{"29.97fps frame must not round up", 66667 * time.Microsecond, 166667 * time.Microsecond, "0.066667", "0.100000"},
+		{"sub-microsecond digits truncate", 66667500 * time.Nanosecond, 166667500 * time.Nanosecond, "0.066667", "0.100000"},
+		{"zero", 0, time.Second, "0.000000", "1.000000"},
 	}
-	if !containsPair(plan.Args, "-ss", "0.001") {
-		t.Errorf("missing -ss 0.001 in %#v", plan.Args)
-	}
-	if !containsPair(plan.Args, "-t", "1.499") {
-		t.Errorf("missing -t 1.499 in %#v", plan.Args)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			plan, err := BuildCommand(BuildRequest{
+				FFmpegPath: "ffmpeg",
+				InputPath:  "/tmp/input.mkv",
+				OutputPath: "/tmp/output.mkv",
+				Profile:    profile,
+				Trim:       model.TrimSelection{Segments: []model.TimeRange{{Start: tc.start, End: tc.end}}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsPair(plan.Args, "-ss", tc.wantSS) {
+				t.Errorf("missing -ss %s in %#v", tc.wantSS, plan.Args)
+			}
+			if !containsPair(plan.Args, "-t", tc.wantEnd) {
+				t.Errorf("missing -t %s in %#v", tc.wantEnd, plan.Args)
+			}
+		})
 	}
 }
 

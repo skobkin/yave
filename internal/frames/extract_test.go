@@ -90,7 +90,7 @@ func TestThumbnailExtractsAndDecodes(t *testing.T) {
 
 	args := readArgs(t, filepath.Join(dir, "ffmpeg.args"))
 	for _, want := range []string{
-		"-ss", "5.000",
+		"-ss", "5.000000",
 		"-map", "0:v:0",
 		"-frames:v", "1",
 		"-vf", "scale=-2:96,format=yuvj420p",

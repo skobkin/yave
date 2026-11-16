@@ -250,6 +250,13 @@ func (t *limitedTail) String() string {
 	return string(t.buf)
 }
 
+// formatSeconds renders a duration as fractional seconds with
+// microsecond precision, truncating below the microsecond. Millisecond
+// rounding is not enough for preview seeks: ffmpeg's input-side -ss
+// drops frames whose timestamps are strictly before the target, so
+// rounding a 66.667 ms frame to 0.067 skips it and extracts the next
+// frame instead — truncation lands at or before the frame's own
+// timestamp and selects it exactly.
 func formatSeconds(d time.Duration) string {
-	return fmt.Sprintf("%.3f", d.Seconds())
+	return fmt.Sprintf("%.6f", float64(d/time.Microsecond)/1e6)
 }

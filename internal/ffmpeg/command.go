@@ -26,11 +26,15 @@ type BuildRequest struct {
 }
 
 // formatSeconds renders a duration as plain fractional seconds
-// ("83.456") — the timestamp form ffmpeg's -ss/-t accept on every
-// build. Millisecond precision matches the UI's HH:MM:SS.mmm boundary
-// fields.
+// ("83.456789") — the timestamp form ffmpeg's -ss/-t accept on every
+// build. Microsecond precision, truncating below the microsecond:
+// ffmpeg drops frames whose timestamps are strictly before an input
+// -ss target, so millisecond rounding (66.667 ms → 0.067) could skip
+// a 29.97 fps frame; truncation lands at or before its timestamp and
+// selects it exactly. The UI's HH:MM:SS.mmm fields only display three
+// decimals; the generated command keeps the full position.
 func formatSeconds(d time.Duration) string {
-	return fmt.Sprintf("%.3f", d.Seconds())
+	return fmt.Sprintf("%.6f", float64(d/time.Microsecond)/1e6)
 }
 
 func BuildCommand(req BuildRequest) (model.RunPlan, error) {
