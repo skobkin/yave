@@ -704,6 +704,34 @@ func TestResetRefreshesCommittedPreview(t *testing.T) {
 	}
 }
 
+// Regression: loading a new input while trimming was enabled set
+// trimEnabled=false before SetChecked(false) ran, so the checkbox's
+// OnChanged callback early-returned in setTrimEnabled and the boundary
+// entries, buttons, and timeline stayed interactive with trimming off —
+// typing into them mutated the selection.
+func TestNewInputDisablesTrimControls(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnable.SetChecked(true)
+
+	c.resetTrimForNewInput()
+
+	for name, w := range map[string]fyne.Disableable{
+		"timeline": c.trimTimeline,
+		"in":       c.trimIn,
+		"out":      c.trimOut,
+		"set in":   c.trimSetIn,
+		"set out":  c.trimSetOut,
+		"reset":    c.trimReset,
+	} {
+		if !w.Disabled() {
+			t.Fatalf("%s control must be disabled after an input change", name)
+		}
+	}
+	if c.trimEnable.Disabled() {
+		t.Fatal("the enable checkbox itself must stay usable")
+	}
+}
+
 func TestResetTrimForNewInputClearsState(t *testing.T) {
 	c := testTrimController(t)
 	c.trimEnable.SetChecked(true)

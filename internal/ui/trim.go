@@ -49,15 +49,10 @@ func (c *Controller) trimRequest() model.TrimSelection {
 
 // --- enable / reset ---
 
-// setTrimEnabled flips trimming on or off. First enable seeds the
-// selection to the full range and lazily starts the thumbnail strip and
-// the initial preview — no FFmpeg preview process ever runs merely
-// because an input was selected.
-func (c *Controller) setTrimEnabled(enabled bool) {
-	if c.trimEnabled == enabled {
-		return
-	}
-	c.trimEnabled = enabled
+// setTrimControlsEnabled toggles every trim control except the enable
+// checkbox itself. The fyne.Disableable assertion covers the timeline,
+// both boundary entries, and the Set In/Out/Reset buttons.
+func (c *Controller) setTrimControlsEnabled(enabled bool) {
 	for _, control := range c.trimControls {
 		if d, ok := control.(fyne.Disableable); ok {
 			if enabled {
@@ -67,6 +62,18 @@ func (c *Controller) setTrimEnabled(enabled bool) {
 			}
 		}
 	}
+}
+
+// setTrimEnabled flips trimming on or off. First enable seeds the
+// selection to the full range and lazily starts the thumbnail strip and
+// the initial preview — no FFmpeg preview process ever runs merely
+// because an input was selected.
+func (c *Controller) setTrimEnabled(enabled bool) {
+	if c.trimEnabled == enabled {
+		return
+	}
+	c.trimEnabled = enabled
+	c.setTrimControlsEnabled(enabled)
 	if enabled && c.media.Duration > 0 {
 		if !c.trimSelection.Active() {
 			c.resetTrimSelection()
@@ -106,6 +113,11 @@ func (c *Controller) resetTrimForNewInput() {
 	c.trimEnabled = false
 	c.trimSelection = model.TrimSelection{}
 	c.trimInValid, c.trimOutValid = true, true
+	// SetChecked below fires setTrimEnabled(false), which early-returns
+	// because trimEnabled is already false — the controls must be
+	// disabled explicitly, or they stay editable with trimming off and
+	// typing into them mutates the selection the next enable reuses.
+	c.setTrimControlsEnabled(false)
 	c.trimEnable.SetChecked(false)
 	c.trimIn.SetText("")
 	c.trimOut.SetText("")
