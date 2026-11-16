@@ -61,6 +61,15 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 		return nil, 0, fmt.Errorf("frame times: window end (%s) must be after start (%s)", to, from)
 	}
 
+	// -read_intervals expects absolute container timestamps, while the
+	// requested window is input-relative (the timeline ffmpeg's
+	// input-side -ss and the UI playhead use). Probe the container's
+	// format start_time and shift the bounds into the absolute domain.
+	origin, err := inputOrigin(ctx, resolved, inputPath)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	args := []string{
 		"-v", "error",
 		"-select_streams", "v:0",
@@ -71,7 +80,7 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 		// +duration interval from where the keyframe seek actually
 		// landed, not from the requested start, so with a large GOP a
 		// relative window stops decoding before reaching to.
-		"-read_intervals", fmt.Sprintf("%s%%%s", formatProbeSeconds(from), formatProbeSeconds(to)),
+		"-read_intervals", fmt.Sprintf("%s%%%s", formatProbeSeconds(from+origin), formatProbeSeconds(to+origin)),
 		inputPath,
 	}
 	output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput() //nolint:gosec // G204: resolved via exec.LookPath
@@ -99,6 +108,48 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 		}
 	}
 	return filtered, start, nil
+}
+
+// inputOrigin reports the input's format start_time — the reference
+// ffmpeg's input-side -ss seeks against and the domain -read_intervals
+// expects — as an absolute timestamp. A plain zero-origin file (the
+// common case) yields 0; a missing, "N/A" or unparseable value
+// degrades to 0 rather than failing the window fetch.
+func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration, error) {
+	out, err := exec.CommandContext(ctx, resolved, //nolint:gosec // G204: resolved via exec.LookPath
+		"-v", "error",
+		"-show_entries", "format=start_time",
+		"-of", "json",
+		inputPath,
+	).CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
+			detail = err.Error()
+		}
+		return 0, fmt.Errorf("probe input origin %q: %s", inputPath, detail)
+	}
+	var document struct {
+		Formats []struct {
+			StartTime string `json:"start_time"`
+		} `json:"formats"`
+	}
+	if err := json.Unmarshal(out, &document); err != nil {
+		return 0, fmt.Errorf("decode ffprobe format JSON: %w", err)
+	}
+	if len(document.Formats) == 0 {
+		return 0, nil
+	}
+	// ParseFloat unlike parseSeconds so a negative container origin
+	// still shifts the window correctly.
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(document.Formats[0].StartTime), 64)
+	if err != nil {
+		return 0, nil
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
 }
 
 func parseFrameTimes(data []byte) ([]time.Duration, time.Duration, error) {

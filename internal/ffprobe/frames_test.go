@@ -12,8 +12,9 @@ import (
 )
 
 // writeFakeFFprobe installs a shell script that records its arguments
-// and prints the given JSON document.
-func writeFakeFFprobe(t *testing.T, dir, document string) string {
+// and answers the origin probe (format=start_time) with formatStart;
+// every other invocation prints the given frame document.
+func writeFakeFFprobe(t *testing.T, dir, document, formatStart string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("test helper is a POSIX shell script")
@@ -21,7 +22,14 @@ func writeFakeFFprobe(t *testing.T, dir, document string) string {
 	argsFile := filepath.Join(dir, "ffprobe.args")
 	script := "#!/bin/sh\n" +
 		`printf '%s\n' "$@" >> ` + strconv.Quote(argsFile) + "\n" +
-		"cat <<'EOF'\n" + document + "\nEOF\n"
+		"case \"$*\" in\n" +
+		"*format=start_time*)\n" +
+		`  printf '{"formats":[{"start_time":"%s"}]}\n' ` + strconv.Quote(formatStart) + "\n" +
+		"  ;;\n" +
+		"*)\n" +
+		"  cat <<'EOF'\n" + document + "\nEOF\n" +
+		"  ;;\n" +
+		"esac\n"
 	path := filepath.Join(dir, "ffprobe")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { //nolint:gosec // G306: test helper script must be executable
 		t.Fatal(err)
@@ -43,7 +51,7 @@ func TestFrameTimesNonZeroStart(t *testing.T) {
 	  ],
 	  "streams": [{"start_time": "1.043000"}]
 	}`
-	fake := writeFakeFFprobe(t, dir, document)
+	fake := writeFakeFFprobe(t, dir, document, "1.043000")
 	times, start, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -66,10 +74,44 @@ func TestFrameTimesNonZeroStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := strings.Fields(string(args))
-	for _, want := range []string{"-select_streams", "v:0", "-show_frames", "-read_intervals", "0.000%3.000"} {
+	for _, want := range []string{"-select_streams", "v:0", "-show_frames", "-read_intervals", "1.043%4.043"} {
 		if !containsField(fields, want) {
 			t.Errorf("args missing %q: %v", want, fields)
 		}
+	}
+}
+
+// -read_intervals expects absolute container timestamps; the requested
+// window is input-relative and must be shifted by the container's
+// format start_time in both directions (positive and negative origin).
+func TestFrameTimesTranslatesProbeWindow(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		origin     string
+		from, to   time.Duration
+		wantWindow string
+	}{
+		{"positive origin", "10.000000", 2 * time.Second, 5 * time.Second, "12.000%15.000"},
+		{"negative origin", "-1.500000", 2 * time.Second, 5 * time.Second, "0.500%3.500"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			document := `{"frames": [], "streams": [{"start_time": "0.000000"}]}`
+			fake := writeFakeFFprobe(t, dir, document, tc.origin)
+			if _, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", tc.from, tc.to); err != nil {
+				t.Fatal(err)
+			}
+			args, err := os.ReadFile(filepath.Join(dir, "ffprobe.args")) //nolint:gosec // G304: path comes from t.TempDir
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsField(strings.Fields(string(args)), tc.wantWindow) {
+				t.Errorf("window %q not translated by origin %s: %s", tc.wantWindow, tc.origin, args)
+			}
+		})
 	}
 }
 
@@ -97,7 +139,7 @@ func TestFrameTimesReorderAndDedup(t *testing.T) {
 	  ],
 	  "streams": [{"start_time": "0.000000"}]
 	}`
-	fake := writeFakeFFprobe(t, dir, document)
+	fake := writeFakeFFprobe(t, dir, document, "0.000000")
 	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +171,7 @@ func TestFrameTimesWindowFiltering(t *testing.T) {
 	  ],
 	  "streams": [{"start_time": "0.000000"}]
 	}`
-	fake := writeFakeFFprobe(t, dir, document)
+	fake := writeFakeFFprobe(t, dir, document, "0.000000")
 	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 10*time.Second, 12*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +190,7 @@ func TestFrameTimesWindowFiltering(t *testing.T) {
 func TestFrameTimesGuards(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	fake := writeFakeFFprobe(t, dir, `{"frames": [], "streams": []}`)
+	fake := writeFakeFFprobe(t, dir, `{"frames": [], "streams": []}`, "0.000000")
 	if _, _, err := FrameTimes(context.Background(), fake, "", 0, time.Second); err == nil {
 		t.Error("empty input path must be rejected")
 	}
