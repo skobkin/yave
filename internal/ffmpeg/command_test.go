@@ -2,7 +2,9 @@ package ffmpeg
 
 import (
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"git.skobk.in/skobkin/yave/internal/model"
 )
@@ -276,6 +278,143 @@ func TestBuildCommandLibaomAV1(t *testing.T) {
 	}
 }
 
+func TestBuildCommandTrim(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[0]
+	profile.Video.VAAPIDevice = "/dev/dri/renderD128"
+	profile.Container = model.ContainerMP4
+	plan, err := BuildCommand(BuildRequest{
+		FFmpegPath: "/usr/bin/ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Trim:       model.TrimSelection{Segments: []model.TimeRange{{Start: 10 * time.Second, End: 70 * time.Second}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPair(plan.Args, "-ss", "10.000") {
+		t.Errorf("missing -ss 10.000 in %#v", plan.Args)
+	}
+	if !containsPair(plan.Args, "-t", "60.000") {
+		t.Errorf("missing -t 60.000 in %#v", plan.Args)
+	}
+	// -ss's value sits immediately before -i (input-side), after the
+	// pre-input hardware flags.
+	ssIndex := indexOfArg(plan.Args, "-ss")
+	iIndex := indexOfArg(plan.Args, "-i")
+	if ssIndex < 0 || iIndex < 0 || ssIndex+2 != iIndex {
+		t.Errorf("-ss value (at %d) is not immediately before -i (at %d): %#v", ssIndex, iIndex, plan.Args)
+	}
+	vaapiValue := indexOfArg(plan.Args, "/dev/dri/renderD128")
+	if vaapiValue < 0 || vaapiValue > ssIndex {
+		t.Errorf("-ss (at %d) must come after the pre-input device flag value (at %d): %#v", ssIndex, vaapiValue, plan.Args)
+	}
+	// -t is an output option: after every -map and before -movflags and
+	// the output path.
+	tIndex := indexOfArg(plan.Args, "-t")
+	lastMap := -1
+	for i, arg := range plan.Args {
+		if arg == "-map" {
+			lastMap = i
+		}
+	}
+	movflags := indexOfArg(plan.Args, "-movflags")
+	if tIndex < 0 || tIndex < lastMap {
+		t.Errorf("-t at %d must come after the last -map at %d: %#v", tIndex, lastMap, plan.Args)
+	}
+	if movflags < 0 || tIndex > movflags {
+		t.Errorf("-t at %d must come before -movflags at %d: %#v", tIndex, movflags, plan.Args)
+	}
+	if plan.Args[len(plan.Args)-1] != "/tmp/output.mkv" {
+		t.Errorf("output path must stay last: %#v", plan.Args)
+	}
+	if !strings.Contains(plan.Preview, "-ss 10.000") {
+		t.Errorf("preview missing trimmed seek: %q", plan.Preview)
+	}
+}
+
+func TestBuildCommandTrimDisabled(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[0]
+	// Built-ins ship with an empty (automatic) device; command
+	// generation needs the concrete resolved path.
+	profile.Video.VAAPIDevice = "/dev/dri/renderD128"
+	plan, err := BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(plan.Args, "-ss") || slices.Contains(plan.Args, "-t") {
+		t.Errorf("disabled trim must not emit -ss/-t: %#v", plan.Args)
+	}
+	// An empty (non-nil but zero-length) selection behaves the same.
+	plan, err = BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Trim:       model.TrimSelection{Segments: []model.TimeRange{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(plan.Args, "-ss") || slices.Contains(plan.Args, "-t") {
+		t.Errorf("empty trim selection must not emit -ss/-t: %#v", plan.Args)
+	}
+}
+
+func TestBuildCommandTrimCopy(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[0]
+	profile.Video.Encoder = "copy"
+	plan, err := BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Trim:       model.TrimSelection{Segments: []model.TimeRange{{Start: 2 * time.Second, End: 5 * time.Second}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPair(plan.Args, "-c:v", "copy") {
+		t.Errorf("video copy missing: %#v", plan.Args)
+	}
+	if !containsPair(plan.Args, "-ss", "2.000") || !containsPair(plan.Args, "-t", "3.000") {
+		t.Errorf("copy+trim must keep -ss/-t: %#v", plan.Args)
+	}
+	if slices.Contains(plan.Args, "-vf") {
+		t.Errorf("copy command unexpectedly contains a filter: %#v", plan.Args)
+	}
+}
+
+func TestBuildCommandTrimSubSecond(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[0]
+	profile.Video.VAAPIDevice = "/dev/dri/renderD128"
+	plan, err := BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Trim:       model.TrimSelection{Segments: []model.TimeRange{{Start: time.Millisecond, End: 1500 * time.Millisecond}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPair(plan.Args, "-ss", "0.001") {
+		t.Errorf("missing -ss 0.001 in %#v", plan.Args)
+	}
+	if !containsPair(plan.Args, "-t", "1.499") {
+		t.Errorf("missing -t 1.499 in %#v", plan.Args)
+	}
+}
+
 func containsPair(args []string, key, value string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == key && args[i+1] == value {
@@ -283,4 +422,10 @@ func containsPair(args []string, key, value string) bool {
 		}
 	}
 	return false
+}
+
+// indexOfArg returns the index of the first exact occurrence of arg,
+// or -1.
+func indexOfArg(args []string, arg string) int {
+	return slices.Index(args, arg)
 }

@@ -165,6 +165,51 @@ type Progress struct {
 	State      string
 }
 
+// TimeRange is a half-open [Start, End) interval on the media timeline,
+// expressed relative to the input start (the same timeline ffmpeg's
+// input-side -ss seeks on).
+type TimeRange struct {
+	Start time.Duration
+	End   time.Duration
+}
+
+// TrimSelection holds the cut ranges applied to the current input. It
+// belongs to the input/conversion job, not to saved profiles, so it has
+// no yaml tags and is never persisted (Profile/Config stay untouched).
+// An empty selection means "no trimming".
+//
+// Phase 1 supports exactly ONE segment. The slice shape is deliberate:
+// a later phase will lift the restriction by allowing more entries, and
+// keeping the plural field now means the model, command generation, and
+// UI plumbing keep their shape. The single-segment restriction is
+// enforced in validation.ValidateTrim and is temporary — multiple
+// intervals are a planned feature, not an invalid model design.
+type TrimSelection struct {
+	Segments []TimeRange
+}
+
+// Active reports whether any trimming is selected.
+func (t TrimSelection) Active() bool {
+	return len(t.Segments) > 0
+}
+
+// First returns the single segment Phase 1 supports.
+func (t TrimSelection) First() (TimeRange, bool) {
+	if len(t.Segments) == 0 {
+		return TimeRange{}, false
+	}
+	return t.Segments[0], true
+}
+
+// Total sums all segment durations.
+func (t TrimSelection) Total() time.Duration {
+	var total time.Duration
+	for _, s := range t.Segments {
+		total += s.End - s.Start
+	}
+	return total
+}
+
 type RunPlan struct {
 	Executable string
 	Args       []string

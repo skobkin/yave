@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
@@ -18,6 +19,18 @@ type BuildRequest struct {
 	Profile    model.Profile
 	Media      model.MediaInfo
 	Overwrite  bool
+	// Trim, when active, restricts the output to the selected range via
+	// an input-side -ss seek plus an output-side -t duration. The zero
+	// value means no trimming.
+	Trim model.TrimSelection
+}
+
+// formatSeconds renders a duration as plain fractional seconds
+// ("83.456") — the timestamp form ffmpeg's -ss/-t accept on every
+// build. Millisecond precision matches the UI's HH:MM:SS.mmm boundary
+// fields.
+func formatSeconds(d time.Duration) string {
+	return fmt.Sprintf("%.3f", d.Seconds())
 }
 
 func BuildCommand(req BuildRequest) (model.RunPlan, error) {
@@ -55,6 +68,16 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 	}
 	args = append(args, preInput...)
 
+	// Input-side seek: ffmpeg seeks to the nearest keyframe at or before
+	// seg.Start and decodes forward from there. For re-encode this is
+	// frame-accurate on modern builds; for stream copy the cut snaps to
+	// keyframes (validation warns). Both preInput flags and -ss are
+	// input-side options, so this position is deterministic rather than
+	// functionally significant.
+	if seg, ok := req.Trim.First(); ok {
+		args = append(args, "-ss", formatSeconds(seg.Start))
+	}
+
 	args = append(args, "-i", req.InputPath, "-map", "0:v:0")
 	if p.Audio.CopyAllStreams {
 		args = append(args, "-map", "0:a?")
@@ -83,6 +106,12 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 
 	if p.Subtitles.Mode == model.SubtitleCopy && hasMappedSubtitles(args) {
 		args = append(args, "-c:s", "copy")
+	}
+	// Output-side duration cap. With the input-side -ss above,
+	// -progress's out_time is segment-relative, so progress computed
+	// against seg.End-seg.Start stays correct.
+	if seg, ok := req.Trim.First(); ok {
+		args = append(args, "-t", formatSeconds(seg.End-seg.Start))
 	}
 	if p.Container == model.ContainerMP4 {
 		args = append(args, "-movflags", "+faststart")
