@@ -147,7 +147,7 @@ func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration
 	// still shifts the window correctly.
 	seconds, err := strconv.ParseFloat(strings.TrimSpace(document.Formats[0].StartTime), 64)
 	if err != nil {
-		return 0, nil
+		return 0, nil //nolint:nilerr // "N/A" or unparseable origin degrades to zero by design
 	}
 	return time.Duration(seconds * float64(time.Second)), nil
 }
