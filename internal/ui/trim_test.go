@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"image"
+	"image/color"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	fynetest "fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/validation"
@@ -1049,5 +1054,95 @@ func TestLazyNoPreviewWorkWithoutMedia(t *testing.T) {
 	}
 	if c.previews.stripRunning {
 		t.Fatal("thumbnail strip must not run without a known duration")
+	}
+}
+
+// TestTrimTabLayout pins the space-saving tab composition: no heading
+// cards, the frame preview at the top of the tab inside a centering
+// row, the timestamps overlaid on a translucent chip over the image,
+// and In/Out/Duration/Reset sharing one row.
+func TestTrimTabLayout(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.buildLayout()
+
+	trimTab := c.tabs.Items[1]
+	if trimTab.Text != "Trim" {
+		t.Fatalf("second tab = %q, want Trim", trimTab.Text)
+	}
+	content, ok := trimTab.Content.(*fyne.Container)
+	if !ok {
+		t.Fatalf("trim tab content is %T, want a container", trimTab.Content)
+	}
+
+	var centering *fyne.Container
+	var boundaries *fyne.Container
+	var chip *canvas.Rectangle
+	isSpacer := func(obj fyne.CanvasObject) bool {
+		return reflect.TypeOf(obj) == reflect.TypeOf(layout.NewSpacer())
+	}
+	containsAll := func(objs []fyne.CanvasObject, want ...fyne.CanvasObject) bool {
+		for _, w := range want {
+			found := false
+			for _, o := range objs {
+				if o == w {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+		return true
+	}
+	var walk func(box *fyne.Container)
+	walk = func(box *fyne.Container) {
+		if len(box.Objects) == 3 && isSpacer(box.Objects[0]) && isSpacer(box.Objects[2]) {
+			centering = box
+		}
+		if containsAll(box.Objects, c.trimIn, c.trimOut, c.trimReset) {
+			boundaries = box
+		}
+		for _, obj := range box.Objects {
+			switch o := obj.(type) {
+			case *fyne.Container:
+				walk(o)
+			case *widget.Card:
+				t.Errorf("trim tab must not contain heading cards, found %q", o.Title)
+			case *canvas.Rectangle:
+				if n := color.NRGBAModel.Convert(o.FillColor).(color.NRGBA); n.A < 0xff {
+					chip = o
+				}
+			}
+		}
+	}
+	walk(content)
+
+	if centering == nil {
+		t.Fatal("preview section must sit in a [spacer, cell, spacer] row so the image centers")
+	}
+	if content.Objects[0] != fyne.CanvasObject(centering) {
+		t.Errorf("frame preview must be the first tab content, found %T", content.Objects[0])
+	}
+	if chip == nil {
+		t.Fatal("preview timestamps must be drawn on a translucent (alpha < 255) chip")
+	}
+	if boundaries == nil {
+		t.Fatal("In, Out and Reset must share one row container")
+	}
+	want := []fyne.CanvasObject{
+		centering, c.previewStatus, c.trimEnable, c.trimTimeline, c.trimMessage, boundaries,
+	}
+	if len(content.Objects) != len(want) {
+		t.Fatalf("trim tab rows = %d, want %d", len(content.Objects), len(want))
+	}
+	for i, w := range want {
+		if content.Objects[i] != w {
+			t.Errorf("trim tab row %d = %T, want %T", i, content.Objects[i], w)
+		}
 	}
 }

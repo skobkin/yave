@@ -1,12 +1,16 @@
 package ui
 
 import (
+	"image/color"
 	"sort"
 	"strings"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/templates"
@@ -20,19 +24,19 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		widget.NewCard("Media information", "", c.mediaInfo),
 	)
 
+	// The trim tab deliberately uses no heading cards: the section
+	// titles ("Trim", "Frame preview", "Boundaries") cost vertical
+	// space without saying anything the tab name doesn't. The frame
+	// preview leads because it is the visual anchor of the tab, and the
+	// boundary fields share one row with the duration and Reset so the
+	// whole tab fits next to the timeline without scrolling.
 	trimTab := container.NewVBox(
-		widget.NewCard("Trim", "", container.NewVBox(c.trimEnable, c.trimTimeline, c.trimMessage)),
-		widget.NewCard("Frame preview", "", container.NewVBox(
-			container.NewGridWrap(fyne.NewSize(320, 180), c.previewImage),
-			container.NewHBox(c.previewTimeLabel, c.hoverTimeLabel),
-			c.previewStatus,
-		)),
-		widget.NewCard("Boundaries", "", widget.NewForm(
-			widget.NewFormItem("In", container.NewBorder(nil, nil, nil, c.trimSetIn, c.trimIn)),
-			widget.NewFormItem("Out", container.NewBorder(nil, nil, nil, c.trimSetOut, c.trimOut)),
-			widget.NewFormItem("Selected duration", c.trimDuration),
-			widget.NewFormItem("", c.trimReset),
-		)),
+		trimPreviewSection(c),
+		c.previewStatus,
+		c.trimEnable,
+		c.trimTimeline,
+		c.trimMessage,
+		trimBoundariesRow(c),
 	)
 
 	outputTab := container.NewVBox(
@@ -65,6 +69,55 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		c.runTab,
 	)
 	return container.NewBorder(c.profileBar(), c.buildStatusBar(), nil, nil, c.tabs)
+}
+
+// trimPreviewSection composes the frame preview: the image in a fixed
+// 320x180 cell centered horizontally, with the rendered-frame and
+// hover timestamps drawn on a translucent chip over the image's top
+// edge instead of on their own row below it.
+func trimPreviewSection(c *Controller) fyne.CanvasObject {
+	chip := container.NewStack(
+		overlayChipRectangle(),
+		container.NewPadded(container.NewHBox(
+			c.previewTimeLabel, layout.NewSpacer(), c.hoverTimeLabel,
+		)),
+	)
+	// The VBox pins the chip to the top edge: box layouts stack from
+	// the top, so the chip keeps its own (label-sized) height while the
+	// Stack stretches the image to fill the whole cell.
+	cell := container.NewStack(
+		container.NewGridWrap(fyne.NewSize(320, 180), c.previewImage),
+		container.NewVBox(chip),
+	)
+	return container.NewHBox(layout.NewSpacer(), cell, layout.NewSpacer())
+}
+
+// overlayChipRectangle is the translucent background behind the preview
+// timestamps: the theme's overlay-background hue with forced
+// transparency, so the chip stays legible in both theme variants
+// (matching overlay-on-foreground contrast) without hiding the frame
+// underneath.
+func overlayChipRectangle() *canvas.Rectangle {
+	settings := fyne.CurrentApp().Settings()
+	chip := color.NRGBAModel.Convert(
+		settings.Theme().Color(theme.ColorNameOverlayBackground, settings.ThemeVariant()),
+	).(color.NRGBA)
+	chip.A = 0xc0
+	return canvas.NewRectangle(chip)
+}
+
+// trimBoundariesRow lays the boundary fields out on a single line: In
+// and Out entries with their Set buttons, the selected duration, and
+// Reset. Each label replaces the form rows the tab used before — the
+// entries are as wide as their timestamp placeholders, so the row fits
+// the tab without wrapping.
+func trimBoundariesRow(c *Controller) fyne.CanvasObject {
+	return container.NewHBox(
+		widget.NewLabel("In"), c.trimIn, c.trimSetIn,
+		widget.NewLabel("Out"), c.trimOut, c.trimSetOut,
+		widget.NewLabel("Duration"), c.trimDuration,
+		c.trimReset,
+	)
 }
 
 func (c *Controller) buildStatusBar() *fyne.Container {
