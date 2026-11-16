@@ -171,6 +171,39 @@ func TestTrimEntryIssuesBlockConversion(t *testing.T) {
 	}
 }
 
+// Regression: an EMPTIED boundary produced no blocking issue because the
+// checks required non-empty text — but the stored selection still
+// validates and trimRequest() returns an empty selection, so Start
+// silently converted the whole input without -ss/-t while showing no
+// error anywhere.
+func TestTrimEmptyBoundaryBlocksConversion(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.trimInValid, c.trimOutValid = true, true
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 5 * time.Second}}}
+
+	c.trimIn.SetText("")
+	c.setTrimBoundary("in", c.trimIn.Text)
+
+	issues := c.trimEntryIssues()
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "In timecode is required") {
+		t.Fatalf("expected a blocking required-entry issue, got %v", issues)
+	}
+	if issues[0].Severity != validation.SeverityError {
+		t.Fatalf("entry issue must be an error, got %v", issues[0].Severity)
+	}
+	if c.trimRequest().Active() {
+		t.Fatal("empty boundary must empty the conversion request")
+	}
+	if !c.trimSelection.Active() {
+		t.Fatal("the last valid selection must survive for display")
+	}
+	c.updateTrimMessages("libx265")
+	if !strings.Contains(c.trimMessage.Text, "In timecode is required") {
+		t.Fatalf("validation message must surface the empty boundary: %q", c.trimMessage.Text)
+	}
+}
+
 func TestUpdateTrimMessagesTracksEncoder(t *testing.T) {
 	c := testTrimController(t)
 	c.trimEnabled = true

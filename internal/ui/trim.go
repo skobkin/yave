@@ -121,6 +121,21 @@ func (c *Controller) resetTrimForNewInput() {
 
 // --- trim messages (validation + entry validity, one label) ---
 
+// boundaryEntryProblem describes an invalid boundary entry, or "" when
+// the entry is valid. An empty entry is invalid too: with trimming
+// enabled the stored selection still validates and trimRequest() returns
+// an empty selection, so a cleared-but-unblocking field would let Start
+// silently convert the whole input without -ss/-t.
+func boundaryEntryProblem(label string, valid bool, text string) string {
+	if valid {
+		return ""
+	}
+	if strings.TrimSpace(text) == "" {
+		return label + " timecode is required"
+	}
+	return label + " timecode is invalid: " + text
+}
+
 // updateTrimMessages recomputes the Trim tab's validation message from
 // current state. It runs from refresh() — the universal recompute point
 // — so the stream-copy warning stays synchronized across enable/disable,
@@ -129,11 +144,13 @@ func (c *Controller) resetTrimForNewInput() {
 func (c *Controller) updateTrimMessages(encoder string) {
 	var parts []string
 	if c.trimEnabled {
-		if !c.trimInValid && strings.TrimSpace(c.trimIn.Text) != "" {
-			parts = append(parts, "In timecode is invalid: "+c.trimIn.Text)
-		}
-		if !c.trimOutValid && strings.TrimSpace(c.trimOut.Text) != "" {
-			parts = append(parts, "Out timecode is invalid: "+c.trimOut.Text)
+		for _, problem := range []string{
+			boundaryEntryProblem("In", c.trimInValid, c.trimIn.Text),
+			boundaryEntryProblem("Out", c.trimOutValid, c.trimOut.Text),
+		} {
+			if problem != "" {
+				parts = append(parts, problem)
+			}
 		}
 		result := validation.ValidateTrim(c.trimSelection, &c.media, encoder)
 		for _, issue := range result.Errors {
@@ -154,17 +171,20 @@ func (c *Controller) trimEntryIssues() []validation.Issue {
 	if !c.trimEnabled {
 		return issues
 	}
-	if !c.trimInValid && strings.TrimSpace(c.trimIn.Text) != "" {
-		issues = append(issues, validation.Issue{
-			Severity: validation.SeverityError, Field: "trim in",
-			Message: "In timecode is invalid: " + c.trimIn.Text,
-		})
-	}
-	if !c.trimOutValid && strings.TrimSpace(c.trimOut.Text) != "" {
-		issues = append(issues, validation.Issue{
-			Severity: validation.SeverityError, Field: "trim out",
-			Message: "Out timecode is invalid: " + c.trimOut.Text,
-		})
+	for _, boundary := range []struct {
+		field, label string
+		valid        bool
+		text         string
+	}{
+		{"trim in", "In", c.trimInValid, c.trimIn.Text},
+		{"trim out", "Out", c.trimOutValid, c.trimOut.Text},
+	} {
+		if problem := boundaryEntryProblem(boundary.label, boundary.valid, boundary.text); problem != "" {
+			issues = append(issues, validation.Issue{
+				Severity: validation.SeverityError, Field: boundary.field,
+				Message: problem,
+			})
+		}
 	}
 	return issues
 }
