@@ -384,6 +384,55 @@ func TestFrameIndexEmptyWindowAtMediaEnd(t *testing.T) {
 	}
 }
 
+// Regression: queued steps that run past the video's actual edge used to
+// be discarded wholesale — the walk's partial movement (1s -> 2s in this
+// fixture) was reported as an edge and dropped, leaving the playhead
+// where it started.
+func TestFrameIndexPartialWalkCommitsAtEdge(t *testing.T) {
+	index := newFrameIndex()
+	duration := 2 * time.Second
+	index.applyWindow(0, duration, []time.Duration{0, time.Second, 2 * time.Second}, duration)
+
+	// Four forward steps queued from 1s: only one is possible (2s is the
+	// last frame); the rest run into the media edge.
+	for range 4 {
+		index.queue(1, time.Second)
+	}
+	at, state := index.applyPending(duration)
+	if state != frameStepEdge || at != 2*time.Second {
+		t.Fatalf("partial walk = %s/%v, want 2s/edge", at, state)
+	}
+
+	// The controller commits the partial movement to the playhead.
+	c := testTrimController(t)
+	c.media = model.MediaInfo{Duration: duration}
+	c.trimEnabled = true
+	c.trimTimeline.SetDuration(duration)
+	c.trimTimeline.SetPlayhead(time.Second)
+	c.applyFrameStep(at, state)
+	if c.trimTimeline.Playhead() != 2*time.Second {
+		t.Fatalf("playhead = %s, want the partial walk position 2s", c.trimTimeline.Playhead())
+	}
+}
+
+// A landing fetch with an empty queue applies nothing — in particular it
+// must not move the playhead anywhere (a retired queue must not yank the
+// playhead back to a stale walk position).
+func TestFrameIndexIdleLandingDoesNotMovePlayhead(t *testing.T) {
+	c := testTrimController(t)
+	c.trimTimeline.SetPlayhead(7 * time.Second)
+
+	at, state := c.previews.index.applyWindow(6*time.Second, 8*time.Second,
+		[]time.Duration{6 * time.Second, 7 * time.Second}, c.media.Duration)
+	if state != frameStepIdle || at != 0 {
+		t.Fatalf("landing with no queue = %s/%v, want 0/idle", at, state)
+	}
+	c.applyFrameStep(at, state)
+	if c.trimTimeline.Playhead() != 7*time.Second {
+		t.Fatalf("idle landing moved the playhead to %s", c.trimTimeline.Playhead())
+	}
+}
+
 // --- timeline widget ---
 
 // newSizedTimeline builds a timeline sized to a 200px width so the

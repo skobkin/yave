@@ -543,6 +543,7 @@ const (
 	frameStepLoading
 	frameStepEdge        // start/end of the video reached
 	frameStepUnavailable // indexing failed; stepping is off
+	frameStepIdle        // a landing fetch has no queued steps to apply
 )
 
 // frameIndex maintains a bounded sliding window of decoded-frame
@@ -657,7 +658,11 @@ func (f *frameIndex) applyError(err error) {
 // adjacent window.
 func (f *frameIndex) applyPending(duration time.Duration) (time.Duration, frameStepState) {
 	if f.pending == 0 {
-		return 0, frameStepEdge
+		// A fetch landed after the queue was retired (manual seek, reset)
+		// or nothing was ever queued: nothing to apply — and the zero
+		// position is not real movement, so it must not be reported as an
+		// edge the controller would commit.
+		return 0, frameStepIdle
 	}
 	dir := 1
 	if f.pending < 0 {
@@ -796,7 +801,16 @@ func (c *Controller) applyFrameStep(at time.Duration, state frameStepState) {
 		}
 		c.ensureFrameIndex(at)
 	case frameStepEdge:
+		// The walk may have moved partway before the video's actual edge
+		// (queued steps beyond the last frame): commit that partial
+		// movement instead of discarding it. A direct edge from step()
+		// reports the current position — SetPlayhead is then a no-op and
+		// the preview request a cheap cache hit.
 		c.setPreviewStatus("")
+		c.trimTimeline.SetPlayhead(at)
+		c.requestPreview(at)
+	case frameStepIdle:
+		// Nothing queued; keep whatever status the latest action set.
 	case frameStepUnavailable:
 		// status already set by applyError
 	}
