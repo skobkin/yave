@@ -109,15 +109,23 @@ func overlayChipRectangle() *canvas.Rectangle {
 	return canvas.NewRectangle(chip)
 }
 
+// trimEntryWidth fits a full HH:MM:SS.mmm timestamp with room to
+// spare; the natural Entry width is a couple of characters.
+const trimEntryWidth = 140
+
 // trimBoundariesRow lays the boundary fields out on a single line: In
 // and Out entries with their Set buttons, the selected duration, and
-// Reset. Each label replaces the form rows the tab used before — the
-// entries are as wide as their timestamp placeholders, so the row fits
-// the tab without wrapping.
+// Reset. The entries sit in fixed-width GridWrap cells — an HBox would
+// otherwise shrink them to their natural width and make them unusable.
 func trimBoundariesRow(c *Controller) fyne.CanvasObject {
+	// The cell height is the taller of the entry and the button, so
+	// both controls stand at the same height however the theme sizes
+	// them.
+	cellHeight := fyne.Max(c.trimIn.MinSize().Height, c.trimSetIn.MinSize().Height)
+	entryCell := fyne.NewSize(trimEntryWidth, cellHeight)
 	return container.NewHBox(
-		widget.NewLabel("In"), c.trimIn, c.trimSetIn,
-		widget.NewLabel("Out"), c.trimOut, c.trimSetOut,
+		widget.NewLabel("In"), container.NewGridWrap(entryCell, c.trimIn), c.trimSetIn,
+		widget.NewLabel("Out"), container.NewGridWrap(entryCell, c.trimOut), c.trimSetOut,
 		widget.NewLabel("Duration"), c.trimDuration,
 		c.trimReset,
 	)

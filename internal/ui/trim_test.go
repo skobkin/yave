@@ -1062,6 +1062,46 @@ func TestLazyNoPreviewWorkWithoutMedia(t *testing.T) {
 // glued to the bottom edge of the tab by a Border layout, the
 // timestamps overlaid on a translucent chip over the image, and
 // In/Out/Duration/Reset sharing one row.
+// TestTrimBoundaryEntriesUsable pins the boundary row's entry sizing:
+// a plain HBox shrinks the In/Out entries to their natural
+// couple-of-characters width, so they sit in fixed-width cells wide
+// enough for a full HH:MM:SS.mmm timestamp, and the duration label
+// shows the bare timestamp next to its "Duration" caption.
+func TestTrimBoundaryEntriesUsable(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	rowObj := trimBoundariesRow(c)
+	row, ok := rowObj.(*fyne.Container)
+	if !ok {
+		t.Fatalf("boundary row is %T, want a container", rowObj)
+	}
+	// Drive the HBox layout: without the fixed-width cells the entries
+	// would collapse to their natural width.
+	row.Resize(row.MinSize())
+	if w := c.trimIn.Size().Width; w < 100 {
+		t.Errorf("In entry width = %.0f, want at least 100 to fit HH:MM:SS.mmm", w)
+	}
+	if w := c.trimOut.Size().Width; w < 100 {
+		t.Errorf("Out entry width = %.0f, want at least 100 to fit HH:MM:SS.mmm", w)
+	}
+	if h := c.trimIn.Size().Height; h < c.trimSetIn.MinSize().Height {
+		t.Errorf("In entry height = %.0f, want at least the button height %.0f",
+			h, c.trimSetIn.MinSize().Height)
+	}
+
+	c.trimEnabled = true
+	total := 2*time.Minute + 58*time.Second + 850*time.Millisecond
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{{Start: 0, End: total}}}
+	c.updateTrimDurationLabel()
+	if got := c.trimDuration.Text; got != formatTimestamp(total) {
+		t.Errorf("duration label = %q, want the bare timestamp %q", got, formatTimestamp(total))
+	}
+}
+
 func TestTrimTabLayout(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()

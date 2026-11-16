@@ -271,7 +271,9 @@ func (c *Controller) updateTrimDurationLabel() {
 		c.trimDuration.SetText("")
 		return
 	}
-	c.trimDuration.SetText("Selected: " + formatTimestamp(c.trimSelection.Total()))
+	// The row already captions this label "Duration"; the bare
+	// timestamp avoids a redundant "Selected: " prefix.
+	c.trimDuration.SetText(formatTimestamp(c.trimSelection.Total()))
 }
 
 // withBoundary replaces the Start (start=-1 keeps it) or End of the
