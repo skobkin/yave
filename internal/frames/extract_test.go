@@ -209,6 +209,41 @@ sleep 5 >/dev/null 2>&1`)
 	}
 }
 
+// Regression: WaitDelay caps cmd.Wait, but the manual pipe drains run
+// before Wait. When the configured executable is a wrapper whose
+// detached descendant inherits stdout/stderr, cancellation killed the
+// wrapper while the descendant kept the pipe write-ends open — the
+// drains (and thus the whole call) blocked until that descendant
+// exited. The watchdog now closes the read-ends after a grace period,
+// bounding the call at roughly the grace instead of the descendant's
+// lifetime.
+func TestExtractionCancelWithPipeHoldingDescendant(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	// The wrapper detaches a child that holds the inherited pipes for
+	// four seconds, then idles itself so cancellation kills the wrapper
+	// while the descendant is still alive.
+	fake := writeFakeFFmpeg(t, dir, `sh -c 'sleep 4; echo late' &
+exec sleep 30`)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	_, err := NewExtractor(fake).Thumbnail(ctx, "/tmp/in.mkv", 0, 96)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected a cancellation error")
+	}
+	if elapsed > 3500*time.Millisecond {
+		t.Fatalf("cancellation took %s — unbounded wait on the pipe-holding descendant", elapsed)
+	}
+}
+
 func TestExtractionStdoutOverflow(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {

@@ -32,6 +32,11 @@ const (
 	// always drained continuously so the process never blocks on a full
 	// stderr pipe.
 	stderrTailSize = 4 << 10 // 4 KiB
+	// pipeCloseGrace bounds post-cancellation draining: after this long
+	// past context cancellation the pipe read-ends are force-closed so
+	// a wrapper descendant holding the write-ends cannot extend the
+	// wait. Mirrors cmd.WaitDelay.
+	pipeCloseGrace = 2 * time.Second
 )
 
 // Extractor renders preview frames from an input file through the
@@ -123,8 +128,9 @@ func (e *Extractor) extract(ctx context.Context, inputPath string, at time.Durat
 	cmd := exec.CommandContext(runCtx, executable, args...) //nolint:gosec // G204: executable comes from capability detection
 	// Cancelling the context kills the direct child; a descendant that
 	// keeps a pipe write-end open must not extend the wait forever.
-	// WaitDelay caps it and lets Wait close the pipes anyway.
-	cmd.WaitDelay = 2 * time.Second
+	// WaitDelay caps cmd.Wait itself — but the manual drains below run
+	// BEFORE Wait, so they need their own bound: pipeCloseGrace.
+	cmd.WaitDelay = pipeCloseGrace
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return Frame{}, err
@@ -147,7 +153,36 @@ func (e *Extractor) extract(ctx context.Context, inputPath string, at time.Durat
 		_, _ = io.Copy(diagnostics, stderr) //nolint:errcheck // draining diagnostics; errors surface via cmd.Wait
 	}()
 
+	// Watchdog bounding the drains after cancellation. Killing the
+	// direct child closes its pipe write-ends — but a descendant of a
+	// configured wrapper script can inherit them and keep the pipes
+	// open well past the kill, which would block the drains (and thus
+	// Wait) until that descendant exits. Give the readers a grace
+	// period mirroring WaitDelay, then close both read-ends: blocked
+	// reads fail immediately and Wait reaps what is left. One deadline
+	// covers both pipes — a timer tick is consumed once, so the drains
+	// are tracked in a helper and the expiry select stays single-shot.
+	stdoutDone := make(chan struct{})
+	drainsDone := make(chan struct{})
+	go func() {
+		<-stdoutDone
+		<-stderrDone
+		close(drainsDone)
+	}()
+	go func() {
+		<-runCtx.Done()
+		grace := time.NewTimer(pipeCloseGrace)
+		defer grace.Stop()
+		select {
+		case <-drainsDone:
+		case <-grace.C:
+		}
+		_ = stdout.Close()
+		_ = stderr.Close()
+	}()
+
 	data, overflow := readBounded(stdout, maxImageBytes)
+	close(stdoutDone)
 	if overflow {
 		// Stop buffering: kill the subprocess so the pipes close, then
 		// keep draining until EOF (WaitDelay also caps a descendant
