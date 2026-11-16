@@ -649,8 +649,18 @@ func (f *frameIndex) applyWindow(from, to time.Duration, times []time.Duration, 
 	}
 	if len(f.times) > f.capacity {
 		drop := len(f.times) - f.capacity
-		f.times = f.times[drop:]
-		f.windowStart = f.times[0]
+		if f.pending < 0 {
+			// Backward navigation: the walk needs the low-end frames the
+			// fetch just added — evict the high end instead. Dropping the
+			// front would delete exactly what the merge added, leaving
+			// the walk target uncovered: it re-queues, the same window is
+			// fetched and evicted again — an unbounded probe loop.
+			f.times = f.times[:len(f.times)-drop]
+			f.windowEnd = f.times[len(f.times)-1]
+		} else {
+			f.times = f.times[drop:]
+			f.windowStart = f.times[0]
+		}
 	}
 	return f.applyPending(duration)
 }

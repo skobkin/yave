@@ -873,6 +873,46 @@ func TestResetRetiresQueuedFrameWalk(t *testing.T) {
 	}
 }
 
+// Regression: at capacity, merging a backward window always dropped the
+// oldest timestamps — exactly the low-end frames the pending backward
+// walk had just fetched. The walk target then sat outside the window,
+// re-queued, the same window was fetched and evicted again: an unbounded
+// probe loop with no progress. Eviction now moves away from the pending
+// walk target.
+func TestFrameIndexEvictsAwayFromBackwardWalk(t *testing.T) {
+	index := newFrameIndex()
+	index.capacity = 4
+	duration := 10 * time.Minute
+
+	// A full window near the middle.
+	index.applyWindow(20*time.Second, 24*time.Second,
+		[]time.Duration{20 * time.Second, 21 * time.Second, 22 * time.Second, 23 * time.Second}, duration)
+
+	// The user steps backward past the window edge; the adjacent (lower)
+	// window lands and merges past capacity.
+	index.queue(-1, 20*time.Second)
+	at, state := index.applyWindow(18*time.Second, 20*time.Second,
+		[]time.Duration{17 * time.Second, 18 * time.Second, 19 * time.Second}, duration)
+	if state != frameStepMoved || at != 19*time.Second {
+		t.Fatalf("backward walk = %s/%v, want 19s/moved", at, state)
+	}
+	if index.windowStart != 18*time.Second {
+		t.Fatalf("windowStart = %s, want the just-fetched 18s (low end kept)", index.windowStart)
+	}
+
+	// Forward walks keep the existing low-end eviction.
+	forward := newFrameIndex()
+	forward.capacity = 4
+	forward.applyWindow(20*time.Second, 24*time.Second,
+		[]time.Duration{20 * time.Second, 21 * time.Second, 22 * time.Second, 23 * time.Second}, duration)
+	forward.queue(1, 23*time.Second)
+	forward.applyWindow(23*time.Second, 25*time.Second,
+		[]time.Duration{24 * time.Second, 25 * time.Second}, duration)
+	if forward.windowStart != 22*time.Second {
+		t.Fatalf("forward eviction windowStart = %s, want 22s (low end dropped)", forward.windowStart)
+	}
+}
+
 func TestResetTrimForNewInputClearsState(t *testing.T) {
 	c := testTrimController(t)
 	c.trimEnable.SetChecked(true)
