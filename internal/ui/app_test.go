@@ -384,10 +384,10 @@ func TestSVTPresetSwitchesControlsAndPreservesCategoricalValue(t *testing.T) {
 	c := testController()
 	c.createWidgets()
 	c.videoEncoder.SetSelected("libx264")
-	c.preset.SetText("slow")
+	c.presetSelect.SetSelected("slow")
 
 	c.videoEncoder.SetSelected("libsvtav1")
-	if c.preset.Visible() || !c.presetSlider.Visible() {
+	if c.presetSelect.Visible() || !c.presetSlider.Visible() {
 		t.Fatal("SVT-AV1 should show only the integer preset slider")
 	}
 	c.presetSlider.SetValue(13)
@@ -396,9 +396,8 @@ func TestSVTPresetSwitchesControlsAndPreservesCategoricalValue(t *testing.T) {
 	}
 
 	c.videoEncoder.SetSelected("libx265")
-	// libx265 curates its preset names, so the value moves into the
-	// dropdown — carried over from the x264 text field ("slow" is a
-	// shared x264/x265 name), not silently reset.
+	// Back on a categorical encoder: the dropdown selection carries
+	// over — "slow" is a shared x264/x265 ladder name.
 	if !c.presetSelect.Visible() || c.preset.Visible() || c.presetSlider.Visible() {
 		t.Fatal("x265 should show only the curated preset dropdown")
 	}
@@ -439,10 +438,56 @@ func TestVAAPIPresetFieldHidden(t *testing.T) {
 	}
 
 	// Switching to a categorical-preset encoder (libx264) must
-	// re-show the field.
+	// re-show a preset control: libx264 curates its list, so the
+	// dropdown appears.
 	c.videoEncoder.SetSelected("libx264")
-	if !c.preset.Visible() || c.presetSlider.Visible() {
-		t.Errorf("libx264 must show the categorical preset entry after VAAPI")
+	if !c.presetSelect.Visible() || c.preset.Visible() || c.presetSlider.Visible() {
+		t.Errorf("libx264 must show the curated preset dropdown after VAAPI")
+	}
+	if !c.tuneSelect.Visible() {
+		t.Errorf("libx264 must show the curated tune dropdown after VAAPI")
+	}
+}
+
+// TestLibx264CuratedPresetAndTuneDropdowns pins the libx264 dropdown
+// options and the carryover between the two curated encoders: the
+// shared preset names survive an x265 -> x264 encoder switch because
+// populateCuratedOptions keeps the current selection when the new list
+// knows it.
+func TestLibx264CuratedPresetAndTuneDropdowns(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("libx264")
+
+	wantPresets := []string{"(default)", "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo"}
+	if !slices.Equal(c.presetSelect.Options, wantPresets) {
+		t.Fatalf("preset options = %v, want %v", c.presetSelect.Options, wantPresets)
+	}
+	wantTunes := []string{"(default)", "film", "animation", "grain", "stillimage", "psnr", "ssim", "fastdecode", "zerolatency"}
+	if !slices.Equal(c.tuneSelect.Options, wantTunes) {
+		t.Fatalf("tune options = %v, want %v", c.tuneSelect.Options, wantTunes)
+	}
+
+	c.presetSelect.SetSelected("veryslow")
+	c.tuneSelect.SetSelected("film")
+	c.videoEncoder.SetSelected("libx265")
+	if got := c.profileFromWidgets().Video.Preset; got != "veryslow" {
+		t.Fatalf("preset after x264->x265 switch = %q, want veryslow (shared ladder name)", got)
+	}
+	// "film" is x264-only: the selection must not silently persist as a
+	// value libx265 would reject — it stays visible via the union, and
+	// the saved profile keeps it (the user set it deliberately).
+	if got := c.presetSelect.Selected; got != "veryslow" {
+		t.Fatalf("preset selection after switch = %q, want veryslow", got)
+	}
+	if got := c.tuneSelect.Selected; got != "film" {
+		t.Fatalf("tune selection after switch = %q, want film (kept visible by the union)", got)
+	}
+	if got := c.profileFromWidgets().Video.Tune; got != "film" {
+		t.Fatalf("tune after switch = %q, want film", got)
 	}
 }
 

@@ -135,6 +135,15 @@ func (e *softwareEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 	return profileIssues(e.supportsProfile, e.profiles, e.name, v.Profile), nil
 }
 
+// x264Presets is the --preset ladder shared by libx264 and libx265,
+// fastest first. Both encoders accept the same names (verified by
+// one-frame test encodes on the reference build).
+var x264Presets = []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo"}
+
+// x264Tunes is the --tune list ffmpeg passes straight to x264's option
+// parser (verified by one-frame test encodes on the reference build).
+var x264Tunes = []string{"film", "animation", "grain", "stillimage", "psnr", "ssim", "fastdecode", "zerolatency"}
+
 // softwareVideoEncoders returns the curated software video encoder
 // set. Registration order does not matter; the registry sorts by
 // priority then name.
@@ -152,6 +161,8 @@ func softwareVideoEncoders() []Encoder {
 			presetFlag: "-preset", presetKind: "categorical", presetName: "preset",
 			supportsTune: true, supportsProfile: true,
 			profiles: []string{"baseline", "main", "high"},
+			presets:  x264Presets,
+			tunes:    x264Tunes,
 			// libx264 supports CRF only — the prior buildVideoArgs switch
 			// did not emit -b:v for libx264, so any other mode must be
 			// rejected by validation.
@@ -165,13 +176,12 @@ func softwareVideoEncoders() []Encoder {
 			presetFlag: "-preset", presetKind: "categorical", presetName: "preset",
 			supportsTune: true, supportsProfile: true,
 			profiles: []string{"main", "main10", "main12"},
-			// Presets are the x265 --preset names (verified by one-frame
-			// test encodes on the reference build). Tunes are the names
-			// ffmpeg's libx265 wrapper maps itself — unlike the x265 CLI's
-			// --tune list, the wrapper handles every name on any libx265
-			// build, so "animation" is safe to curate even though older
-			// x265 CLI builds do not list it.
-			presets: []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo"},
+			// Presets are the shared x264/x265 ladder; tunes are the
+			// names ffmpeg's libx265 wrapper maps itself — unlike the
+			// x265 CLI's --tune list, the wrapper handles every name on
+			// any libx265 build, so "animation" is safe to curate even
+			// though older x265 CLI builds do not list it.
+			presets: x264Presets,
 			tunes:   []string{"psnr", "ssim", "grain", "fastdecode", "animation", "zerolatency"},
 			// libx265 supports CRF only — matches prior behaviour.
 			rateControlModes:   []RateControl{RCCRF},

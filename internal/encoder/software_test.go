@@ -114,15 +114,15 @@ func TestSoftwareVideoEncoderMetadata(t *testing.T) {
 // list keeps the free-text entry (or the integer slider for
 // integer-preset encoders, which must never curate).
 func TestCuratedPresetsAndTunes(t *testing.T) {
-	x265Presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo"}
+	x264Tunes := []string{"film", "animation", "grain", "stillimage", "psnr", "ssim", "fastdecode", "zerolatency"}
 	x265Tunes := []string{"psnr", "ssim", "grain", "fastdecode", "animation", "zerolatency"}
 	tests := []struct {
 		name    string
 		presets []string
 		tunes   []string
 	}{
-		{name: "libx264"},
-		{name: "libx265", presets: x265Presets, tunes: x265Tunes},
+		{name: "libx264", presets: x264Presets, tunes: x264Tunes},
+		{name: "libx265", presets: x264Presets, tunes: x265Tunes},
 		{name: "libsvtav1"},
 		{name: "libvpx-vp9"},
 		{name: "libaom-av1"},
