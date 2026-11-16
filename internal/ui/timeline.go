@@ -88,6 +88,16 @@ func newTimeline() *timeline {
 	return t
 }
 
+// Compile-time interface checks: the controller's trimControls loops
+// disable widgets through fyne.Disableable assertions, and the desktop
+// driver routes ctrl chords through fyne.Shortcutable — the timeline
+// used to miss both (Enabled() instead of Disabled(), no TypedShortcut)
+// and stayed interactive with dead Ctrl+[ / Ctrl+] keys.
+var (
+	_ fyne.Disableable  = (*timeline)(nil)
+	_ fyne.Shortcutable = (*timeline)(nil)
+)
+
 // SetDuration replaces the media duration and clamps the existing
 // positions into the new range. Unlike SetRange it does not fire
 // onRange: a media change (new input, reset) is controller-driven, and
@@ -168,8 +178,11 @@ func (t *timeline) Disable() {
 	t.Refresh()
 }
 
-// Enabled reports whether the timeline accepts input.
-func (t *timeline) Enabled() bool { return t.enabled }
+// Disabled reports whether the timeline ignores input. The method name
+// is dictated by fyne.Disableable: with Enabled() here instead, the
+// controller's type assertions failed and the timeline stayed
+// interactive while trimming was unchecked.
+func (t *timeline) Disabled() bool { return !t.enabled }
 
 // --- fyne.Focusable / desktop.Keyable ---
 
@@ -215,6 +228,28 @@ func (t *timeline) KeyUp(ev *fyne.KeyEvent) {
 // TypedRune is required by fyne.Focusable; the timeline consumes no
 // text input.
 func (t *timeline) TypedRune(rune) {}
+
+// TypedShortcut receives the desktop driver's modifier chords. The glfw
+// driver turns any ctrl+key press into a desktop.CustomShortcut and
+// delivers it to a Shortcutable focused widget — returning before
+// TypedKey is ever called — so the Ctrl+[ / Ctrl+] boundary shortcuts
+// must be handled here; the TypedKey branches below only serve direct
+// callers (tests, other backends).
+func (t *timeline) TypedShortcut(s fyne.Shortcut) {
+	if !t.enabled || t.duration <= 0 {
+		return
+	}
+	custom, ok := s.(*desktop.CustomShortcut)
+	if !ok || custom.Modifier&fyne.KeyModifierControl == 0 {
+		return
+	}
+	switch custom.KeyName {
+	case fyne.KeyLeftBracket:
+		t.setInToPlayhead()
+	case fyne.KeyRightBracket:
+		t.setOutToPlayhead()
+	}
+}
 
 // TypedKey handles the navigation keys, including auto-repeat.
 func (t *timeline) TypedKey(ev *fyne.KeyEvent) {

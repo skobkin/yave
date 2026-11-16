@@ -514,7 +514,7 @@ func TestTimelineDisabledIgnoresKeys(t *testing.T) {
 	tl := newSizedTimeline(t)
 	tl.SetDuration(10 * time.Second)
 	tl.Disable()
-	if tl.Enabled() {
+	if !tl.Disabled() {
 		t.Fatal("timeline must report disabled")
 	}
 	tl.stepFrame = func(at time.Duration, dir int) (time.Duration, bool) {
@@ -528,6 +528,68 @@ func TestTimelineDisabledIgnoresKeys(t *testing.T) {
 	tl.TypedKey(&fyne.KeyEvent{Name: fyne.KeyRight})
 	if tl.Playhead() != time.Second {
 		t.Fatalf("enabled timeline did not step: %s", tl.Playhead())
+	}
+}
+
+// The desktop driver delivers ctrl chords as desktop.CustomShortcut via
+// fyne.Shortcutable, returning before TypedKey ever runs, so the Ctrl+[ /
+// Ctrl+] boundary shortcuts must work through this path. Regression: only
+// the TypedKey branch existed and the shortcuts were dead on the desktop
+// backend.
+func TestTimelineCtrlBracketsViaTypedShortcut(t *testing.T) {
+	tl := newSizedTimeline(t)
+	tl.SetDuration(10 * time.Second)
+	tl.SetPlayhead(2 * time.Second)
+	tl.SetRange(0, tl.Duration())
+	var ranges []struct{ in, out time.Duration }
+	tl.onRange = func(in, out time.Duration) {
+		ranges = append(ranges, struct{ in, out time.Duration }{in, out})
+	}
+
+	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyLeftBracket, Modifier: fyne.KeyModifierControl})
+	if tl.in != 2*time.Second {
+		t.Fatalf("ctrl+[ via shortcut set in = %s, want 2s", tl.in)
+	}
+	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyRightBracket, Modifier: fyne.KeyModifierControl})
+	if tl.out != 2*time.Second {
+		t.Fatalf("ctrl+] via shortcut set out = %s, want 2s", tl.out)
+	}
+	if len(ranges) != 2 {
+		t.Fatalf("onRange fired %d times, want 2", len(ranges))
+	}
+
+	// Unrelated shortcuts must not move the boundaries.
+	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyC, Modifier: fyne.KeyModifierControl})
+	if tl.in != 2*time.Second || tl.out != 2*time.Second || len(ranges) != 2 {
+		t.Fatalf("unrelated shortcut changed boundaries: in=%s out=%s ranges=%d", tl.in, tl.out, len(ranges))
+	}
+
+	// Disabled timelines ignore shortcuts, like they ignore TypedKey.
+	tl.Disable()
+	tl.SetPlayhead(3 * time.Second)
+	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyLeftBracket, Modifier: fyne.KeyModifierControl})
+	if tl.in != 2*time.Second {
+		t.Fatalf("disabled timeline accepted shortcut: in=%s", tl.in)
+	}
+}
+
+// The controller's trimControls loops disable widgets through
+// fyne.Disableable assertions. Regression: the timeline implemented
+// Enabled() instead of the interface's Disabled(), so the assertions
+// failed and the timeline stayed interactive while trimming was off.
+func TestTimelineSatisfiesDisableable(t *testing.T) {
+	tl := newSizedTimeline(t)
+	var d fyne.Disableable = tl
+	if d.Disabled() {
+		t.Fatal("fresh timeline must report enabled")
+	}
+	d.Disable()
+	if !d.Disabled() || !tl.Disabled() {
+		t.Fatal("Disable must disable")
+	}
+	d.Enable()
+	if d.Disabled() || tl.Disabled() {
+		t.Fatal("Enable must enable")
 	}
 }
 
