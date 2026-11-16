@@ -203,6 +203,10 @@ func softwareVideoEncoders() []Encoder {
 			name: "libvpx-vp9", label: "VP9 (libvpx-vp9)", codecFamily: "vp9",
 			priority: 70, crfRange: IntegerRange{0, 63},
 			presetFlag: "-deadline", presetKind: "categorical", presetName: "deadline",
+			// The -deadline quality/speed modes, slowest first; ffmpeg's
+			// default is "good" (verified by one-frame test encodes on
+			// the reference build).
+			presets: []string{"best", "good", "realtime"},
 			// libvpx-vp9 has no -profile:v flag in the prior code path;
 			// SupportsProfile reports what BuildVideoArgs actually emits.
 			supportsProfile:    false,

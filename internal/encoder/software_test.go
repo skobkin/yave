@@ -124,7 +124,7 @@ func TestCuratedPresetsAndTunes(t *testing.T) {
 		{name: "libx264", presets: x264Presets, tunes: x264Tunes},
 		{name: "libx265", presets: x264Presets, tunes: x265Tunes},
 		{name: "libsvtav1"},
-		{name: "libvpx-vp9"},
+		{name: "libvpx-vp9", presets: []string{"best", "good", "realtime"}},
 		{name: "libaom-av1"},
 	}
 	for _, tt := range tests {

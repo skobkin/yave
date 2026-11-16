@@ -491,6 +491,42 @@ func TestLibx264CuratedPresetAndTuneDropdowns(t *testing.T) {
 	}
 }
 
+// TestLibvpxVp9CuratedDeadlineDropdown pins the VP9 deadline dropdown:
+// the row is labeled Preset but drives -deadline, and "(default)" must
+// leave the flag out entirely (the builder omits it for an empty
+// value).
+func TestLibvpxVp9CuratedDeadlineDropdown(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("libvpx-vp9")
+
+	want := []string{"(default)", "best", "good", "realtime"}
+	if !slices.Equal(c.presetSelect.Options, want) {
+		t.Fatalf("deadline options = %v, want %v", c.presetSelect.Options, want)
+	}
+
+	c.presetSelect.SetSelected("realtime")
+	if got := c.profileFromWidgets().Video.Preset; got != "realtime" {
+		t.Fatalf("deadline selection = %q, want realtime", got)
+	}
+	c.presetSelect.SetSelected("(default)")
+	if got := c.profileFromWidgets().Video.Preset; got != "" {
+		t.Fatalf("(default) deadline = %q, want empty", got)
+	}
+
+	// An out-of-list saved value stays visible and round-trips.
+	profile := c.config.Profiles[0]
+	profile.Video.Encoder = "libvpx-vp9"
+	profile.Video.Preset = "good"
+	c.loadProfile(profile)
+	if c.presetSelect.Selected != "good" {
+		t.Fatalf("loaded deadline selection = %q, want good", c.presetSelect.Selected)
+	}
+}
+
 // TestLibx265CuratedPresetAndTuneDropdowns pins the libx265 dropdown
 // behavior: curated options prefixed by "(default)", "(default)"
 // emitting no flag value, round-trips through loadProfile, and
