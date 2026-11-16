@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
@@ -58,6 +59,30 @@ type Controller struct {
 	outputPreview *widget.Label
 	videoEncoder  *widget.Select
 	rateControl   *widget.Select
+	// Trim state belongs to the current input/conversion job — it is
+	// reset on every input change and never persisted into profiles.
+	// See trim.go for the lifecycle rules.
+	trimEnabled     bool
+	trimSelection   model.TrimSelection
+	trimInValid     bool
+	trimOutValid    bool
+	inputGeneration uint64 // guards late async results per input
+	previews        trimPreviews
+
+	trimEnable       *widget.Check
+	trimTimeline     *timeline
+	trimIn           *widget.Entry
+	trimOut          *widget.Entry
+	trimSetIn        *widget.Button
+	trimSetOut       *widget.Button
+	trimReset        *widget.Button
+	trimDuration     *widget.Label
+	trimMessage      *widget.Label // trim validation: entry errors + copy warning
+	previewStatus    *widget.Label // extraction/indexing status, separate from validation
+	previewTimeLabel *widget.Label // timestamp of the displayed preview frame
+	hoverTimeLabel   *widget.Label // hovered timestamp, shown while hovering
+	previewImage     *canvas.Image
+	trimControls     []fyne.CanvasObject // disabled while trimming is off
 	// rateControlHint explains the selected rate-control mode (Auto
 	// and VBR semantics are not obvious). It is a plain label so mode
 	// switches update it by SetText without rebuilding the form.
@@ -158,6 +183,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 		config:     cfg,
 		inputPath:  initialInput,
 	}
+	c.previews = newTrimPreviews()
 	c.createWidgets()
 	c.window.SetContent(c.buildLayout())
 	c.window.Resize(fyne.NewSize(1050, 760))
@@ -283,6 +309,7 @@ func (c *Controller) quitApplication() {
 	}
 	c.runControl = nil
 	c.stopCancelTimer()
+	c.cancelTrimWork()
 	if c.activeRunLog != nil {
 		_ = c.activeRunLog.Close()
 	}

@@ -36,18 +36,35 @@ func (c *Controller) setInput(path string) {
 	if path == "" {
 		return
 	}
+	c.inputGeneration++
+	gen := c.inputGeneration
+	// Reset every per-input piece of state synchronously: until the new
+	// file inspects, no stale metadata, trim selection, thumbnail, or
+	// preview may feed refresh, validation, or conversion.
+	c.media = model.MediaInfo{}
 	c.inputPath = path
 	c.inputEntry.SetText(path)
 	c.mediaInfo.SetText("Inspecting input...")
+	c.cancelTrimWork()
+	c.resetTrimForNewInput()
+	c.refresh()
 	go func() {
 		info, err := ffprobe.Inspect(context.Background(), c.config.FFmpeg.FFprobePath, path)
-		fyne.Do(func() {
+		c.dispatchUI(func() {
+			// A late result from an older input must not overwrite the
+			// newer input's state.
+			if c.inputGeneration != gen {
+				return
+			}
 			if err != nil {
 				c.media = model.MediaInfo{}
 				c.mediaInfo.SetText("Inspection failed: " + err.Error())
 			} else {
 				c.media = info
 				c.mediaInfo.SetText(formatMediaInfo(info))
+				// Thumbnails and previews stay lazy: they start when
+				// trimming is enabled (see setTrimEnabled).
+				c.trimTimeline.SetDuration(info.Duration)
 			}
 			c.refresh()
 		})

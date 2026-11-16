@@ -20,6 +20,21 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		widget.NewCard("Media information", "", c.mediaInfo),
 	)
 
+	trimTab := container.NewVBox(
+		widget.NewCard("Trim", "", container.NewVBox(c.trimEnable, c.trimTimeline, c.trimMessage)),
+		widget.NewCard("Frame preview", "", container.NewVBox(
+			container.NewGridWrap(fyne.NewSize(320, 180), c.previewImage),
+			container.NewHBox(c.previewTimeLabel, c.hoverTimeLabel),
+			c.previewStatus,
+		)),
+		widget.NewCard("Boundaries", "", widget.NewForm(
+			widget.NewFormItem("In", container.NewBorder(nil, nil, nil, c.trimSetIn, c.trimIn)),
+			widget.NewFormItem("Out", container.NewBorder(nil, nil, nil, c.trimSetOut, c.trimOut)),
+			widget.NewFormItem("Selected duration", c.trimDuration),
+			widget.NewFormItem("", c.trimReset),
+		)),
+	)
+
 	outputTab := container.NewVBox(
 		widget.NewForm(
 			widget.NewFormItem("Container", c.container),
@@ -43,6 +58,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	c.runTab = container.NewTabItem("Run", runTab)
 	c.tabs = container.NewAppTabs(
 		container.NewTabItem("Input", inputTab),
+		container.NewTabItem("Trim", trimTab),
 		container.NewTabItem("Output", outputTab),
 		container.NewTabItem("Video", videoTab),
 		container.NewTabItem("Audio & Subtitles", audioTab),

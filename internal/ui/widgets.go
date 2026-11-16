@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
@@ -96,6 +98,56 @@ func (c *Controller) createWidgets() {
 	c.command.Disable()
 	c.command.Wrapping = fyne.TextWrapWord
 	c.command.SetMinRowsVisible(3)
+
+	// Trim tab: everything except the enable check lives in
+	// trimControls and stays disabled until trimming is turned on.
+	c.trimEnable = widget.NewCheck("Enable trimming", c.setTrimEnabled)
+	c.trimTimeline = newTimeline()
+	c.trimTimeline.stepFrame = func(at time.Duration, dir int) (time.Duration, bool) {
+		next, state := c.previews.index.step(at, dir, c.media.Duration)
+		c.applyFrameStep(next, state)
+		return next, state == frameStepMoved
+	}
+	c.trimTimeline.onPlayhead = c.onTimelinePlayhead
+	c.trimTimeline.onRange = c.onTimelineRange
+	c.trimTimeline.onHover = c.onTimelineHover
+	timestampValidator := func(s string) error {
+		if s == "" {
+			return nil
+		}
+		_, err := parseTimestamp(s)
+		return err
+	}
+	c.trimIn = entry(func(text string) { c.setTrimBoundary("in", text) })
+	c.trimIn.Validator = timestampValidator
+	c.trimIn.SetPlaceHolder("HH:MM:SS.mmm")
+	c.trimOut = entry(func(text string) { c.setTrimBoundary("out", text) })
+	c.trimOut.Validator = timestampValidator
+	c.trimOut.SetPlaceHolder("HH:MM:SS.mmm")
+	c.trimSetIn = widget.NewButton("Set In", c.setInFromPlayhead)
+	c.trimSetOut = widget.NewButton("Set Out", c.setOutFromPlayhead)
+	c.trimReset = widget.NewButton("Reset", func() {
+		c.resetTrimSelection()
+		c.refresh()
+	})
+	c.trimDuration = widget.NewLabel("")
+	c.trimMessage = widget.NewLabel("")
+	c.trimMessage.Wrapping = fyne.TextWrapWord
+	c.previewStatus = widget.NewLabel("")
+	c.previewStatus.Wrapping = fyne.TextWrapWord
+	c.previewTimeLabel = widget.NewLabel("")
+	c.hoverTimeLabel = widget.NewLabel("")
+	c.previewImage = canvas.NewImageFromImage(nil)
+	c.previewImage.FillMode = canvas.ImageFillContain
+	c.trimControls = []fyne.CanvasObject{
+		c.trimTimeline, c.trimIn, c.trimOut, c.trimSetIn, c.trimSetOut, c.trimReset,
+	}
+	for _, control := range c.trimControls {
+		if d, ok := control.(fyne.Disableable); ok {
+			d.Disable()
+		}
+	}
+
 	c.progress = widget.NewProgressBar()
 	c.progressInfo = widget.NewLabel("")
 	c.progressInfo.Truncation = fyne.TextTruncateEllipsis

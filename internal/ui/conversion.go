@@ -65,6 +65,7 @@ func (c *Controller) refresh() {
 				OutputPath: c.outputPath,
 				Profile:    p,
 				Media:      c.media,
+				Trim:       c.trimRequest(),
 			})
 			// Explain a blank preview instead of silently keeping the
 			// stale text: automatic device selection makes unreachable
@@ -76,6 +77,20 @@ func (c *Controller) refresh() {
 			}
 		}
 	}
+	// Trim availability follows the input: no file or an unknown
+	// duration leaves trimming off until inspection completes.
+	if c.inputPath != "" && c.media.Duration > 0 {
+		c.trimEnable.Enable()
+	} else {
+		c.trimEnable.Disable()
+		if c.trimEnabled {
+			c.setTrimEnabled(false)
+		}
+	}
+	// The Trim tab's validation message (boundary errors + stream-copy
+	// warning) recomputes here so it stays synchronized with every
+	// state change that flows through refresh().
+	c.updateTrimMessages(p.Video.Encoder)
 	if c.runControl == nil {
 		c.start.Enable()
 	} else {
@@ -87,6 +102,13 @@ func (c *Controller) startConversion() {
 	p := c.profileFromWidgets()
 	resolved, resolveErr := c.resolveOutput(p, time.Now())
 	result := validation.Validate(p, &c.media, c.caps, c.inputPath, resolved)
+	if c.trimEnabled {
+		result.Merge(validation.ValidateTrim(c.trimSelection, &c.media, p.Video.Encoder))
+		// Invalid timecode entries keep the last valid selection for
+		// display, but Start must never silently use those stale
+		// boundaries.
+		result.Errors = append(result.Errors, c.trimEntryIssues()...)
+	}
 	messages := issueMessages(result)
 	if resolveErr != nil {
 		messages = append([]string{"Error: " + resolveErr.Error()}, messages...)
@@ -104,6 +126,7 @@ func (c *Controller) startConversion() {
 			FFmpegPath: c.config.FFmpeg.FFmpegPath,
 			InputPath:  c.inputPath, OutputPath: resolved,
 			Profile: cp, Media: c.media, Overwrite: overwrite,
+			Trim: c.trimRequest(),
 		})
 		if buildErr != nil {
 			c.showRunError("Command generation failed", buildErr.Error())
@@ -165,7 +188,14 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 	stopLogUpdates := c.startRunLogUpdates(runLog, control)
 
 	go func() {
-		err := (transcode.Runner{}).Run(control, plan, c.media.Duration, transcode.Callbacks{
+		// With an active trim, ffmpeg's input-side -ss makes
+		// out_time segment-relative, so progress must be measured
+		// against the selected duration, not the whole input.
+		duration := c.media.Duration
+		if seg, ok := c.trimRequest().First(); ok {
+			duration = seg.End - seg.Start
+		}
+		err := (transcode.Runner{}).Run(control, plan, duration, transcode.Callbacks{
 			OnLog: func(line string) {
 				runLog.AppendLine(line)
 			},
