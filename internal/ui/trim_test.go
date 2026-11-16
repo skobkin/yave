@@ -685,6 +685,25 @@ func TestSetTrimEnabledGatesOnKnownDuration(t *testing.T) {
 	}
 }
 
+// Reset moves the playhead to 0, and SetPlayhead fires no callback — the
+// Frame preview must still follow the reset instead of showing whatever
+// was on screen before (cache-hit path here; a miss takes the usual
+// debounced explicit request).
+func TestResetRefreshesCommittedPreview(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	stale := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	c.previews.cache.Put(5*time.Minute, stale)
+	c.displayPreview(stale, 5*time.Minute)
+	c.previews.cache.Put(0, image.NewRGBA(image.Rect(0, 0, 3, 3)))
+
+	c.resetTrimSelection()
+
+	if c.previewTimeLabel.Text != formatTimestamp(0) {
+		t.Fatalf("preview label = %q, want the reset position", c.previewTimeLabel.Text)
+	}
+}
+
 func TestResetTrimForNewInputClearsState(t *testing.T) {
 	c := testTrimController(t)
 	c.trimEnable.SetChecked(true)

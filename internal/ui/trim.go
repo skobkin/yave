@@ -92,6 +92,11 @@ func (c *Controller) resetTrimSelection() {
 	c.trimIn.SetText(formatTimestamp(0))
 	c.trimOut.SetText(formatTimestamp(c.media.Duration))
 	c.updateTrimDurationLabel()
+	// SetPlayhead deliberately fires no callback, so request the preview
+	// at the reset position explicitly: Reset is a committed move and the
+	// Frame preview must follow it. The monotonic request sequence also
+	// retires any in-flight hover or explicit result from before.
+	c.requestPreview(c.trimTimeline.Playhead())
 }
 
 // resetTrimForNewInput clears every per-input trim state. Called
