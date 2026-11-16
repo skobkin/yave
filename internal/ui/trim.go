@@ -102,7 +102,10 @@ func (c *Controller) resetTrimSelection() {
 	// SetPlayhead deliberately fires no callback, so request the preview
 	// at the reset position explicitly: Reset is a committed move and the
 	// Frame preview must follow it. The monotonic request sequence also
-	// retires any in-flight hover or explicit result from before.
+	// retires any in-flight hover or explicit result from before. As a
+	// committed move it also retires any queued frame walk, so a landing
+	// fetch cannot yank the playhead off 0.
+	c.previews.index.pending = 0
 	c.requestPreview(c.trimTimeline.Playhead())
 }
 
@@ -309,6 +312,15 @@ func boundaryOf(sel model.TrimSelection, index int) time.Duration {
 // preview does not depend on the playhead, so refresh() is deliberately
 // not called here — dragging must not rebuild the preview per pixel.
 func (c *Controller) onTimelinePlayhead(at time.Duration) {
+	// A manual move supersedes any queued frame walk: when the in-flight
+	// window lands it applies nothing (frameStepIdle), so the playhead
+	// stays where the user put it instead of jumping back to the stale
+	// walk position.
+	if c.previews.index.pending != 0 {
+		c.previews.index.pending = 0
+		c.previews.index.pendingAt = at
+		c.setPreviewStatus("")
+	}
 	c.requestPreview(at)
 }
 

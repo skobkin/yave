@@ -826,6 +826,53 @@ func TestOnTimelineRangeKeepsFocusedEntryText(t *testing.T) {
 	}
 }
 
+// Regression: a queued frame walk survived a manual seek — when the
+// window fetch landed, applyPending walked from the stale position and
+// moved the playhead back, overriding the user's newer click.
+func TestManualSeekRetiresQueuedFrameWalk(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+
+	// A frame step at 5s queues work (with a fetch in flight in
+	// production).
+	c.previews.index.queue(1, 5*time.Second)
+
+	// The user clicks 30s: movePlayhead commits, then the callback runs.
+	c.trimTimeline.SetPlayhead(30 * time.Second)
+	c.onTimelinePlayhead(30 * time.Second)
+	if c.previews.index.pending != 0 {
+		t.Fatalf("manual seek must retire the queued walk, pending = %d", c.previews.index.pending)
+	}
+
+	// The window lands: nothing is applied, the playhead stays.
+	at, state := c.previews.index.applyWindow(4*time.Second, 6*time.Second,
+		[]time.Duration{5 * time.Second, 5*time.Second + 33*time.Millisecond}, c.media.Duration)
+	if state != frameStepIdle {
+		t.Fatalf("landing state = %v, want idle", state)
+	}
+	c.applyFrameStep(at, state)
+	if c.trimTimeline.Playhead() != 30*time.Second {
+		t.Fatalf("playhead yanked to %s, want the manually chosen 30s", c.trimTimeline.Playhead())
+	}
+}
+
+// Reset retires the queued walk the same way: it is a committed move to 0.
+func TestResetRetiresQueuedFrameWalk(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.trimTimeline.SetPlayhead(3 * time.Minute)
+	c.previews.index.queue(1, 2*time.Minute)
+
+	c.resetTrimSelection()
+
+	if c.previews.index.pending != 0 {
+		t.Fatalf("reset must retire the queued walk, pending = %d", c.previews.index.pending)
+	}
+	if c.trimTimeline.Playhead() != 0 {
+		t.Fatalf("playhead = %s, want 0 after reset", c.trimTimeline.Playhead())
+	}
+}
+
 func TestResetTrimForNewInputClearsState(t *testing.T) {
 	c := testTrimController(t)
 	c.trimEnable.SetChecked(true)
