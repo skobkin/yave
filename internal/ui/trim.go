@@ -676,11 +676,16 @@ func maxDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-// ensureFrameIndex starts (single-flight) the window fetch needed to
-// step from `at`.
+// ensureFrameIndex starts (single-flight) the frame-window fetch around
+// `at`. Callers invoke it only after a step found no neighbor in the
+// cached frames — the first step on a fresh input (whose empty initial
+// window "covers" position 0) and steps past either cached edge. That
+// is why coverage of `at` itself is not part of the guard: requiring it
+// would block exactly those fetches and leave frame stepping stuck in
+// the loading state forever.
 func (c *Controller) ensureFrameIndex(at time.Duration) {
 	index := c.previews.index
-	if index.failed || index.inflight || index.covers(at) || c.inputPath == "" {
+	if index.failed || index.inflight || c.inputPath == "" {
 		return
 	}
 	from := at - frameWindowLen
@@ -698,7 +703,7 @@ func (c *Controller) ensureFrameIndex(at time.Duration) {
 	path := c.inputPath
 	probe := c.config.FFmpeg.FFprobePath
 	go func() {
-		times, _, err := ffprobe.FrameTimes(ctx, probe, path, from, to)
+		times, _, err := c.previews.indexFetch(ctx, probe, path, from, to)
 		c.dispatchUI(func() {
 			if c.inputGeneration != gen {
 				return
@@ -788,14 +793,19 @@ type trimPreviews struct {
 	stripCancel   context.CancelFunc
 	indexCancel   context.CancelFunc
 
+	// indexFetch reads one frame-timestamp window; seam over
+	// ffprobe.FrameTimes so tests can intercept the fetch.
+	indexFetch func(ctx context.Context, executable, inputPath string, from, to time.Duration) ([]time.Duration, time.Duration, error)
+
 	seq          uint64 // newest request wins the display
 	stripRunning bool
 }
 
 func newTrimPreviews() trimPreviews {
 	return trimPreviews{
-		cache: frames.NewCache(previewCacheBytes, previewMaxEntryBytes),
-		index: newFrameIndex(),
+		cache:      frames.NewCache(previewCacheBytes, previewMaxEntryBytes),
+		index:      newFrameIndex(),
+		indexFetch: ffprobe.FrameTimes,
 	}
 }
 

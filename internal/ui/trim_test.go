@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"image"
 	"strings"
@@ -718,6 +719,59 @@ func TestEnsureExtractorRebuildsOnPathChange(t *testing.T) {
 	third := c.ensureExtractor()
 	if third == first {
 		t.Fatal("a changed path must rebuild the extractor")
+	}
+}
+
+// Regression: a fresh index's empty window "covers" position 0, and the
+// old ensureFrameIndex guard refused to fetch on that basis — enabling
+// trimming and pressing Right stayed in "Loading frame index…" forever
+// because no ffprobe ever started. Fetches must trigger for the initial
+// window and for steps past either cached edge; single-flight, failure,
+// and empty-input guards stay.
+func TestEnsureFrameIndexFetchesAroundUncoveredEdges(t *testing.T) {
+	c := testTrimController(t)
+	fetches := make(chan [2]time.Duration, 8)
+	c.previews.indexFetch = func(ctx context.Context, exe, path string, from, to time.Duration) ([]time.Duration, time.Duration, error) {
+		fetches <- [2]time.Duration{from, to}
+		return []time.Duration{0, 100 * time.Millisecond}, 0, nil
+	}
+
+	// First enable: the fresh (empty) index must fetch the window at 0.
+	c.setTrimEnabled(true)
+	select {
+	case got := <-fetches:
+		if got != [2]time.Duration{0, 2 * time.Second} {
+			t.Fatalf("first window = %v, want [0s, 2s]", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no window fetch started for a fresh index at position 0")
+	}
+
+	// The in-flight fetch must be single-flight.
+	c.ensureFrameIndex(0)
+	select {
+	case got := <-fetches:
+		t.Fatalf("unexpected second fetch while in flight: %v", got)
+	default:
+	}
+
+	// A failed index disables fetching entirely.
+	c.previews.index.applyError(errors.New("probe failed"))
+	c.ensureFrameIndex(time.Second)
+	select {
+	case got := <-fetches:
+		t.Fatalf("fetch started despite a failed index: %v", got)
+	default:
+	}
+
+	// No fetch without an input.
+	c.previews.index = newFrameIndex()
+	c.inputPath = ""
+	c.ensureFrameIndex(0)
+	select {
+	case got := <-fetches:
+		t.Fatalf("fetch started without an input path: %v", got)
+	default:
 	}
 }
 
