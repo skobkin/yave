@@ -27,9 +27,9 @@ const (
 
 const (
 	timelineMinWidth   = 240
-	timelineMinHeight  = 48
-	handleHitHalfWidth = 6 // handle hit zones are full-height and 12px wide
-	handleBarWidth     = 4 // visible bars are narrower than their hit zones
+	timelineMinHeight  = 72 // 1.5x the original 48: the strip is the tab's main working surface
+	handleHitHalfWidth = 6  // handle hit zones are full-height and 12px wide
+	handleBarWidth     = 4  // visible bars are narrower than their hit zones
 	playheadBarWidth   = 2
 )
 

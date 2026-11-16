@@ -1102,6 +1102,54 @@ func TestTrimBoundaryEntriesUsable(t *testing.T) {
 	}
 }
 
+// TestTrimStatusLabelsCollapseWhenEmpty pins the dead-space fix: the
+// validation message and preview status lines are hidden while empty,
+// so they cost no vertical space between the timeline and the boundary
+// row (Fyne box layouts skip hidden children entirely).
+func TestTrimStatusLabelsCollapseWhenEmpty(t *testing.T) {
+	c := testTrimController(t)
+
+	if !c.trimMessage.Hidden || !c.previewStatus.Hidden {
+		t.Fatal("empty trim message and preview status must start hidden")
+	}
+
+	c.setPreviewStatus("Loading frame index…")
+	if c.previewStatus.Hidden {
+		t.Error("a non-empty preview status must be visible")
+	}
+	c.setPreviewStatus("")
+	if !c.previewStatus.Hidden {
+		t.Error("a cleared preview status must hide again")
+	}
+
+	c.setTrimMessage("Error: In timecode is invalid")
+	if c.trimMessage.Hidden {
+		t.Error("a non-empty trim message must be visible")
+	}
+
+	// A clean validation run hides the message again; the stream-copy
+	// warning shows it.
+	c.trimEnabled = true
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 5 * time.Second}}}
+	c.trimIn.Text = formatTimestamp(time.Second)
+	c.trimInValid = true
+	c.trimOut.Text = formatTimestamp(5 * time.Second)
+	c.trimOutValid = true
+	c.updateTrimMessages("libx265")
+	if !c.trimMessage.Hidden {
+		t.Errorf("a clean validation run must hide the trim message, got %q", c.trimMessage.Text)
+	}
+	c.updateTrimMessages("copy")
+	if c.trimMessage.Hidden {
+		t.Errorf("the stream-copy warning must show the trim message, got %q", c.trimMessage.Text)
+	}
+
+	c.resetTrimSelection()
+	if !c.trimMessage.Hidden {
+		t.Error("reset must clear and hide the trim message")
+	}
+}
+
 func TestTrimTabLayout(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()

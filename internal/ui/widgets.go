@@ -143,8 +143,12 @@ func (c *Controller) createWidgets() {
 	c.trimDuration = widget.NewLabel("")
 	c.trimMessage = widget.NewLabel("")
 	c.trimMessage.Wrapping = fyne.TextWrapWord
+	// Both status lines start (and stay) hidden while empty, so they
+	// cost no vertical space between the trim rows.
+	c.setTrimMessage("")
 	c.previewStatus = widget.NewLabel("")
 	c.previewStatus.Wrapping = fyne.TextWrapWord
+	c.setPreviewStatus("")
 	c.previewTimeLabel = widget.NewLabel("")
 	c.hoverTimeLabel = widget.NewLabel("")
 	c.previewImage = canvas.NewImageFromImage(nil)

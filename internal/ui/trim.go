@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/ffprobe"
 	"git.skobk.in/skobkin/yave/internal/frames"
@@ -28,7 +29,7 @@ const (
 	previewMaxEntryBytes = 4 << 20                // a single decoded preview frame (640-wide portrait ≈ 2.9 MiB)
 	previewImageWidth    = 640                    // the preview cell expands with the window; 320 would upscale
 	thumbStripCount      = 10
-	thumbStripHeight     = 48
+	thumbStripHeight     = 72 // matches the raised timelineMinHeight so cells do not upscale
 	thumbMaxWorkers      = 2
 	frameWindowLen       = 2 * time.Second // ffprobe -read_intervals window
 	frameWindowCap       = 4096            // max cached frame timestamps
@@ -124,7 +125,7 @@ func (c *Controller) resetTrimForNewInput() {
 	c.trimEnable.SetChecked(false)
 	c.trimIn.SetText("")
 	c.trimOut.SetText("")
-	c.trimMessage.SetText("")
+	c.setTrimMessage("")
 	c.trimDuration.SetText("")
 	c.trimTimeline.SetDuration(0)
 	c.trimTimeline.SetThumbnails(nil)
@@ -180,7 +181,7 @@ func (c *Controller) updateTrimMessages(encoder string) {
 			parts = append(parts, "Warning: "+issue.Message)
 		}
 	}
-	c.trimMessage.SetText(strings.Join(parts, "\n"))
+	c.setTrimMessage(strings.Join(parts, "\n"))
 }
 
 // trimEntryIssues appends the blocking issues for invalid timecode
@@ -490,8 +491,27 @@ func (c *Controller) displayPreview(img image.Image, at time.Duration) {
 	c.previewTimeLabel.SetText(formatTimestamp(at))
 }
 
+// setTrimMessage updates the validation/entry-problem line. Empty text
+// hides the label, so the idle message line costs no vertical space
+// between the timeline and the boundary row (box layouts skip hidden
+// children).
+func (c *Controller) setTrimMessage(text string) {
+	setStatusLabel(c.trimMessage, text)
+}
+
 func (c *Controller) setPreviewStatus(text string) {
-	c.previewStatus.SetText(text)
+	setStatusLabel(c.previewStatus, text)
+}
+
+// setStatusLabel shows the label only while it has text: hidden labels
+// are skipped by Fyne's box layouts, collapsing their row entirely.
+func setStatusLabel(label *widget.Label, text string) {
+	label.SetText(text)
+	if text == "" {
+		label.Hide()
+		return
+	}
+	label.Show()
 }
 
 // --- thumbnail strip ---
