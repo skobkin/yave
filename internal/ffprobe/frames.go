@@ -67,7 +67,11 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 		"-show_frames",
 		"-show_entries", "frame=best_effort_timestamp_time:stream=start_time",
 		"-of", "json",
-		"-read_intervals", fmt.Sprintf("%s%%+%s", formatProbeSeconds(from), formatProbeSeconds(to-from)),
+		// The absolute-end form A%B is required: ffprobe measures a
+		// +duration interval from where the keyframe seek actually
+		// landed, not from the requested start, so with a large GOP a
+		// relative window stops decoding before reaching to.
+		"-read_intervals", fmt.Sprintf("%s%%%s", formatProbeSeconds(from), formatProbeSeconds(to)),
 		inputPath,
 	}
 	output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput() //nolint:gosec // G204: resolved via exec.LookPath

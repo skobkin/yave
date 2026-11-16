@@ -66,7 +66,7 @@ func TestFrameTimesNonZeroStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := strings.Fields(string(args))
-	for _, want := range []string{"-select_streams", "v:0", "-show_frames", "-read_intervals", "0.000%+3.000"} {
+	for _, want := range []string{"-select_streams", "v:0", "-show_frames", "-read_intervals", "0.000%3.000"} {
 		if !containsField(fields, want) {
 			t.Errorf("args missing %q: %v", want, fields)
 		}
