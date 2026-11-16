@@ -62,7 +62,9 @@ type Frame struct {
 // the given height with the source aspect ratio preserved
 // (scale=-2:<height>: the width is derived and kept even — an mjpeg
 // requirement). The frame is taken from stream 0:v:0, the exact stream
-// command generation maps for transcoding.
+// command generation maps for transcoding, and converted to full-range
+// YUV (format=yuvj420p): the mjpeg encoder requires full range, and
+// ffmpeg 8+ rejects limited-range input instead of auto-converting it.
 func (e *Extractor) Thumbnail(ctx context.Context, inputPath string, at time.Duration, height int) (Frame, error) {
 	if height <= 0 {
 		return Frame{}, fmt.Errorf("thumbnail height must be positive, got %d", height)
@@ -70,14 +72,19 @@ func (e *Extractor) Thumbnail(ctx context.Context, inputPath string, at time.Dur
 	return e.extract(ctx, inputPath, at, []string{
 		"-map", "0:v:0",
 		"-frames:v", "1",
-		"-vf", fmt.Sprintf("scale=-2:%d", height),
+		"-vf", fmt.Sprintf("scale=-2:%d,format=yuvj420p", height),
 		"-q:v", "3",
 	})
 }
 
 // Preview extracts a single frame at (approximately) at, never upscaled
 // and capped at the given width, with the source aspect ratio
-// preserved (scale=min(<maxWidth>,iw):-2).
+// preserved (scale='min(<maxWidth>,iw)':-2). The min() expression is
+// single-quoted because ffmpeg's filtergraph parser splits filters on
+// commas without tracking parentheses — an unquoted min(W,iw) would be
+// parsed as two filters. Quotes inside the argv element are
+// filtergraph-level quoting; no shell is involved. The full-range
+// conversion matches Thumbnail (see there).
 func (e *Extractor) Preview(ctx context.Context, inputPath string, at time.Duration, maxWidth int) (Frame, error) {
 	if maxWidth <= 0 {
 		return Frame{}, fmt.Errorf("preview width must be positive, got %d", maxWidth)
@@ -85,7 +92,7 @@ func (e *Extractor) Preview(ctx context.Context, inputPath string, at time.Durat
 	return e.extract(ctx, inputPath, at, []string{
 		"-map", "0:v:0",
 		"-frames:v", "1",
-		"-vf", fmt.Sprintf("scale=min(%d,iw):-2", maxWidth),
+		"-vf", fmt.Sprintf("scale='min(%d,iw)':-2,format=yuvj420p", maxWidth),
 		"-q:v", "3",
 	})
 }
