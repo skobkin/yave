@@ -67,4 +67,31 @@ func TestPreviewIntegration(t *testing.T) {
 			t.Fatalf("preview bounds = %v, want %v", frame.Image.Bounds(), want)
 		}
 	})
+
+	t.Run("normalizes anamorphic sources", func(t *testing.T) {
+		// 480x360 tagged SAR 2:1 displays as 960x360. Go's JPEG decoder
+		// and Fyne only see pixel dimensions, so the extraction chain
+		// must convert to square pixels before its cap scaling — the
+		// preview is 320x120 (the display aspect ratio), not 320x240
+		// (the raw pixel geometry squeezed into the cap).
+		path := t.TempDir() + "/input.mp4"
+		//nolint:gosec // G204: integration test drives the locally discovered FFmpeg with t.TempDir paths
+		cmd := exec.CommandContext(context.Background(), ffmpegPath, []string{
+			"-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "testsrc2=duration=2:size=480x360:rate=30",
+			"-vf", "setsar=2",
+			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path,
+		}...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("generating anamorphic test media: %v: %s", err, out)
+		}
+		frame, err := extractor.Preview(ctx, path, time.Second, 320)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := image.Rect(0, 0, 320, 120)
+		if frame.Image == nil || frame.Image.Bounds() != want {
+			t.Fatalf("anamorphic preview bounds = %v, want %v", frame.Image.Bounds(), want)
+		}
+	})
 }

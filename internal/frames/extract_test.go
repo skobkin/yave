@@ -93,7 +93,7 @@ func TestThumbnailExtractsAndDecodes(t *testing.T) {
 		"-ss", "5.000000",
 		"-map", "0:v:0",
 		"-frames:v", "1",
-		"-vf", "scale=-2:96,format=yuvj420p",
+		"-vf", "scale=w='trunc(iw*sar/2)*2':h=ih,setsar=1,scale=-2:96,format=yuvj420p",
 		"pipe:1",
 	} {
 		if !slicesContains(args, want) {
@@ -122,7 +122,7 @@ func TestPreviewPreservesAspectAndCapsWidth(t *testing.T) {
 	// The min() expression must be single-quoted: ffmpeg's filtergraph
 	// parser splits filters on commas and would otherwise read
 	// min(320,iw) as two filters (regression: "No such filter: 'iw):-2'").
-	if !slicesContains(args, "scale='min(320,iw)':-2,format=yuvj420p") {
+	if !slicesContains(args, "scale=w='trunc(iw*sar/2)*2':h=ih,setsar=1,scale='min(320,iw)':-2,format=yuvj420p") {
 		t.Errorf("args missing quoted width-capped aspect-preserving scale: %v", args)
 	}
 }

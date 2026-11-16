@@ -63,13 +63,23 @@ type Frame struct {
 	Image image.Image
 }
 
+// squarePixels is the filter-chain prefix both extraction paths start
+// with: anamorphic sources (sample aspect ratio != 1) are converted to
+// their display geometry and tagged square-pixel before any further
+// scaling. Downstream code (Go's JPEG decoder, Fyne) sees only pixel
+// dimensions, so without this a 160x120 SAR 2:1 source would display
+// as 4:3 instead of its true 8:3. The trunc-even keeps mjpeg's
+// even-dimension requirement when iw*sar is odd.
+const squarePixels = "scale=w='trunc(iw*sar/2)*2':h=ih,setsar=1"
+
 // Thumbnail extracts a single frame at (approximately) at, scaled to
-// the given height with the source aspect ratio preserved
-// (scale=-2:<height>: the width is derived and kept even — an mjpeg
-// requirement). The frame is taken from stream 0:v:0, the exact stream
-// command generation maps for transcoding, and converted to full-range
-// YUV (format=yuvj420p): the mjpeg encoder requires full range, and
-// ffmpeg 8+ rejects limited-range input instead of auto-converting it.
+// the given height with the source display aspect ratio preserved
+// (square-pixel normalization first, then scale=-2:<height>: the width
+// is derived and kept even — an mjpeg requirement). The frame is taken
+// from stream 0:v:0, the exact stream command generation maps for
+// transcoding, and converted to full-range YUV (format=yuvj420p): the
+// mjpeg encoder requires full range, and ffmpeg 8+ rejects
+// limited-range input instead of auto-converting it.
 func (e *Extractor) Thumbnail(ctx context.Context, inputPath string, at time.Duration, height int) (Frame, error) {
 	if height <= 0 {
 		return Frame{}, fmt.Errorf("thumbnail height must be positive, got %d", height)
@@ -77,14 +87,15 @@ func (e *Extractor) Thumbnail(ctx context.Context, inputPath string, at time.Dur
 	return e.extract(ctx, inputPath, at, []string{
 		"-map", "0:v:0",
 		"-frames:v", "1",
-		"-vf", fmt.Sprintf("scale=-2:%d,format=yuvj420p", height),
+		"-vf", fmt.Sprintf("%s,scale=-2:%d,format=yuvj420p", squarePixels, height),
 		"-q:v", "3",
 	})
 }
 
 // Preview extracts a single frame at (approximately) at, never upscaled
-// and capped at the given width, with the source aspect ratio
-// preserved (scale='min(<maxWidth>,iw)':-2). The min() expression is
+// and capped at the given width, with the source display aspect ratio
+// preserved (square-pixel normalization first, then
+// scale='min(<maxWidth>,iw)':-2). The min() expression is
 // single-quoted because ffmpeg's filtergraph parser splits filters on
 // commas without tracking parentheses — an unquoted min(W,iw) would be
 // parsed as two filters. Quotes inside the argv element are
@@ -97,7 +108,7 @@ func (e *Extractor) Preview(ctx context.Context, inputPath string, at time.Durat
 	return e.extract(ctx, inputPath, at, []string{
 		"-map", "0:v:0",
 		"-frames:v", "1",
-		"-vf", fmt.Sprintf("scale='min(%d,iw)':-2,format=yuvj420p", maxWidth),
+		"-vf", fmt.Sprintf("%s,scale='min(%d,iw)':-2,format=yuvj420p", squarePixels, maxWidth),
 		"-q:v", "3",
 	})
 }
