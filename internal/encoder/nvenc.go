@@ -63,11 +63,12 @@ func (e *nvencEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *nvencEncoder) DefaultPreset() string { return e.presetDefault }
 func (e *nvencEncoder) Profiles() []string    { return e.profiles }
 
-// The curated NVENC preset list is offered as a dropdown by its own UI
-// change; until then the interface requires a value and the UI keeps
-// the free-text entry.
-func (e *nvencEncoder) Presets() []string { return nil }
-func (e *nvencEncoder) Tunes() []string   { return nil }
+// The curated preset list was already validated (Validate rejects
+// out-of-list values), so the UI can offer it as a dropdown directly.
+func (e *nvencEncoder) Presets() []string { return e.presets }
+
+// NVENC exposes no -tune flag in ffmpeg.
+func (e *nvencEncoder) Tunes() []string { return nil }
 func (e *nvencEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }

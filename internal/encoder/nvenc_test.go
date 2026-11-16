@@ -17,6 +17,14 @@ func TestNVENCVideoEncodersAreRegistered(t *testing.T) {
 	}
 }
 
+// nvencTestPresets mirrors the h264/hevc curated list: the modern
+// p1..p7 set plus the legacy names kept for older ffmpeg builds.
+var nvencTestPresets = []string{
+	"p1", "p2", "p3", "p4", "p5", "p6", "p7",
+	"slow", "medium", "fast",
+	"hp", "hq", "bd",
+}
+
 func TestNVENCVideoEncoderMetadata(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -60,6 +68,19 @@ func TestNVENCVideoEncoderMetadata(t *testing.T) {
 			}
 			if got, want := ve.DefaultPreset(), "p4"; got != want {
 				t.Errorf("DefaultPreset() = %q, want %q", got, want)
+			}
+			// The curated preset list matches the validated set:
+			// p1..p7 plus the legacy names for h264/hevc, p1..p7 only
+			// for av1_nvenc (FFmpeg 5.0+).
+			wantPresets := nvencTestPresets
+			if tt.name == "av1_nvenc" {
+				wantPresets = nvencTestPresets[:7]
+			}
+			if got := ve.Presets(); !slices.Equal(got, wantPresets) {
+				t.Errorf("Presets() = %v, want %v", got, wantPresets)
+			}
+			if got := ve.Tunes(); got != nil {
+				t.Errorf("Tunes() = %v, want nil (NVENC has no -tune flag)", got)
 			}
 			r, ok := ve.QPRange()
 			if !ok || r.Min != tt.qpMin || r.Max != tt.qpMax {

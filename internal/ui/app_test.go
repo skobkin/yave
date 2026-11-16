@@ -527,6 +527,43 @@ func TestLibvpxVp9CuratedDeadlineDropdown(t *testing.T) {
 	}
 }
 
+// TestNVENCCuratedPresetDropdown pins the NVENC preset dropdown: the
+// validated p1..p7 (+legacy) list is offered instead of free text, and
+// the selection lands in the saved profile verbatim (the builder
+// canonicalizes case variants, as before).
+func TestNVENCCuratedPresetDropdown(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("h264_nvenc")
+
+	want := []string{"(default)", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "slow", "medium", "fast", "hp", "hq", "bd"}
+	if !slices.Equal(c.presetSelect.Options, want) {
+		t.Fatalf("preset options = %v, want %v", c.presetSelect.Options, want)
+	}
+	if c.preset.Visible() || c.presetSlider.Visible() {
+		t.Fatal("h264_nvenc must show only the curated preset dropdown")
+	}
+
+	c.presetSelect.SetSelected("p7")
+	if got := c.profileFromWidgets().Video.Preset; got != "p7" {
+		t.Fatalf("preset selection = %q, want p7", got)
+	}
+	c.videoEncoder.SetSelected("av1_nvenc")
+	// av1_nvenc curates only p1..p7; the legacy names must not surface
+	// as selectable options for it.
+	for _, legacy := range []string{"slow", "hp", "bd"} {
+		if slices.Contains(c.presetSelect.Options, legacy) {
+			t.Errorf("av1_nvenc options must not contain legacy preset %q: %v", legacy, c.presetSelect.Options)
+		}
+	}
+	if got := c.profileFromWidgets().Video.Preset; got != "p7" {
+		t.Fatalf("preset after nvenc switch = %q, want p7 (shared p1..p7 name)", got)
+	}
+}
+
 // TestLibx265CuratedPresetAndTuneDropdowns pins the libx265 dropdown
 // behavior: curated options prefixed by "(default)", "(default)"
 // emitting no flag value, round-trips through loadProfile, and
