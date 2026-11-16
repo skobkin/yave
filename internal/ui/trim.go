@@ -312,12 +312,35 @@ func (c *Controller) onTimelinePlayhead(at time.Duration) {
 	c.requestPreview(at)
 }
 
-// onTimelineRange commits new boundaries from a handle drag.
+// focusedBoundaryEntry reports the boundary entry that currently holds
+// keyboard focus, or nil. Focus is a canvas-level fact in Fyne; entries
+// must be attached to a window for the query to resolve (as they are in
+// the real layout).
+func (c *Controller) focusedBoundaryEntry() fyne.Focusable {
+	canvas := fyne.CurrentApp().Driver().CanvasForObject(c.trimIn)
+	if canvas == nil {
+		return nil
+	}
+	return canvas.Focused()
+}
+
+// onTimelineRange commits new boundaries from a handle drag and from
+// boundary-entry edits (SetRange fires onRange synchronously). An entry
+// that currently holds keyboard focus is the one being typed into —
+// rewriting it mid-edit corrupts the value (valid prefixes like "00:00"
+// parse and apply immediately, and the user's next keystrokes would land
+// inside the reformatted text), so the focused entry keeps its in-flight
+// text as authoritative and only the other entry mirrors the commit.
 func (c *Controller) onTimelineRange(in, out time.Duration) {
 	c.trimInValid, c.trimOutValid = true, true
 	c.trimSelection = withBoundary(c.trimSelection, in, out)
-	c.trimIn.SetText(formatTimestamp(in))
-	c.trimOut.SetText(formatTimestamp(out))
+	focused := c.focusedBoundaryEntry()
+	if focused != c.trimIn {
+		c.trimIn.SetText(formatTimestamp(in))
+	}
+	if focused != c.trimOut {
+		c.trimOut.SetText(formatTimestamp(out))
+	}
 	c.updateTrimDurationLabel()
 	c.refresh()
 }

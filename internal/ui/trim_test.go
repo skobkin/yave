@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	fynetest "fyne.io/fyne/v2/test"
 
@@ -729,6 +730,50 @@ func TestNewInputDisablesTrimControls(t *testing.T) {
 	}
 	if c.trimEnable.Disabled() {
 		t.Fatal("the enable checkbox itself must stay usable")
+	}
+}
+
+// Regression: typing into a boundary entry re-fires onRange on every
+// keystroke (valid prefixes parse and apply immediately), and
+// onTimelineRange rewrote the very entry being typed into — the user's
+// next keystrokes landed inside the reformatted text and corrupted it.
+// The focused entry keeps its in-flight text; the other entry mirrors
+// the committed value; an unfocused commit rewrites both.
+func TestOnTimelineRangeKeepsFocusedEntryText(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{{Start: 0, End: 5 * time.Second}}}
+	// Attach the entries to a canvas so focus queries resolve (the real
+	// layout does this via the window content).
+	content := container.NewWithoutLayout(c.trimIn, c.trimOut)
+	win := fynetest.NewWindow(content)
+	defer win.Close()
+	canvas := fyne.CurrentApp().Driver().CanvasForObject(c.trimIn)
+	if canvas == nil {
+		t.Fatal("entry must resolve to a canvas once attached")
+	}
+
+	canvas.Focus(c.trimIn) // focus before editing: the edit itself echoes through SetRange→onRange
+	c.trimIn.SetText("00:00")
+	if c.trimIn.Text != "00:00" {
+		t.Fatalf("typing echo rewrote the focused entry: %q", c.trimIn.Text)
+	}
+	c.onTimelineRange(0, 10*time.Second)
+	if c.trimIn.Text != "00:00" {
+		t.Fatalf("focused entry text rewritten mid-edit: %q", c.trimIn.Text)
+	}
+	if c.trimOut.Text != formatTimestamp(10*time.Second) {
+		t.Fatalf("unfocused out entry = %q, want the committed boundary", c.trimOut.Text)
+	}
+
+	canvas.Focus(c.trimOut)
+	c.trimOut.SetText("")
+	c.onTimelineRange(time.Second, 9*time.Second)
+	if c.trimOut.Text != "" {
+		t.Fatalf("focused out entry rewritten mid-edit: %q", c.trimOut.Text)
+	}
+	if c.trimIn.Text != formatTimestamp(time.Second) {
+		t.Fatalf("unfocused in entry = %q, want the committed boundary", c.trimIn.Text)
 	}
 }
 
