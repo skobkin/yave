@@ -21,25 +21,19 @@ type frameEntry struct {
 	BestEffortTimestampTime string `json:"best_effort_timestamp_time"`
 }
 
-// frameStream is the subset of stream output needed to normalize frame
-// timestamps onto the input timeline.
-type frameStream struct {
-	StartTime string `json:"start_time"`
-}
-
 type frameDocument struct {
-	Frames  []frameEntry  `json:"frames"`
-	Streams []frameStream `json:"streams"`
+	Frames []frameEntry `json:"frames"`
 }
 
 // FrameTimes returns decoded first-video-stream frame timestamps
 // (presentation order, best_effort_timestamp_time) within [from, to],
-// normalized against the stream's start_time so the values sit on the
-// same timeline as ffmpeg's input-side -ss seeks and the UI's
-// [0, duration] playhead. It reads only the requested window
-// (-read_intervals seeks on the input side), so cost is independent of
-// source length. Timestamps are sorted, "N/A"/missing values skipped,
-// duplicates deduplicated.
+// normalized against the container's format start_time — the same
+// origin ffmpeg's input-side -ss seeks against — so the values sit on
+// the timeline of ffmpeg's -ss seeks and the UI's [0, duration]
+// playhead; the origin itself is returned as the second value. It reads
+// only the requested window (-read_intervals seeks on the input side),
+// so cost is independent of source length. Timestamps are sorted,
+// "N/A"/missing values skipped, duplicates deduplicated.
 //
 // -read_intervals seeks to the nearest keyframe at or before from, so
 // the raw window may include frames from before from — they are
@@ -74,7 +68,13 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_frames",
-		"-show_entries", "frame=best_effort_timestamp_time:stream=start_time",
+		// Normalization uses the origin from the separate format probe
+		// above, not the video stream's own start_time: rebasing against
+		// the stream would shift its first frame to zero even when the
+		// container (and ffmpeg's -ss) starts earlier — audio at zero
+		// with video delayed one second indexes its frames at one
+		// second, not zero.
+		"-show_entries", "frame=best_effort_timestamp_time",
 		"-of", "json",
 		// The absolute-end form A%B is required: ffprobe measures a
 		// +duration interval from where the keyframe seek actually
@@ -94,7 +94,7 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 		}
 		return nil, 0, fmt.Errorf("probe frame times %q: %s", inputPath, detail)
 	}
-	times, start, err := parseFrameTimes(output)
+	times, err := parseFrameTimes(output, origin)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -107,7 +107,7 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 			filtered = append(filtered, t)
 		}
 	}
-	return filtered, start, nil
+	return filtered, origin, nil
 }
 
 // inputOrigin reports the input's format start_time — the reference
@@ -152,16 +152,13 @@ func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration
 	return time.Duration(seconds * float64(time.Second)), nil
 }
 
-func parseFrameTimes(data []byte) ([]time.Duration, time.Duration, error) {
+// parseFrameTimes converts raw absolute frame timestamps into
+// input-relative positions by subtracting origin (the container's
+// format start_time), sorted with duplicates removed.
+func parseFrameTimes(data []byte, origin time.Duration) ([]time.Duration, error) {
 	var document frameDocument
 	if err := json.Unmarshal(data, &document); err != nil {
-		return nil, 0, fmt.Errorf("decode ffprobe frame JSON: %w", err)
-	}
-	var start time.Duration
-	if len(document.Streams) > 0 {
-		if parsed, ok := parseSeconds(document.Streams[0].StartTime); ok {
-			start = parsed
-		}
+		return nil, fmt.Errorf("decode ffprobe frame JSON: %w", err)
 	}
 	times := make([]time.Duration, 0, len(document.Frames))
 	seen := make(map[time.Duration]struct{}, len(document.Frames))
@@ -170,7 +167,7 @@ func parseFrameTimes(data []byte) ([]time.Duration, time.Duration, error) {
 		if !ok {
 			continue
 		}
-		normalized := raw - start
+		normalized := raw - origin
 		if _, duplicate := seen[normalized]; duplicate {
 			continue
 		}
@@ -178,7 +175,7 @@ func parseFrameTimes(data []byte) ([]time.Duration, time.Duration, error) {
 		times = append(times, normalized)
 	}
 	sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
-	return times, start, nil
+	return times, nil
 }
 
 // parseSeconds parses an ffprobe seconds value ("1.043000", "N/A").

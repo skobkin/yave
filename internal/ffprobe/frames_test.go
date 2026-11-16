@@ -40,16 +40,15 @@ func writeFakeFFprobe(t *testing.T, dir, document, formatStart string) string {
 func TestFrameTimesNonZeroStart(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	// Frames start at 1.043 s: normalized values must begin at 0 so
-	// they sit on the same timeline as ffmpeg's input-side -ss. The
-	// window [0, 3s] contains the normalized frames.
+	// The container starts at 1.043 s and so do the frames: normalized
+	// values must begin at 0 so they sit on the same timeline as
+	// ffmpeg's input-side -ss. The window [0, 3s] contains the frames.
 	document := `{
 	  "frames": [
 	    {"best_effort_timestamp_time": "1.043000"},
 	    {"best_effort_timestamp_time": "1.076333"},
 	    {"best_effort_timestamp_time": "1.109667"}
-	  ],
-	  "streams": [{"start_time": "1.043000"}]
+	  ]
 	}`
 	fake := writeFakeFFprobe(t, dir, document, "1.043000")
 	times, start, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 3*time.Second)
@@ -99,7 +98,7 @@ func TestFrameTimesTranslatesProbeWindow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
-			document := `{"frames": [], "streams": [{"start_time": "0.000000"}]}`
+			document := `{"frames": []}`
 			fake := writeFakeFFprobe(t, dir, document, tc.origin)
 			if _, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", tc.from, tc.to); err != nil {
 				t.Fatal(err)
@@ -136,8 +135,7 @@ func TestFrameTimesReorderAndDedup(t *testing.T) {
 	    {"best_effort_timestamp_time": "0.100000"},
 	    {"best_effort_timestamp_time": "N/A"},
 	    {"best_effort_timestamp_time": "0.300000"}
-	  ],
-	  "streams": [{"start_time": "0.000000"}]
+	  ]
 	}`
 	fake := writeFakeFFprobe(t, dir, document, "0.000000")
 	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 2*time.Second)
@@ -150,6 +148,37 @@ func TestFrameTimesReorderAndDedup(t *testing.T) {
 	}
 	for i := range want {
 		if times[i] != want[i] {
+			t.Errorf("times[%d] = %s, want %s", i, times[i], want[i])
+		}
+	}
+}
+
+// Regression: a video stream delayed relative to the container (audio
+// at zero, video starting one second in) used to be rebased against
+// the video stream's own start_time, indexing its first frame at zero.
+// ffmpeg's input-side -ss seeks against the container start, so the
+// indexed position and the extracted frame disagreed by one second.
+// Normalization now uses the container origin only.
+func TestFrameTimesVideoOffsetFromContainer(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	document := `{
+  "frames": [
+    {"best_effort_timestamp_time": "1.000000"},
+    {"best_effort_timestamp_time": "1.033333"}
+  ]
+}`
+	fake := writeFakeFFprobe(t, dir, document, "0.000000")
+	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []time.Duration{time.Second, time.Second + 33333*time.Microsecond}
+	if len(times) != len(want) {
+		t.Fatalf("times = %v, want %v", times, want)
+	}
+	for i := range want {
+		if !durationClose(times[i], want[i], time.Microsecond) {
 			t.Errorf("times[%d] = %s, want %s", i, times[i], want[i])
 		}
 	}
@@ -168,8 +197,7 @@ func TestFrameTimesWindowFiltering(t *testing.T) {
 	    {"best_effort_timestamp_time": "10.500000"},
 	    {"best_effort_timestamp_time": "10.750000"},
 	    {"best_effort_timestamp_time": "13.000000"}
-	  ],
-	  "streams": [{"start_time": "0.000000"}]
+	  ]
 	}`
 	fake := writeFakeFFprobe(t, dir, document, "0.000000")
 	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 10*time.Second, 12*time.Second)
@@ -190,7 +218,7 @@ func TestFrameTimesWindowFiltering(t *testing.T) {
 func TestFrameTimesGuards(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	fake := writeFakeFFprobe(t, dir, `{"frames": [], "streams": []}`, "0.000000")
+	fake := writeFakeFFprobe(t, dir, `{"frames": []}`, "0.000000")
 	if _, _, err := FrameTimes(context.Background(), fake, "", 0, time.Second); err == nil {
 		t.Error("empty input path must be rejected")
 	}
