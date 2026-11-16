@@ -564,6 +564,36 @@ func TestNVENCCuratedPresetDropdown(t *testing.T) {
 	}
 }
 
+// TestQSVCuratedPresetDropdown pins the QSV preset dropdown: the
+// validated veryfast..veryslow list is offered for all four QSV
+// encoders instead of free text.
+func TestQSVCuratedPresetDropdown(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+	c.videoEncoder.SetSelected("hevc_qsv")
+
+	want := []string{"(default)", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+	if !slices.Equal(c.presetSelect.Options, want) {
+		t.Fatalf("preset options = %v, want %v", c.presetSelect.Options, want)
+	}
+	if c.preset.Visible() || c.presetSlider.Visible() {
+		t.Fatal("hevc_qsv must show only the curated preset dropdown")
+	}
+
+	c.presetSelect.SetSelected("veryslow")
+	if got := c.profileFromWidgets().Video.Preset; got != "veryslow" {
+		t.Fatalf("preset selection = %q, want veryslow", got)
+	}
+	// The same list applies to the other QSV encoders.
+	c.videoEncoder.SetSelected("vp9_qsv")
+	if !slices.Equal(c.presetSelect.Options, want) {
+		t.Fatalf("vp9_qsv preset options = %v, want %v", c.presetSelect.Options, want)
+	}
+}
+
 // TestLibx265CuratedPresetAndTuneDropdowns pins the libx265 dropdown
 // behavior: curated options prefixed by "(default)", "(default)"
 // emitting no flag value, round-trips through loadProfile, and

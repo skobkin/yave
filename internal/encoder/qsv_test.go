@@ -60,6 +60,15 @@ func TestQSVVideoEncoderMetadata(t *testing.T) {
 			if got, want := ve.DefaultPreset(), "medium"; got != want {
 				t.Errorf("DefaultPreset() = %q, want %q", got, want)
 			}
+			// The curated preset list matches the validated set, shared
+			// by all four QSV encoders.
+			wantPresets := []string{"veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+			if got := ve.Presets(); !slices.Equal(got, wantPresets) {
+				t.Errorf("Presets() = %v, want %v", got, wantPresets)
+			}
+			if got := ve.Tunes(); got != nil {
+				t.Errorf("Tunes() = %v, want nil (QSV has no -tune flag)", got)
+			}
 			r, ok := ve.QPRange()
 			if !ok || r.Min != tt.qpMin || r.Max != tt.qpMax {
 				t.Errorf("QPRange = %v ok=%v, want %d-%d", r, ok, tt.qpMin, tt.qpMax)

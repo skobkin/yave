@@ -65,11 +65,12 @@ func (e *qsvEncoder) SupportsPreset() bool  { return e.presetFlag != "" }
 func (e *qsvEncoder) DefaultPreset() string { return e.presetDefault }
 func (e *qsvEncoder) Profiles() []string    { return e.profiles }
 
-// The curated QSV preset list is offered as a dropdown by its own UI
-// change; until then the interface requires a value and the UI keeps
-// the free-text entry.
-func (e *qsvEncoder) Presets() []string { return nil }
-func (e *qsvEncoder) Tunes() []string   { return nil }
+// The curated preset list was already validated (Validate rejects
+// out-of-list values), so the UI can offer it as a dropdown directly.
+func (e *qsvEncoder) Presets() []string { return e.presets }
+
+// QSV exposes no -tune flag in ffmpeg.
+func (e *qsvEncoder) Tunes() []string { return nil }
 func (e *qsvEncoder) RateControlModes() []RateControl {
 	return []RateControl{RCCQP, RCVBR, RCCBR}
 }
