@@ -1,6 +1,8 @@
 package ffmpeg
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -573,4 +575,150 @@ func containsPair(args []string, key, value string) bool {
 // or -1.
 func indexOfArg(args []string, arg string) int {
 	return slices.Index(args, arg)
+}
+
+func TestBuildCommandRejectsMultipleTrimSegments(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[1]
+	_, err := BuildCommand(BuildRequest{
+		FFmpegPath: "/usr/bin/ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Media:      model.MediaInfo{VideoStreams: []model.VideoStream{{Width: 640, Height: 360}}},
+		Trim: model.TrimSelection{Segments: []model.TimeRange{
+			{Start: time.Second, End: 2 * time.Second},
+			{Start: 3 * time.Second, End: 4 * time.Second},
+		}},
+	})
+	if err == nil {
+		t.Fatal("BuildCommand must reject a multi-segment trim selection")
+	}
+	if !strings.Contains(err.Error(), "single trim segment") {
+		t.Fatalf("error should mention the single-segment contract: %v", err)
+	}
+}
+
+func TestBuildConcatCommand(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		container     string
+		wantMuxer     string
+		wantFaststart bool
+		overwrite     bool
+	}{
+		{name: "mp4", container: model.ContainerMP4, wantMuxer: "mp4", wantFaststart: true},
+		{name: "mkv", container: model.ContainerMKV, wantMuxer: "matroska"},
+		{name: "webm", container: model.ContainerWebM, wantMuxer: "webm"},
+		{name: "overwrite allows -y", container: model.ContainerMKV, wantMuxer: "matroska", overwrite: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			plan, err := BuildConcatCommand(ConcatRequest{
+				FFmpegPath: "/usr/bin/ffmpeg",
+				ListPath:   "/tmp/yave-join-123/concat.txt",
+				OutputPath: "/tmp/yave-join-123/final.mp4",
+				Container:  tt.container,
+				Overwrite:  tt.overwrite,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := plan.Args
+			if got := args[0]; got != "-hide_banner" {
+				t.Errorf("first arg = %q, want -hide_banner", got)
+			}
+			wantOverwrite := "-n"
+			if tt.overwrite {
+				wantOverwrite = "-y"
+			}
+			if args[1] != wantOverwrite {
+				t.Errorf("second arg = %q, want %q", args[1], wantOverwrite)
+			}
+			for _, flag := range []string{"-progress", "-nostats"} {
+				if indexOfArg(args, flag) < 0 {
+					t.Errorf("missing %s in %#v", flag, args)
+				}
+			}
+			iF, iConcat := indexOfArg(args, "-f"), indexOfArg(args, "concat")
+			iSafe, iList, iInput := indexOfArg(args, "-safe"), indexOfArg(args, "/tmp/yave-join-123/concat.txt"), indexOfArg(args, "-i")
+			if iConcat != iF+1 || iInput != iSafe+2 || iList != iInput+1 {
+				t.Errorf("concat demuxer flags out of order: %#v", args)
+			}
+			if iSafe == -1 || args[iSafe+1] != "0" {
+				t.Error("expected -safe 0")
+			}
+			if !containsPair(args, "-map", "0") || indexOfArg(args, "-map") < iInput {
+				t.Errorf("-map 0 must follow -i: %#v", args)
+			}
+			if !containsPair(args, "-c", "copy") {
+				t.Errorf("missing -c copy in %#v", args)
+			}
+			if iMux := indexOfArg(args, tt.wantMuxer); iMux < 0 || args[iMux-1] != "-f" {
+				t.Errorf("expected explicit -f %s: %#v", tt.wantMuxer, args)
+			}
+			if iOut := len(args) - 1; args[iOut] != "/tmp/yave-join-123/final.mp4" {
+				t.Errorf("output path must be last: %#v", args)
+			}
+			if iFast := indexOfArg(args, "-movflags"); tt.wantFaststart {
+				if iFast < 0 || !containsPair(args, "-movflags", "+faststart") {
+					t.Errorf("mp4 output needs -movflags +faststart: %#v", args)
+				}
+			} else if iFast >= 0 {
+				t.Errorf("-movflags must only appear for mp4: %#v", args)
+			}
+			if plan.OutputPath != "/tmp/yave-join-123/final.mp4" || plan.Preview == "" {
+				t.Errorf("plan mismatch: %#v", plan)
+			}
+		})
+	}
+}
+
+func TestBuildConcatCommandRejectsUnknownContainer(t *testing.T) {
+	t.Parallel()
+	if _, err := BuildConcatCommand(ConcatRequest{
+		FFmpegPath: "/usr/bin/ffmpeg", ListPath: "l", OutputPath: "o", Container: "avi",
+	}); err == nil {
+		t.Fatal("unknown container must be rejected")
+	}
+	if _, err := BuildConcatCommand(ConcatRequest{ListPath: "l", OutputPath: "o", Container: "mp4"}); err == nil {
+		t.Fatal("empty ffmpeg path must be rejected")
+	}
+	if _, err := BuildConcatCommand(ConcatRequest{FFmpegPath: "f", OutputPath: "o", Container: "mp4"}); err == nil {
+		t.Fatal("empty list path must be rejected")
+	}
+	if _, err := BuildConcatCommand(ConcatRequest{FFmpegPath: "f", ListPath: "l", Container: "mp4"}); err == nil {
+		t.Fatal("empty output path must be rejected")
+	}
+}
+
+func TestWriteConcatList(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	list := filepath.Join(dir, "concat.txt")
+	parts := []string{"/staging/segment001.mkv", "/staging/it's a quote.mkv", "/staging/segment003.mkv"}
+	if err := WriteConcatList(list, parts); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "file '/staging/segment001.mkv'\n" +
+		"file '/staging/it'\\''s a quote.mkv'\n" +
+		"file '/staging/segment003.mkv'\n"
+	if string(raw) != want {
+		t.Fatalf("list contents = %q, want %q", raw, want)
+	}
+	if info, err := os.Stat(list); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("list permissions = %v, want 0600 (err %v)", info.Mode().Perm(), err)
+	}
+	if err := WriteConcatList(filepath.Join(dir, "nl.txt"), []string{"/a\nb.mkv"}); err == nil {
+		t.Fatal("newline in a segment path must be rejected")
+	}
+	if err := WriteConcatList(filepath.Join(dir, "empty.txt"), nil); err == nil {
+		t.Fatal("empty part list must be rejected")
+	}
 }

@@ -3,6 +3,7 @@ package ffmpeg
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -21,7 +22,11 @@ type BuildRequest struct {
 	Overwrite  bool
 	// Trim, when active, restricts the output to the selected range via
 	// an input-side -ss seek plus an output-side -t duration. The zero
-	// value means no trimming.
+	// value means no trimming. It must carry at most ONE segment:
+	// multi-segment exports build one plan per segment (or use
+	// BuildConcatCommand for the join pass); a longer selection is a
+	// caller bug and is rejected here so it can never silently become a
+	// single-segment job on Segments[0].
 	Trim model.TrimSelection
 }
 
@@ -43,6 +48,9 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 	}
 	if req.InputPath == "" || req.OutputPath == "" {
 		return model.RunPlan{}, errors.New("input and output paths are required")
+	}
+	if len(req.Trim.Segments) > 1 {
+		return model.RunPlan{}, errors.New("BuildCommand applies a single trim segment; build per-segment plans via the export job")
 	}
 
 	p := req.Profile
@@ -205,11 +213,12 @@ func buildVideoArgs(ve encoder.VideoEncoder, v model.VideoSettings, media model.
 	return args, nil
 }
 
-// buildAudioArgs composes the post -c:a flags for a profile. The
-// "copy" mode is treated as a passthrough and dispatches to a stub
-// `-c:a copy`; every other encoder goes through the registry.
+// buildAudioArgs composes the post -c:a flags for a profile. Stream
+// copy (per model.AudioSettings.IsStreamCopy, the predicate validation
+// shares) dispatches to a stub `-c:a copy`; every other encoder goes
+// through the registry.
 func buildAudioArgs(a model.AudioSettings) ([]string, error) {
-	if a.Mode == model.AudioCopy || strings.EqualFold(strings.TrimSpace(a.Encoder), "copy") {
+	if a.IsStreamCopy() {
 		return []string{"-c:a", "copy"}, nil
 	}
 	raw, ok := encoder.DefaultRegistry().Get(a.Encoder)
@@ -275,4 +284,99 @@ func SameFilePath(a, b string) bool {
 	aa, errA := filepath.Abs(filepath.Clean(a))
 	bb, errB := filepath.Abs(filepath.Clean(b))
 	return errA == nil && errB == nil && aa == bb
+}
+
+// ConcatRequest describes the join pass of a multi-segment export:
+// concatenating the staged per-segment intermediates listed in ListPath
+// into one stream-copied output. Overwrite applies to the staged final
+// (owned by the export orchestrator), never to a user-visible path.
+type ConcatRequest struct {
+	FFmpegPath string
+	ListPath   string
+	OutputPath string
+	// Container selects the output muxer explicitly, so the staged
+	// final's format never depends on filename inference. One of the
+	// model.Container* values.
+	Container string
+	Overwrite bool
+}
+
+// containerMuxer maps a curated container to the explicit ffmpeg output
+// muxer name used by the concat pass.
+func containerMuxer(container string) (string, error) {
+	switch container {
+	case model.ContainerMP4:
+		return "mp4", nil
+	case model.ContainerMKV:
+		return "matroska", nil
+	case model.ContainerWebM:
+		return "webm", nil
+	default:
+		return "", fmt.Errorf("unsupported output container %q", container)
+	}
+}
+
+// BuildConcatCommand builds the join pass: a concat-demuxer invocation
+// that stream-copies every listed intermediate into one output. The
+// intermediates' compatibility is verified separately (ffprobe stream
+// layout comparison) before this command runs.
+func BuildConcatCommand(req ConcatRequest) (model.RunPlan, error) {
+	if req.FFmpegPath == "" {
+		return model.RunPlan{}, errors.New("FFmpeg path is empty")
+	}
+	if req.ListPath == "" || req.OutputPath == "" {
+		return model.RunPlan{}, errors.New("concat list and output paths are required")
+	}
+	muxer, err := containerMuxer(req.Container)
+	if err != nil {
+		return model.RunPlan{}, err
+	}
+
+	args := []string{"-hide_banner"}
+	if req.Overwrite {
+		args = append(args, "-y")
+	} else {
+		args = append(args, "-n")
+	}
+	args = append(args, "-progress", "pipe:1", "-nostats")
+	args = append(args, "-f", "concat", "-safe", "0", "-i", req.ListPath)
+	args = append(args, "-map", "0", "-c", "copy")
+	if req.Container == model.ContainerMP4 {
+		args = append(args, "-movflags", "+faststart")
+	}
+	args = append(args, "-f", muxer, req.OutputPath)
+	return model.RunPlan{
+		Executable: req.FFmpegPath,
+		Args:       args,
+		Preview:    ShellPreview(req.FFmpegPath, args),
+		OutputPath: req.OutputPath,
+	}, nil
+}
+
+// WriteConcatList writes the concat demuxer's list file: one
+// "file '<escaped path>'" line per part, with a mode that keeps the
+// list private to the user. Paths must not contain newlines — the
+// format is line-based — and single quotes are escaped the way the
+// demuxer's own parser expects.
+func WriteConcatList(path string, parts []string) error {
+	if len(parts) == 0 {
+		return errors.New("concat list requires at least one segment")
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		if strings.ContainsAny(part, "\n") {
+			return fmt.Errorf("concat segment path contains a newline: %q", part)
+		}
+		b.WriteString("file '")
+		b.WriteString(escapeConcatPath(part))
+		b.WriteString("'\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+// escapeConcatPath renders one path for a concat-list "file '…'" line:
+// each single quote closes the quoting, escapes itself, and reopens
+// ('\” — the convention ffmpeg's concat demuxer documents).
+func escapeConcatPath(path string) string {
+	return strings.ReplaceAll(path, "'", `'\''`)
 }
