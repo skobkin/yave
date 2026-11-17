@@ -134,8 +134,12 @@ func (c *Controller) resetTrimForNewInput() {
 	c.previewImage.Refresh()
 	c.previewTimeLabel.SetText("")
 	c.hoverTimeLabel.SetText("")
-	c.setPreviewStatus("")
+	// The index is replaced before the status is cleared: the clear must
+	// not re-surface the old input's indexing failure through the
+	// setPreviewStatus guard, which would leave input A's diagnostic
+	// displayed for input B until trimming is enabled again.
 	c.previews.index = newFrameIndex()
+	c.setPreviewStatus("")
 	c.previews.cache.Clear()
 	c.previews.stripRunning = false
 }
