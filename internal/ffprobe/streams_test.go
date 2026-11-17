@@ -1,6 +1,7 @@
 package ffprobe
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -27,6 +28,19 @@ const streamKeysFixture = `{
     }
   ]
 }`
+
+// Real FLAC STREAMINFO dumps (see the FLAC subtest of
+// TestCompareStreamLayouts).
+const flacSeg1Extradata = `
+00000000: 03bc 03bc 0000 e100 04a9 0ac4 4170 0000  ......Ap..
+00000010: ac44 7a7a 9784 5dab af28 c48c 5056 fef7  .Dzz..]..(..PV..
+00000020: ca4b                                     .K
+`
+const flacSeg2Extradata = `
+00000000: 02f0 02f0 0002 7c00 03cd 0ac4 4170 0000  ......|.....Ap..
+00000010: ac44 345e a1b0 f4b9 f83b bfef 408e bf9a  .D4^.....;..@...
+00000020: e1f9                                     ..
+`
 
 func TestParseStreamKeys(t *testing.T) {
 	keys, err := parseStreamKeys([]byte(streamKeysFixture))
@@ -58,6 +72,35 @@ func TestParseStreamKeysToleratesAbsentFields(t *testing.T) {
 	if keys[0] != want {
 		t.Fatalf("key = %#v, want %#v", keys[0], want)
 	}
+}
+
+func TestParseHexDump(t *testing.T) {
+	b, ok := parseHexDump(flacSeg1Extradata)
+	if !ok {
+		t.Fatal("a real ffprobe dump must parse")
+	}
+	if len(b) != 34 {
+		t.Fatalf("decoded %d bytes, want 34 (FLAC STREAMINFO)", len(b))
+	}
+	want := []byte{
+		0x03, 0xbc, 0x03, 0xbc, 0x00, 0x00, 0xe1, 0x00, 0x04, 0xa9,
+		0x0a, 0xc4, 0x41, 0x70, 0x00, 0x00, 0xac, 0x44, 0x7a, 0x7a,
+	}
+	if !bytes.Equal(b[:20], want) {
+		t.Fatalf("decoded prefix = %x, want %x", b[:20], want)
+	}
+
+	// The ASCII column may contain hex-like text; it must be ignored.
+	b2, ok := parseHexDump("00000000: 0a00  abc\n")
+	if !ok || !bytes.Equal(b2, []byte{0x0a, 0x00}) {
+		t.Fatalf("ascii column leaked into the decode: %v ok=%v", b2, ok)
+	}
+	if _, ok := parseHexDump("no hexdump here"); ok {
+		t.Fatal("a non-hexdump string must fail to parse")
+	}
+}
+
+func TestParseStreamKeysMalformedJSON(t *testing.T) {
 	if _, err := parseStreamKeys([]byte(`not json`)); err == nil {
 		t.Fatal("malformed JSON must fail")
 	}
@@ -135,6 +178,52 @@ func TestCompareStreamLayouts(t *testing.T) {
 		err := CompareStreamLayouts(names[:2], [][]StreamKey{base, base[:1]})
 		if err == nil || !strings.Contains(err.Error(), "1 streams vs 2") {
 			t.Fatalf("count mismatch misreported: %v", err)
+		}
+	})
+
+	t.Run("FLAC per-segment STREAMINFO data ignored", func(t *testing.T) {
+		// Real FLAC STREAMINFO dumps ffprobe reported for two
+		// one-second libx264/FLAC cuts of one input (offsets 1s and
+		// 4s): identical decoder configuration, per-segment block and
+		// frame sizes, per-segment decoded-audio MD5. Comparing the
+		// whole blob rejected valid segments, so only the configuration
+		// region (bytes 10-13) participates for FLAC.
+		flac := func(extradata string) StreamKey {
+			return StreamKey{
+				CodecType: "audio", CodecName: "flac", ChannelLayout: "mono",
+				SampleRate: 44100, Channels: 1, Extradata: extradata,
+			}
+		}
+		if err := CompareStreamLayouts(names[:2], [][]StreamKey{
+			{flac(flacSeg1Extradata)}, {flac(flacSeg2Extradata)},
+		}); err != nil {
+			t.Fatalf("valid FLAC segments must pass verification: %v", err)
+		}
+
+		// A genuinely different configuration (the segment re-encoded
+		// at 48 kHz: the packed sample-rate field differs) still fails.
+		other := strings.Replace(flacSeg1Extradata, "0ac4 4170", "0bc4 8070", 1)
+		if other == flacSeg1Extradata {
+			t.Fatal("test setup: sample-rate replacement did not apply")
+		}
+		err := CompareStreamLayouts(names[:2], [][]StreamKey{
+			{flac(flacSeg1Extradata)}, {flac(other)},
+		})
+		if err == nil || !strings.Contains(err.Error(), "extradata") {
+			t.Fatalf("FLAC config difference must fail with an extradata report, got %v", err)
+		}
+
+		// Unparsable dumps cannot extract the config region and fall
+		// back to the raw comparison — strictly, never looser.
+		if err := CompareStreamLayouts(names[:2], [][]StreamKey{
+			{flac("0xAAAA")}, {flac("0xBBBB")},
+		}); err == nil || !strings.Contains(err.Error(), "extradata") {
+			t.Fatalf("unparsable dumps must compare raw, got %v", err)
+		}
+		if err := CompareStreamLayouts(names[:2], [][]StreamKey{
+			{flac("0xAAAA")}, {flac("0xAAAA")},
+		}); err != nil {
+			t.Fatalf("identical unparsable dumps must match: %v", err)
 		}
 	})
 
