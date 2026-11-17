@@ -595,6 +595,113 @@ func TestFrameTimesCompletesVideoWindowsWhenAudioOutlivesVideo(t *testing.T) {
 	}
 }
 
+// Regression: Matroska commonly omits stream.duration, so the
+// video-specific end fell back to the container duration — including
+// any audio tail. With a 3s video and a 15s audio MKV, FrameTimes(0,
+// 4s) rejected the window although every video frame flushes once the
+// read passes the video's last packet. The stream's DURATION tag
+// (written by ffmpeg and mkvmerge alike) supplies the track end. The
+// tag sits on the container's absolute timestamp line: with a positive
+// -output_ts_offset it includes the origin (a 3s track at offset 10
+// reads 00:00:13.000), so the origin is subtracted.
+func TestFrameTimesUsesDurationTagWhenStreamDurationMissing(t *testing.T) {
+	cases := []struct {
+		name      string
+		origin    string
+		tag       string
+		rawFrames []string // absolute container positions
+	}{
+		{"zero origin", "0.000000", "00:00:03.000000000", []string{"0.000000", "1.000000", "2.000000", "2.900000"}},
+		{"positive origin", "10.000000", "00:00:13.000000000", []string{"10.000000", "11.000000", "12.000000", "12.900000"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			frames := ""
+			for i, raw := range tc.rawFrames {
+				if i > 0 {
+					frames += ","
+				}
+				frames += `{"best_effort_timestamp_time": "` + raw + `"}`
+			}
+			document := `{"frames": [` + frames + `]}`
+			format := `{"streams":[{"start_time":"` + tc.origin + `","tags":{"DURATION":"` + tc.tag + `"}}],` +
+				`"format":{"format_name":"matroska,webm","duration":"18.000000","start_time":"` + tc.origin + `"}}`
+			fake := writeFakeFFprobeFormat(t, dir, document, format)
+			times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 4*time.Second)
+			if err != nil {
+				t.Fatalf("window past the tagged video end must be final, not an error: %v", err)
+			}
+			want := []time.Duration{0, time.Second, 2 * time.Second, 2900 * time.Millisecond}
+			if len(times) != len(want) {
+				t.Fatalf("times = %v, want %v", times, want)
+			}
+			for i := range want {
+				if !durationClose(times[i], want[i], time.Microsecond) {
+					t.Errorf("times[%d] = %s, want %s", i, times[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+// The DURATION tag marks the end, not the span: without the origin
+// subtraction the offset fixture above would place the video end at 13s
+// input-relative and hold windows short of it incomplete. Malformed
+// tags must not poison the end either — they fall back to the container
+// duration (here 18s), and the window [0, 4s] then reports incomplete.
+func TestFrameTimesMalformedDurationTagFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	document := `{"frames": [{"best_effort_timestamp_time": "1.000000"}]}`
+	format := `{"streams":[{"start_time":"0.000000","tags":{"DURATION":"not-a-timestamp"}}],` +
+		`"format":{"format_name":"matroska,webm","duration":"18.000000","start_time":"0.000000"}}`
+	fake := writeFakeFFprobeFormat(t, dir, document, format)
+	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 4*time.Second)
+	if err == nil {
+		t.Fatalf("times = %v, want an incomplete-window error (container end 18s is the fallback)", times)
+	}
+}
+
+// Regression, real toolchain: for a 3s video with a 15s audio MKV,
+// FrameTimes(0, 4s) failed at the attempt cap because Matroska omits
+// stream.duration and the container duration (15s) counted the audio
+// tail as video still to come — although the capped reads pass the
+// video's last packet and report all 90 frames. The stream's DURATION
+// tag (00:00:03.000) supplies the true video end. 30fps and mpeg4 are
+// native choices, so no codec gating is needed.
+func TestFrameTimesCompletesVideoWindowsOnMKVWithAudioTail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real ffmpeg + ffprobe)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+
+	dir := t.TempDir()
+	input := dir + "/input.mkv"
+	generate := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg on a t.TempDir file
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=3:size=160x120:rate=30",
+		"-f", "lavfi", "-i", "sine=duration=15",
+		"-c:v", "mpeg4", "-bf", "2", "-q:v", "3", "-c:a", "aac", input)
+	if out, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generating test media: %v: %s", err, out)
+	}
+
+	times, _, err := FrameTimes(context.Background(), ffprobePath, input, 0, 4*time.Second)
+	if err != nil {
+		t.Fatalf("window past the 3s video end must be final, not an error: %v", err)
+	}
+	if len(times) != 90 {
+		t.Fatalf("frame count = %d, want 90 (last %v)", len(times), times[len(times)-1])
+	}
+}
+
 func containsField(fields []string, want string) bool {
 	for _, field := range fields {
 		if field == want {

@@ -169,7 +169,7 @@ func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration
 	out, err := exec.CommandContext(ctx, resolved, //nolint:gosec // G204: resolved via exec.LookPath
 		"-v", "error",
 		"-select_streams", "v:0",
-		"-show_entries", "stream=start_time,duration:format=start_time,duration,format_name",
+		"-show_entries", "stream=start_time,duration:stream_tags=DURATION:format=start_time,duration,format_name",
 		"-of", "json",
 		inputPath,
 	).CombinedOutput()
@@ -190,8 +190,9 @@ func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration
 	// nonzero-origin input.
 	var document struct {
 		Streams []struct {
-			StartTime string `json:"start_time"`
-			Duration  string `json:"duration"`
+			StartTime string            `json:"start_time"`
+			Duration  string            `json:"duration"`
+			Tags      map[string]string `json:"tags"`
 		} `json:"streams"`
 		Format struct {
 			FormatName string `json:"format_name"`
@@ -211,15 +212,50 @@ func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration
 		seconds = 0 // "N/A" or unparseable origin degrades to zero by design
 	}
 	origin := time.Duration(seconds * float64(time.Second))
+	// Video-specific end first: Matroska commonly omits stream.duration,
+	// and falling back to the container duration there would treat an
+	// audio tail as video still to come, holding windows past the video
+	// end incomplete forever. The stream's DURATION tag (written by
+	// ffmpeg and mkvmerge alike) carries the track's end when the
+	// duration field is absent.
 	videoEnd := duration
 	if len(document.Streams) > 0 {
 		start, startOK := parseSeconds(document.Streams[0].StartTime)
 		length, lengthOK := parseSeconds(document.Streams[0].Duration)
 		if startOK && lengthOK && length >= 0 {
 			videoEnd = start - origin + length
+		} else if tagEnd, tagOK := parseTimestampTag(document.Streams[0].Tags["DURATION"]); tagOK {
+			videoEnd = tagEnd - origin
 		}
 	}
 	return origin, videoEnd, nil
+}
+
+// parseTimestampTag parses a stream tag timestamp such as Matroska's
+// "DURATION" ("00:00:03.000000000"). The tag sits on the container's
+// absolute timestamp line — with a positive -output_ts_offset it
+// includes the origin (a 3s track at offset 10 reads 00:00:13.000) — so
+// it is an end position, not a span: subtract the container origin
+// before comparing with input-relative windows. Malformed or negative
+// values do not parse.
+func parseTimestampTag(value string) (time.Duration, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 3 {
+		return 0, false
+	}
+	total := 0.0
+	factors := []float64{3600, 60, 1}
+	for i, part := range parts {
+		seconds, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+		if err != nil {
+			return 0, false
+		}
+		total += seconds * factors[i]
+	}
+	if total < 0 {
+		return 0, false
+	}
+	return time.Duration(total * float64(time.Second)), true
 }
 
 // parseFrameTimes converts raw absolute frame timestamps into
