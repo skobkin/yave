@@ -25,15 +25,20 @@ type frameDocument struct {
 	Frames []frameEntry `json:"frames"`
 }
 
-// frameProbeMargin extends the read past the requested window end:
-// -read_intervals stops reading at the end, so frames already fed to
-// the decoder but buffered behind the B-frame reorder delay are never
-// flushed and the window silently misses its tail (a 29.97fps window
-// through 2s reported only up to 1.868533s). The margin exceeds any
-// realistic reorder lookahead; the [from, to] filter below keeps the
-// result exact, and the cost is a slightly longer window on an already
-// windowed read.
-const frameProbeMargin = time.Second
+// Window reads extend past the requested end so decoder-buffered
+// frames are flushed: -read_intervals stops reading at the end and
+// frames held behind the B-frame reorder delay are then lost (a 1fps
+// mpeg4 window through 2s reported only frame 0 — the 2-frame delay
+// outlasted any fixed second-based margin). The read therefore
+// extends until a frame lands beyond the window end, proving the
+// buffer flushed; the extension doubles per attempt, and the attempt
+// cap bounds the retries — a window at the media end can never see a
+// frame beyond it, so completeness is unprovable there and the cap
+// decides. The [from, to] filter keeps every returned result exact.
+const (
+	frameProbeMargin   = time.Second // first extension past the window end
+	frameProbeAttempts = 3           // read extensions 1s, 2s, then 4s
+)
 
 // FrameTimes returns decoded first-video-stream frame timestamps
 // (presentation order, best_effort_timestamp_time) within [from, to],
@@ -74,53 +79,59 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 		return nil, 0, err
 	}
 
-	args := []string{
-		"-v", "error",
-		"-select_streams", "v:0",
-		"-show_frames",
-		// Normalization uses the origin from the separate format probe
-		// above, not the video stream's own start_time: rebasing against
-		// the stream would shift its first frame to zero even when the
-		// container (and ffmpeg's -ss) starts earlier — audio at zero
-		// with video delayed one second indexes its frames at one
-		// second, not zero.
-		"-show_entries", "frame=best_effort_timestamp_time",
-		"-of", "json",
-		// The absolute-end form A%B is required: ffprobe measures a
-		// +duration interval from where the keyframe seek actually
-		// landed, not from the requested start, so with a large GOP a
-		// relative window stops decoding before reaching to. The read
-		// extends past to by frameProbeMargin so decoder-buffered
-		// frames at the window tail are flushed; the filter below
-		// keeps the result inside [from, to].
-		"-read_intervals", fmt.Sprintf("%s%%%s", formatProbeSeconds(from+origin), formatProbeSeconds(to+frameProbeMargin+origin)),
-		inputPath,
-	}
-	output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput() //nolint:gosec // G204: resolved via exec.LookPath
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, 0, ctx.Err()
+	for attempt := 0; ; attempt++ {
+		margin := frameProbeMargin << attempt
+		args := []string{
+			"-v", "error",
+			"-select_streams", "v:0",
+			"-show_frames",
+			// Normalization uses the origin from the separate format probe
+			// above, not the video stream's own start_time: rebasing against
+			// the stream would shift its first frame to zero even when the
+			// container (and ffmpeg's -ss) starts earlier — audio at zero
+			// with video delayed one second indexes its frames at one
+			// second, not zero.
+			"-show_entries", "frame=best_effort_timestamp_time",
+			"-of", "json",
+			// The absolute-end form A%B is required: ffprobe measures a
+			// +duration interval from where the keyframe seek actually
+			// landed, not from the requested start, so with a large GOP a
+			// relative window stops decoding before reaching to.
+			"-read_intervals", fmt.Sprintf("%s%%%s", formatProbeSeconds(from+origin), formatProbeSeconds(to+margin+origin)),
+			inputPath,
 		}
-		detail := strings.TrimSpace(string(output))
-		if detail == "" {
-			detail = err.Error()
+		output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput() //nolint:gosec // G204: resolved via exec.LookPath
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, 0, ctx.Err()
+			}
+			detail := strings.TrimSpace(string(output))
+			if detail == "" {
+				detail = err.Error()
+			}
+			return nil, 0, fmt.Errorf("probe frame times %q: %s", inputPath, detail)
 		}
-		return nil, 0, fmt.Errorf("probe frame times %q: %s", inputPath, detail)
-	}
-	times, err := parseFrameTimes(output, origin)
-	if err != nil {
-		return nil, 0, err
-	}
-	// -read_intervals reads from the keyframe at or before from, so the
-	// raw document may span more than the requested window: keep only
-	// normalized positions within [from, to].
-	filtered := times[:0]
-	for _, t := range times {
-		if t >= from && t <= to {
-			filtered = append(filtered, t)
+		times, err := parseFrameTimes(output, origin)
+		if err != nil {
+			return nil, 0, err
+		}
+		// -read_intervals reads from the keyframe at or before from, so
+		// the raw document may span more than the requested window: keep
+		// only normalized positions within [from, to].
+		filtered := make([]time.Duration, 0, len(times))
+		for _, t := range times {
+			if t >= from && t <= to {
+				filtered = append(filtered, t)
+			}
+		}
+		// Complete once a frame landed beyond the window end — every
+		// buffered frame at or before to has then been flushed. Windows
+		// at the media end never satisfy this, so the attempt cap serves
+		// their result instead.
+		if attempt >= frameProbeAttempts-1 || len(times) > 0 && times[len(times)-1] > to {
+			return filtered, origin, nil
 		}
 	}
-	return filtered, origin, nil
 }
 
 // inputOrigin reports the input's format start_time — the reference

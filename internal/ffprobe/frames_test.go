@@ -339,6 +339,53 @@ func TestFrameTimesFlushesBufferedFrames(t *testing.T) {
 	}
 }
 
+// Regression: the fixed one-second read extension could not cover
+// every decoder reorder delay — a 1fps mpeg4 source with -bf 2 holds
+// two frames = two seconds in the decoder, and FrameTimes(0, 2s)
+// returned only frame 0 while the caller marked the window complete,
+// so stepping backward from the 2s playhead jumped to 0s instead of
+// 1s. The read now extends until a frame lands beyond the window end,
+// so all three frames are reported. Uses the real toolchain — the
+// buffering is decoder behavior no fake executable can reproduce;
+// mpeg4 is a native encoder, so no codec gating is needed.
+func TestFrameTimesExtendsReadPastDecoderBuffering(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real ffmpeg + ffprobe)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+
+	dir := t.TempDir()
+	input := dir + "/input.mp4"
+	generate := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg on a t.TempDir file
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=4:size=160x120:rate=1",
+		"-c:v", "mpeg4", "-bf", "2", "-q:v", "3", input)
+	if out, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generating test media: %v: %s", err, out)
+	}
+
+	times, _, err := FrameTimes(context.Background(), ffprobePath, input, 0, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []time.Duration{0, time.Second, 2 * time.Second}
+	if len(times) != len(want) {
+		t.Fatalf("frame times = %v, want %v", times, want)
+	}
+	for i := range want {
+		if !durationClose(times[i], want[i], time.Millisecond) {
+			t.Errorf("times[%d] = %s, want %s", i, times[i], want[i])
+		}
+	}
+}
+
 func containsField(fields []string, want string) bool {
 	for _, field := range fields {
 		if field == want {
