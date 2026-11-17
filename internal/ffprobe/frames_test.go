@@ -24,7 +24,7 @@ func writeFakeFFprobe(t *testing.T, dir, document, formatStart string) string {
 		`printf '%s\n' "$@" >> ` + strconv.Quote(argsFile) + "\n" +
 		"case \"$*\" in\n" +
 		"*format=start_time*)\n" +
-		`  printf '{"formats":[{"start_time":"%s"}]}\n' ` + strconv.Quote(formatStart) + "\n" +
+		`  printf '{"format":{"start_time":"%s"}}\n' ` + strconv.Quote(formatStart) + "\n" +
 		"  ;;\n" +
 		"*)\n" +
 		"  cat <<'EOF'\n" + document + "\nEOF\n" +
@@ -230,6 +230,27 @@ func TestFrameTimesGuards(t *testing.T) {
 	}
 	if _, _, err := FrameTimes(context.Background(), "", "/tmp/in.mkv", 0, time.Second); err == nil {
 		t.Error("missing ffprobe must be reported")
+	}
+}
+
+// Regression: real ffprobe emits a single "format" object, not a
+// "formats" array (decoded as an empty document — origin silently 0 and
+// frame windows probed in the wrong domain). Lock the real document
+// shape, including keys beyond start_time, as the decoding contract.
+func TestInputOriginRealDocumentShape(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	document := `{"frames": []}`
+	fake := writeFakeFFprobe(t, dir, document, "10.000000")
+	times, origin, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !durationClose(origin, 10*time.Second, time.Microsecond) {
+		t.Errorf("origin = %s, want 10s", origin)
+	}
+	if len(times) != 0 {
+		t.Errorf("times = %v, want none (empty frame document)", times)
 	}
 }
 

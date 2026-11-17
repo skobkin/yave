@@ -132,20 +132,23 @@ func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration
 		}
 		return 0, fmt.Errorf("probe input origin %q: %s", inputPath, detail)
 	}
+	// ffprobe emits a single format object ("format"), not an array —
+	// decoding a "formats" array always produced an empty document and a
+	// zero origin, probing input-relative windows as if they were
+	// absolute and leaving frame times unnormalized on any
+	// nonzero-origin input.
 	var document struct {
-		Formats []struct {
+		Format struct {
 			StartTime string `json:"start_time"`
-		} `json:"formats"`
+		} `json:"format"`
 	}
 	if err := json.Unmarshal(out, &document); err != nil {
 		return 0, fmt.Errorf("decode ffprobe format JSON: %w", err)
 	}
-	if len(document.Formats) == 0 {
-		return 0, nil
-	}
 	// ParseFloat unlike parseSeconds so a negative container origin
-	// still shifts the window correctly.
-	seconds, err := strconv.ParseFloat(strings.TrimSpace(document.Formats[0].StartTime), 64)
+	// still shifts the window correctly. A missing, "N/A" or unparseable
+	// value errors out and degrades to zero by design.
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(document.Format.StartTime), 64)
 	if err != nil {
 		return 0, nil //nolint:nilerr // "N/A" or unparseable origin degrades to zero by design
 	}
