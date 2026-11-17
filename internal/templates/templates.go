@@ -46,6 +46,20 @@ type Values = Request
 // components. Values.Time must be supplied by the caller to keep preview and
 // execution deterministic.
 func Resolve(template string, values Request) (string, error) {
+	return resolveTemplate(template, values, true)
+}
+
+// ResolveParts expands a template for a multi-part separate export. It
+// is identical to Resolve except that the input-collision check does
+// not apply: the base path is only a naming seed there — every written
+// target carries a _partNN suffix (SegmentPath), so a base equal to the
+// input is harmless, and the per-part targets are validated when the
+// export is planned. Traversal and filename checks still apply.
+func ResolveParts(template string, values Request) (string, error) {
+	return resolveTemplate(template, values, false)
+}
+
+func resolveTemplate(template string, values Request, checkInputCollision bool) (string, error) {
 	if strings.TrimSpace(template) == "" {
 		return "", errors.New("output template is empty")
 	}
@@ -104,8 +118,10 @@ func Resolve(template string, values Request) (string, error) {
 	if err := rejectTraversal(cleaned); err != nil {
 		return "", err
 	}
-	if err := ValidateOutput(inputPath, cleaned); err != nil {
-		return "", err
+	if checkInputCollision {
+		if err := ValidateOutput(inputPath, cleaned); err != nil {
+			return "", err
+		}
 	}
 	return cleaned, nil
 }

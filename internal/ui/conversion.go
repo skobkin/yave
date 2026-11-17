@@ -82,7 +82,16 @@ func (c *Controller) refresh() {
 
 func (c *Controller) startConversion() {
 	p := c.profileFromWidgets()
-	resolved, resolveErr := c.resolveOutput(p, time.Now())
+	// A multi-part separate export never writes the resolved base —
+	// every target carries a _partNN suffix — so its base resolves
+	// without the input-collision check and the per-part targets are
+	// validated instead. Every other mode writes the base itself.
+	resolve := c.resolveOutput
+	trim := c.trimRequest()
+	if trim.Active() && c.trimExportMode == model.TrimExportSeparate && len(trim.Segments) > 1 {
+		resolve = c.resolveOutputParts
+	}
+	resolved, resolveErr := resolve(p, time.Now())
 	result := validation.Validate(p, &c.media, c.caps, c.inputPath, resolved)
 	if c.trimEnabled {
 		result.Merge(validation.ValidateTrim(c.trimSelection, &c.media, p.Video.Encoder))
@@ -418,6 +427,20 @@ func (c *Controller) stopCancelTimer() {
 func (c *Controller) resolveOutput(p model.Profile, at time.Time) (string, error) {
 	width, height := dimensions(p, c.media)
 	return templates.Resolve(p.OutputTemplate, templates.Request{
+		InputPath: c.inputPath, Extension: p.Container, Profile: p.Name,
+		Codec: p.Video.Encoder, Width: width, Height: height, Time: at,
+	})
+}
+
+// resolveOutputParts resolves the naming base for a multi-part separate
+// export. The base is only a seed there — every written target carries
+// a _partNN suffix — so the input-collision check that guards
+// single-target runs is skipped: a template like {dir}/{name}.{ext}
+// stays usable even though the base equals the input, and the per-part
+// targets are validated when the export is planned.
+func (c *Controller) resolveOutputParts(p model.Profile, at time.Time) (string, error) {
+	width, height := dimensions(p, c.media)
+	return templates.ResolveParts(p.OutputTemplate, templates.Request{
 		InputPath: c.inputPath, Extension: p.Container, Profile: p.Name,
 		Codec: p.Video.Encoder, Width: width, Height: height, Time: at,
 	})

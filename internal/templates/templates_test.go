@@ -79,6 +79,33 @@ func TestResolvePreventsTraversal(t *testing.T) {
 	}
 }
 
+// ResolveParts exists for multi-part separate exports, where the base
+// is only a naming seed: a base equal to the input is harmless because
+// every written target carries a _partNN suffix. Resolve must keep
+// rejecting it, and both variants keep rejecting traversal.
+func TestResolvePartsAllowsInputCollision(t *testing.T) {
+	values := Values{
+		InputPath: "/videos/movie.mkv",
+		Extension: "mkv",
+		Profile:   "test",
+		Time:      time.Unix(0, 0),
+	}
+
+	if _, err := Resolve("{dir}/{name}.{ext}", values); err == nil {
+		t.Fatal("Resolve must reject a base equal to the input")
+	}
+	got, err := ResolveParts("{dir}/{name}.{ext}", values)
+	if err != nil {
+		t.Fatalf("ResolveParts rejected the input-colliding base: %v", err)
+	}
+	if got != "/videos/movie.mkv" {
+		t.Fatalf("ResolveParts = %q, want /videos/movie.mkv", got)
+	}
+	if _, err := ResolveParts("{dir}/../outside.{ext}", values); err == nil {
+		t.Fatal("ResolveParts must still reject traversal")
+	}
+}
+
 func TestValidateOutput(t *testing.T) {
 	if err := ValidateOutput("/videos/input.mkv", "/videos/output.mkv"); err != nil {
 		t.Fatal(err)

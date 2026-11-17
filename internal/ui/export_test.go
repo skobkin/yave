@@ -1129,3 +1129,64 @@ func TestRunJobCancellableVerification(t *testing.T) {
 		t.Fatal("staging must be cleaned after cancellation")
 	}
 }
+
+// Regression (Codex review round 4): a multi-part separate export with
+// input movie.mkv and template {dir}/{name}.{ext} was rejected before
+// planning because the resolved base equaled the input — although the
+// export never writes the base, only movie_partNN.mkv targets, which
+// are validated individually. The multi-part run must resolve the base
+// without the input-collision check.
+func TestMultiPartExportResolvesBaseEqualInput(t *testing.T) {
+	c, dir, _ := exportTestController(t)
+	input := filepath.Join(dir, "movie.mkv")
+	writeFile(t, input, "x")
+	c.inputPath = input
+
+	p := exportTestProfile()
+	p.OutputTemplate = "{dir}/{name}.{ext}"
+
+	// The strict resolution still blocks the colliding base (it is a
+	// real target for single-target modes); the part-seeded resolution
+	// accepts it.
+	if _, err := c.resolveOutput(p, time.Unix(0, 0)); err == nil {
+		t.Fatal("strict resolution must reject a base equal to the input")
+	}
+	base, err := c.resolveOutputParts(p, time.Unix(0, 0))
+	if err != nil {
+		t.Fatalf("multi-part resolution rejected the colliding base: %v", err)
+	}
+	if base != input {
+		t.Fatalf("base = %s, want the input path %s", base, input)
+	}
+
+	setTrimSegments(c,
+		model.TimeRange{Start: time.Second, End: 2 * time.Second},
+		model.TimeRange{Start: 3 * time.Second, End: 4 * time.Second},
+	)
+	c.trimExportMode = model.TrimExportSeparate
+	trim := c.trimRequest()
+
+	// The derived targets never collide with the input and never hit a
+	// non-regular file: the run can proceed to planning.
+	targets := exportTargetPaths(model.TrimExportSeparate, trim, base)
+	if len(targets) != 2 {
+		t.Fatalf("targets = %v, want both part paths", targets)
+	}
+	for _, target := range targets {
+		if target == input {
+			t.Fatalf("target %s collides with the input", target)
+		}
+	}
+	if problem := unpublishableTarget(targets); problem != "" {
+		t.Fatalf("targets rejected: %s", problem)
+	}
+
+	job, err := c.buildTrimExportJob(p, base, nil)
+	if err != nil {
+		t.Fatalf("multi-part planning failed with the colliding base: %v", err)
+	}
+	defer job.cleanup()
+	if len(job.stages) != 2 {
+		t.Fatalf("stages = %d, want one encode per part", len(job.stages))
+	}
+}
