@@ -1065,6 +1065,71 @@ func TestBoundaryDisplayWritesDoNotReenterEditing(t *testing.T) {
 	}
 }
 
+// Regression: Set In with an empty or malformed Out entry fired the loud
+// SetRange, whose onRange marks both entries valid and rewrites the
+// opposite one from the last valid value — unblocking conversion while
+// the user's Out text was still invalid, and discarding the in-progress
+// edit. A single-boundary action owns only its own entry and validity
+// flag; the Ctrl+[ / Ctrl+] shortcuts share the handlers.
+func TestSetBoundaryFromPlayheadKeepsOppositeEntryAuthoritative(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.media = model.MediaInfo{Duration: 10 * time.Minute}
+	c.resetTrimSelection()
+	c.trimTimeline.SetDuration(10 * time.Minute)
+	c.setTrimControlsEnabled(true)
+
+	// The user is editing Out: empty text, flagged invalid.
+	c.trimOut.SetText("")
+	c.trimOutValid = false
+	c.trimTimeline.SetPlayhead(30 * time.Second)
+
+	c.setInFromPlayhead()
+	if got := boundaryOf(c.trimSelection, 0); got != 30*time.Second {
+		t.Fatalf("Set In boundary = %s, want 30s", got)
+	}
+	if !c.trimInValid {
+		t.Fatal("Set In must validate the In entry")
+	}
+	if c.trimOutValid {
+		t.Fatal("Set In must not validate the Out entry while its text is invalid")
+	}
+	if c.trimOut.Text != "" {
+		t.Fatalf("Set In rewrote the Out entry: %q, want the user's text preserved", c.trimOut.Text)
+	}
+
+	// Symmetric for Set Out with an in-progress In edit.
+	c.trimIn.SetText("")
+	c.trimInValid = false
+	c.trimTimeline.SetPlayhead(time.Minute)
+	c.setOutFromPlayhead()
+	if got := boundaryOf(c.trimSelection, 1); got != time.Minute {
+		t.Fatalf("Set Out boundary = %s, want 1m", got)
+	}
+	if c.trimInValid {
+		t.Fatal("Set Out must not validate the In entry while its text is invalid")
+	}
+	if c.trimIn.Text != "" {
+		t.Fatalf("Set Out rewrote the In entry: %q, want the user's text preserved", c.trimIn.Text)
+	}
+
+	// Ctrl+[ shares the single-boundary handler (playhead 45s is within
+	// the stored [30s, 1m] range, so the widget's guard passes).
+	c.trimOut.SetText("")
+	c.trimOutValid = false
+	c.trimTimeline.SetPlayhead(45 * time.Second)
+	c.trimTimeline.TypedShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyLeftBracket,
+		Modifier: fyne.KeyModifierControl,
+	})
+	if got := boundaryOf(c.trimSelection, 0); got != 45*time.Second {
+		t.Fatalf("Ctrl+[ boundary = %s, want 45s", got)
+	}
+	if c.trimOutValid || c.trimOut.Text != "" {
+		t.Fatalf("Ctrl+[ disturbed the Out entry: valid=%v text=%q", c.trimOutValid, c.trimOut.Text)
+	}
+}
+
 // Regression: a typed out-of-range boundary was clamped by SetRange and
 // echoed back through onRange, overwriting the typed selection: the
 // field kept showing 00:11:00.000 on a 10-minute input while the stored

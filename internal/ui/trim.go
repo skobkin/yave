@@ -269,7 +269,13 @@ func (c *Controller) setInFromPlayhead() {
 	c.trimInValid = true
 	c.trimSelection = withBoundary(c.trimSelection, at, -1)
 	c.setBoundaryDisplay(c.trimIn, formatTimestamp(at))
-	c.trimTimeline.SetRange(at, boundaryOf(c.trimSelection, 1))
+	// Silent on purpose: a loud SetRange fires onRange, which marks both
+	// entries valid (unblocking conversion while the opposite entry is
+	// empty or invalid) and rewrites it from the last valid value,
+	// discarding the user's in-progress edit. A single-boundary action
+	// owns only its own entry and validity flag — the boundary-entry
+	// path applies the same rule with SetRangeSilent.
+	c.trimTimeline.SetRangeSilent(at, boundaryOf(c.trimSelection, 1))
 	c.updateTrimDurationLabel()
 	c.refresh()
 }
@@ -282,7 +288,7 @@ func (c *Controller) setOutFromPlayhead() {
 	c.trimOutValid = true
 	c.trimSelection = withBoundary(c.trimSelection, -1, at)
 	c.setBoundaryDisplay(c.trimOut, formatTimestamp(at))
-	c.trimTimeline.SetRange(boundaryOf(c.trimSelection, 0), at)
+	c.trimTimeline.SetRangeSilent(boundaryOf(c.trimSelection, 0), at)
 	c.updateTrimDurationLabel()
 	c.refresh()
 }

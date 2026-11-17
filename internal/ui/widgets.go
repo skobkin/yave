@@ -121,6 +121,11 @@ func (c *Controller) createWidgets() {
 	c.trimTimeline.onPlayhead = c.onTimelinePlayhead
 	c.trimTimeline.onRange = c.onTimelineRange
 	c.trimTimeline.onHover = c.onTimelineHover
+	// Ctrl+[ / Ctrl+] go through the same single-boundary handlers as
+	// the Set In/Out buttons, so both entry points keep the opposite
+	// entry's validity flag and in-progress text untouched.
+	c.trimTimeline.onSetIn = c.setInFromPlayhead
+	c.trimTimeline.onSetOut = c.setOutFromPlayhead
 	timestampValidator := func(s string) error {
 		if s == "" {
 			return nil

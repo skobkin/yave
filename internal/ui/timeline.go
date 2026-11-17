@@ -80,6 +80,11 @@ type timeline struct {
 	// onHover fires with the hovered position, or nil when the pointer
 	// leaves the widget.
 	onHover func(*time.Duration)
+	// onSetIn/onSetOut fire for the Ctrl+[ / Ctrl+] shortcuts so the
+	// controller applies a single-boundary update (own entry and
+	// validity flag only). Nil falls back to the widget's loud SetRange.
+	onSetIn  func()
+	onSetOut func()
 }
 
 func newTimeline() *timeline {
@@ -302,11 +307,23 @@ func (t *timeline) setInToPlayhead() {
 	if t.playhead > t.out {
 		return
 	}
+	// The controller's single-boundary handler keeps the opposite entry
+	// authoritative (its validity flag and in-progress text stay
+	// untouched); a loud SetRange would mark both entries valid and
+	// rewrite the other one from the stale stored value.
+	if t.onSetIn != nil {
+		t.onSetIn()
+		return
+	}
 	t.SetRange(t.playhead, t.out)
 }
 
 func (t *timeline) setOutToPlayhead() {
 	if t.playhead < t.in {
+		return
+	}
+	if t.onSetOut != nil {
+		t.onSetOut()
 		return
 	}
 	t.SetRange(t.in, t.playhead)
