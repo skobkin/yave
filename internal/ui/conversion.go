@@ -187,14 +187,18 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 	c.log.SetText(initialLog)
 	stopLogUpdates := c.startRunLogUpdates(runLog, control)
 
+	// With an active trim, ffmpeg's input-side -ss makes out_time
+	// segment-relative, so progress must be measured against the selected
+	// duration, not the whole input. Snapshot it here — run() starts on
+	// the UI thread and the selection is UI-thread state; reading it from
+	// the run goroutine would race with boundary edits and could diverge
+	// from the command already built.
+	duration := c.media.Duration
+	if seg, ok := c.trimRequest().First(); ok {
+		duration = seg.End - seg.Start
+	}
+
 	go func() {
-		// With an active trim, ffmpeg's input-side -ss makes
-		// out_time segment-relative, so progress must be measured
-		// against the selected duration, not the whole input.
-		duration := c.media.Duration
-		if seg, ok := c.trimRequest().First(); ok {
-			duration = seg.End - seg.Start
-		}
 		err := (transcode.Runner{}).Run(control, plan, duration, transcode.Callbacks{
 			OnLog: func(line string) {
 				runLog.AppendLine(line)
