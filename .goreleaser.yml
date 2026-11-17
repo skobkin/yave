@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/goreleaser/goreleaser/v2.18.3/www/static/schema.json
 version: 2
 
 project_name: yave
@@ -42,3 +43,19 @@ changelog:
       - '^refactor(\([^)]*\))!?:'
       - '^style(\([^)]*\))!?:'
       - '^test(\([^)]*\))!?:'
+  # Entries are assigned to groups in array order — the breaking group comes
+  # first so feat!/fix! never fall through to Features/Fixes — while `order`
+  # controls only the render order. Regexps are matched against the bare
+  # commit subject, RE2 syntax.
+  groups:
+    - title: BC Breaking
+      regexp: '^[[:word:]]+(\([^)]*\))?!:'
+      order: 0
+    - title: Features
+      regexp: '^feat(\([^)]*\))?!?:'
+      order: 1
+    - title: Fixes
+      regexp: '^fix(\([^)]*\))?!?:'
+      order: 2
+    - title: Other changes
+      order: 999
