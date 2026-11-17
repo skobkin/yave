@@ -92,8 +92,24 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 	warnings := make([]string, 0)
 	if p.Subtitles.Mode == model.SubtitleCopy {
 		subtitleArgs, subtitleWarnings := subtitleMapping(p.Container, req.Media.SubtitleStreams)
-		args = append(args, subtitleArgs...)
-		warnings = append(warnings, subtitleWarnings...)
+		if req.Trim.Active() && len(subtitleArgs) > 0 {
+			// Copied subtitle events cannot be cut at trim boundaries:
+			// ffmpeg delivers an event active at the seek point in full
+			// and -t gates on packet start times only. A 0–60s event in
+			// a [1s,3s) cut measures the Matroska output at 60s (the
+			// event sets the container duration) and lands mistimed in
+			// MP4 either way. Skip the streams with a warning
+			// (mirroring the incompatible-codec handling in
+			// subtitleMapping) instead of producing a wrong output; only
+			// the mapped, container-compatible streams are dropped — the
+			// skip warnings below would report streams that were never
+			// mapped anyway.
+			warnings = append(warnings,
+				"trimming is active: copied subtitle streams are skipped because subtitle events cannot be cut at trim boundaries; switch subtitles to none or convert without trimming to keep them")
+		} else {
+			args = append(args, subtitleArgs...)
+			warnings = append(warnings, subtitleWarnings...)
+		}
 	}
 
 	videoArgs, err := buildVideoArgs(ve, p.Video, req.Media)

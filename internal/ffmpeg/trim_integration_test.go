@@ -2,6 +2,7 @@ package ffmpeg
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -35,14 +36,24 @@ func TestTrimIntegration(t *testing.T) {
 
 	dir := t.TempDir()
 	input := dir + "/input.mp4"
+	// A subtitle event spanning the whole input: copied subtitle events
+	// cannot be cut at trim boundaries, so a trimmed conversion must
+	// skip the stream (below) rather than let the event set the output
+	// duration.
+	subs := dir + "/subs.srt"
+	if err := os.WriteFile(subs, []byte("1\n00:00:00,000 --> 00:00:06,000\nSpanning event\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// 6-second test pattern with a sine audio track: enough room to cut
 	// [1s, 4s] out of the middle.
 	generate := exec.CommandContext(context.Background(), ffmpegPath, []string{ //nolint:gosec // G204: integration test drives the locally discovered FFmpeg with t.TempDir paths
 		"-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "testsrc2=duration=6:size=320x240:rate=30",
 		"-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+		"-i", subs,
+		"-map", "0:v:0", "-map", "1:a:0", "-map", "2:0",
 		"-c:v", "libx264", "-preset", "ultrafast",
-		"-c:a", "aac", "-shortest",
+		"-c:a", "aac", "-c:s", "mov_text", "-shortest",
 		input,
 	}...)
 	if out, err := generate.CombinedOutput(); err != nil {
@@ -51,6 +62,7 @@ func TestTrimIntegration(t *testing.T) {
 
 	profile := model.BuiltinProfiles()[3] // "x265 Software Archive" — software encoder, no hardware requirements
 	profile.Video.Preset = "ultrafast"
+	profile.Subtitles.Mode = model.SubtitleCopy
 	// Matroska stores unrebased timestamps and reports per-stream
 	// duration as N/A; MP4 durations are exact, so the assertions below
 	// compare real stream durations.
@@ -61,8 +73,12 @@ func TestTrimIntegration(t *testing.T) {
 		InputPath:  input,
 		OutputPath: output,
 		Profile:    profile,
-		Trim:       model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 4 * time.Second}}},
-		Overwrite:  true,
+		Media: model.MediaInfo{
+			VideoStreams:    []model.VideoStream{{Width: 320, Height: 240}},
+			SubtitleStreams: []model.SubtitleStream{{Index: 2, Codec: "mov_text"}},
+		},
+		Trim:      model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 4 * time.Second}}},
+		Overwrite: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -71,10 +87,19 @@ func TestTrimIntegration(t *testing.T) {
 	if out, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("running trimmed conversion: %v: %s", err, out)
 	}
+	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "subtitle streams are skipped") {
+		t.Errorf("plan warnings = %#v, want the trim subtitle-skip warning", plan.Warnings)
+	}
 
 	media, err := ffprobe.Inspect(context.Background(), "ffprobe", output)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The copied subtitle event spans the whole input and cannot be cut:
+	// the trimmed output must have skipped the stream instead of letting
+	// the event set the container duration.
+	if len(media.SubtitleStreams) != 0 {
+		t.Errorf("trimmed output contains subtitle streams: %+v", media.SubtitleStreams)
 	}
 	const tolerance = 700 * time.Millisecond // seek and container rounding slack
 	if want := 3 * time.Second; media.Duration < want-tolerance || media.Duration > want+tolerance {

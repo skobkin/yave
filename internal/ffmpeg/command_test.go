@@ -81,6 +81,66 @@ func TestBuildCommandAllAudioAndMP4SubtitleWarning(t *testing.T) {
 	}
 }
 
+// Copied subtitle events cannot be cut at trim boundaries: ffmpeg
+// delivers an event active at the seek point in full and -t gates on
+// packet start times only, so an event spanning the boundary keeps its
+// whole duration and the output container outlives its video. While
+// trimming is active, compatible copied subtitle streams are skipped
+// with a warning instead of mapped.
+func TestBuildCommandTrimsSkipCopiedSubtitles(t *testing.T) {
+	t.Parallel()
+	media := model.MediaInfo{
+		VideoStreams:    []model.VideoStream{{Width: 1920, Height: 1080}},
+		SubtitleStreams: []model.SubtitleStream{{Index: 2, Codec: "subrip"}},
+	}
+	trim := model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 3 * time.Second}}}
+	profile := model.BuiltinProfiles()[3] // "x265 Software Archive" — software encoder, no device requirements
+	profile.Container = model.ContainerMKV
+	profile.Subtitles.Mode = model.SubtitleCopy
+
+	plan, err := BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Media:      media,
+		Trim:       trim,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsPair(plan.Args, "-map", "0:2?") {
+		t.Errorf("copied subtitle mapped while trimming: %#v", plan.Args)
+	}
+	if containsPair(plan.Args, "-c:s", "copy") {
+		t.Errorf("subtitle copy codec present while trimming: %#v", plan.Args)
+	}
+	if !containsPair(plan.Args, "-map", "0:v:0") || !containsPair(plan.Args, "-map", "0:a:0?") {
+		t.Errorf("video/audio mapping lost: %#v", plan.Args)
+	}
+	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "subtitle streams are skipped") {
+		t.Fatalf("warnings = %#v, want the trim subtitle-skip warning", plan.Warnings)
+	}
+
+	// Without the trim the same profile maps and copies the subtitle.
+	plan, err = BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Media:      media,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPair(plan.Args, "-map", "0:2?") || !containsPair(plan.Args, "-c:s", "copy") {
+		t.Errorf("subtitle copy without a trim broken: %#v", plan.Args)
+	}
+	if len(plan.Warnings) != 0 {
+		t.Errorf("unexpected warnings without a trim: %#v", plan.Warnings)
+	}
+}
+
 func TestVideoCopyDoesNotFilter(t *testing.T) {
 	t.Parallel()
 	profile := model.BuiltinProfiles()[0]
