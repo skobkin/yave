@@ -112,6 +112,14 @@ func (c *Controller) startConversion() {
 	// semantics. The base template is resolved once here so every part
 	// of a multi-segment export shares one {datetime}.
 	targets := exportTargetPaths(c.trimExportMode, c.trimRequest(), resolved)
+	// A target that exists but is not a regular file (typically a
+	// directory) can never be published over — reject the run before
+	// the overwrite dialog instead of failing halfway through a
+	// multi-segment export after every part encoded successfully.
+	if problem := unpublishableTarget(targets); problem != "" {
+		c.showRunError("Validation failed", "Error: "+problem)
+		return
+	}
 	existing := existingPaths(targets)
 	start := func(approved map[string]bool) {
 		job, err := c.buildTrimExportJob(cp, resolved, approved)

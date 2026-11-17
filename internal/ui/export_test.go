@@ -382,6 +382,30 @@ func TestExistingPathsAndPromptMessage(t *testing.T) {
 	}
 }
 
+// Regression (Codex review round 2): a per-part target that exists as a
+// directory (output_part02.mkv/) passed planning and the overwrite
+// prompt, so the export encoded every part and failed only when
+// publishing part 2 — rename and link cannot replace a directory. The
+// run must be rejected before the dialog, before any encode starts.
+func TestUnpublishableTargetRejectsNonRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	regular := filepath.Join(dir, "movie_part01.mkv")
+	writeFile(t, regular, "x")
+	missing := filepath.Join(dir, "movie_part03.mkv")
+	directory := filepath.Join(dir, "movie_part02.mkv")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := unpublishableTarget([]string{missing, regular}); got != "" {
+		t.Fatalf("regular and missing targets rejected: %q", got)
+	}
+	got := unpublishableTarget([]string{regular, directory, missing})
+	if !strings.Contains(got, directory) {
+		t.Fatalf("directory target not named: %q", got)
+	}
+}
+
 // --- plan/job shapes ---
 
 func TestPlanExportShapes(t *testing.T) {

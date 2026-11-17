@@ -439,6 +439,23 @@ func existingPaths(paths []string) []string {
 	return existing
 }
 
+// unpublishableTarget names the first target that exists but cannot be
+// replaced by a publication (a directory, a device node, a FIFO):
+// os.Rename and os.Link both fail on such a path, so a separate-file
+// export would encode every part and then fail halfway through
+// publishing. Checked before the overwrite dialog and before any encode
+// starts. "" means every target is publishable.
+func unpublishableTarget(paths []string) string {
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil && !info.Mode().IsRegular() {
+			return fmt.Sprintf(
+				"output path %s exists and is not a regular file; remove it or change the output template",
+				p)
+		}
+	}
+	return ""
+}
+
 // overwritePromptMessage renders the collective overwrite confirmation
 // body. Approval is scoped to exactly the listed paths; a target that
 // appears after the dialog is published no-clobber and fails loudly on
