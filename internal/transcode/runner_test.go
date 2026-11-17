@@ -225,7 +225,8 @@ func recorderStage(rec *stageRecorder, name string, mode string, outputPath stri
 }
 
 // callbacksFor wires rec into OnStageStart, OnLog, OnStageDone.
-func callbacksFor(rec *stageRecorder, cb Callbacks) Callbacks {
+func callbacksFor(rec *stageRecorder) Callbacks {
+	var cb Callbacks
 	cb.OnStageStart = func(index, total int, stage Stage) {
 		rec.record(fmt.Sprintf("start%d", index))
 	}
@@ -248,7 +249,7 @@ func TestRunSequenceCompletesStagesInOrder(t *testing.T) {
 		recorderStage(rec, "segment 1 of 2", "complete", "/out/part01.mkv"),
 		recorderStage(rec, "segment 2 of 2", "complete", "/out/part02.mkv"),
 	}
-	err := (Runner{}).RunSequence(NewRunControl(), stages, callbacksFor(rec, Callbacks{}))
+	err := (Runner{}).RunSequence(NewRunControl(), stages, callbacksFor(rec))
 	if err != nil {
 		t.Fatalf("RunSequence() error = %v", err)
 	}
@@ -270,7 +271,7 @@ func TestRunSequenceVerifyFailureSkipsRun(t *testing.T) {
 	stages[0].Verify = func(ctx context.Context) error {
 		return errors.New("layout mismatch")
 	}
-	err := (Runner{}).RunSequence(NewRunControl(), stages, callbacksFor(rec, Callbacks{}))
+	err := (Runner{}).RunSequence(NewRunControl(), stages, callbacksFor(rec))
 	if err == nil || !strings.Contains(err.Error(), "joining segments") || !strings.Contains(err.Error(), "layout mismatch") {
 		t.Fatalf("error = %v, want stage-labeled verify failure", err)
 	}
@@ -291,7 +292,7 @@ func TestRunSequencePublishFailureWrapsStageLabel(t *testing.T) {
 	rec := &stageRecorder{}
 	stages := []Stage{recorderStage(rec, "segment 1 of 2", "complete", "/out/part01.mkv")}
 	stages[0].Publish = func() error { return errors.New("target appeared") }
-	err := (Runner{}).RunSequence(NewRunControl(), stages, callbacksFor(rec, Callbacks{}))
+	err := (Runner{}).RunSequence(NewRunControl(), stages, callbacksFor(rec))
 	if err == nil || !strings.Contains(err.Error(), "segment 1 of 2: target appeared") {
 		t.Fatalf("error = %v, want stage-labeled publish failure", err)
 	}
@@ -310,8 +311,8 @@ func TestRunSequenceCancelBeforeStart(t *testing.T) {
 			control := NewRunControl()
 			request(control)
 			stages := []Stage{recorderStage(rec, "segment 1 of 1", "complete", "/out/part01.mkv")}
-			err := (Runner{}).RunSequence(control, stages, callbacksFor(rec, Callbacks{}))
-			if !errors.Is(err, context.Canceled) || err != context.Canceled {
+			err := (Runner{}).RunSequence(control, stages, callbacksFor(rec))
+			if !errors.Is(err, context.Canceled) || err != context.Canceled { //nolint:errorlint // asserts the bare sentinel: errors.Is would also accept wrapped errors
 				t.Fatalf("error = %v, want bare context.Canceled", err)
 			}
 			for _, marker := range rec.snapshot() {
@@ -343,7 +344,7 @@ func TestRunSequenceCancelDuringHangingVerify(t *testing.T) {
 				return ctx.Err()
 			}
 			done := make(chan error, 1)
-			go func() { done <- (Runner{}).RunSequence(control, stages, callbacksFor(rec, Callbacks{})) }()
+			go func() { done <- (Runner{}).RunSequence(control, stages, callbacksFor(rec)) }()
 			var got context.Context
 			select {
 			case got = <-verifyCtx:
@@ -354,7 +355,7 @@ func TestRunSequenceCancelDuringHangingVerify(t *testing.T) {
 				t.Fatal("verify must run under the control's cancel context")
 			}
 			request(control)
-			if err := waitForRun(t, done); err != context.Canceled {
+			if err := waitForRun(t, done); err != context.Canceled { //nolint:errorlint // asserts the bare sentinel: errors.Is would also accept wrapped errors
 				t.Fatalf("error = %v, want bare context.Canceled", err)
 			}
 			if rec.published() != 0 {
@@ -384,8 +385,8 @@ func TestRunSequenceCancelBetweenStages(t *testing.T) {
 		control.RequestCancel()
 		return nil
 	}
-	err := (Runner{}).RunSequence(control, stages, callbacksFor(rec, Callbacks{}))
-	if err != context.Canceled {
+	err := (Runner{}).RunSequence(control, stages, callbacksFor(rec))
+	if err != context.Canceled { //nolint:errorlint // asserts the bare sentinel: errors.Is would also accept wrapped errors
 		t.Fatalf("error = %v, want bare context.Canceled", err)
 	}
 	if rec.published() != 1 {
@@ -402,7 +403,7 @@ func TestRunSequenceCancelDuringRun(t *testing.T) {
 	rec := &stageRecorder{}
 	control := NewRunControl()
 	ready := make(chan struct{})
-	cb := callbacksFor(rec, Callbacks{})
+	cb := callbacksFor(rec)
 	cb.OnLog = func(line string) {
 		if line == "ready" {
 			select {
@@ -418,7 +419,7 @@ func TestRunSequenceCancelDuringRun(t *testing.T) {
 	go func() { done <- (Runner{}).RunSequence(control, stages, cb) }()
 	waitForReady(t, ready)
 	control.RequestCancel()
-	if err := waitForRun(t, done); err != context.Canceled {
+	if err := waitForRun(t, done); err != context.Canceled { //nolint:errorlint // asserts the bare sentinel: errors.Is would also accept wrapped errors
 		t.Fatalf("error = %v, want bare context.Canceled", err)
 	}
 	if rec.published() != 0 {
@@ -442,11 +443,11 @@ func TestRunSequenceCancelBetweenRunAndPublish(t *testing.T) {
 		recorderStage(rec, "segment 2 of 2", "complete", "/out/part02.mkv"),
 	}
 	done := make(chan error, 1)
-	go func() { done <- (Runner{}).RunSequence(control, stages, callbacksFor(rec, Callbacks{})) }()
+	go func() { done <- (Runner{}).RunSequence(control, stages, callbacksFor(rec)) }()
 	<-entered // stage 0's Run finished; RunSequence is parked before Publish
 	control.RequestCancel()
 	close(release)
-	if err := waitForRun(t, done); err != context.Canceled {
+	if err := waitForRun(t, done); err != context.Canceled { //nolint:errorlint // asserts the bare sentinel: errors.Is would also accept wrapped errors
 		t.Fatalf("error = %v, want bare context.Canceled", err)
 	}
 	if rec.published() != 0 {
@@ -478,7 +479,7 @@ func TestRunSequenceCancelAfterPublishCountsOutput(t *testing.T) {
 		return nil
 	}
 	var doneCount int
-	cb := callbacksFor(rec, Callbacks{})
+	cb := callbacksFor(rec)
 	cb.OnStageDone = func(index, total int, stage Stage, err error) {
 		if err == nil {
 			doneCount++

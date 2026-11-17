@@ -702,7 +702,7 @@ func TestWriteConcatList(t *testing.T) {
 	if err := WriteConcatList(list, parts); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(list)
+	raw, err := os.ReadFile(list) //nolint:gosec // G304: reads back the list this test just wrote into its temp dir
 	if err != nil {
 		t.Fatal(err)
 	}

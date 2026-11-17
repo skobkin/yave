@@ -161,13 +161,13 @@ func TestStreamKeysRunsConfiguredProbe(t *testing.T) {
 	dir := t.TempDir()
 	argv := filepath.Join(dir, "argv.txt")
 	script := filepath.Join(dir, "fake-ffprobe")
-	if err := os.WriteFile(script, []byte(
+	if err := os.WriteFile(script, []byte( //nolint:gosec // G306: executable bit required for the fake probe
 		`#!/bin/sh`+"\n"+`printf '%s\n' "$@" >> '`+argv+`'`+"\n"+`cat <<'JSON'`+"\n"+streamKeysFixture+"\n"+`JSON`+"\n",
 	), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(dir, "segment001.mkv")
-	if err := os.WriteFile(target, []byte("media"), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte("media"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := StreamKeys(context.Background(), script, target)
@@ -177,7 +177,7 @@ func TestStreamKeysRunsConfiguredProbe(t *testing.T) {
 	if len(keys) != 2 || keys[0].CodecName != "hevc" {
 		t.Fatalf("keys from fake probe: %#v", keys)
 	}
-	raw, err := os.ReadFile(argv)
+	raw, err := os.ReadFile(argv) //nolint:gosec // G304: reads back the argv file this test just wrote into its temp dir
 	if err != nil {
 		t.Fatal(err)
 	}
