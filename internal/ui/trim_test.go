@@ -1085,7 +1085,7 @@ func TestTimelineCtrlBracketsViaTypedShortcut(t *testing.T) {
 	tl.SetPlayhead(2 * time.Second)
 	tl.SetSegments([]model.TimeRange{{Start: 0, End: tl.Duration()}})
 	var commits int
-	tl.onSegments = func([]model.TimeRange) {
+	tl.onSegments = func([]model.TimeRange, int) {
 		commits++
 	}
 
@@ -1267,7 +1267,7 @@ func TestOnTimelineSegmentsKeepFocusedEntryText(t *testing.T) {
 	if c.trimIn.Text != "00:00" {
 		t.Fatalf("typing echo rewrote the focused entry: %q", c.trimIn.Text)
 	}
-	c.onTimelineSegments([]model.TimeRange{{Start: 0, End: 10 * time.Second}})
+	c.onTimelineSegments([]model.TimeRange{{Start: 0, End: 10 * time.Second}}, -1)
 	if c.trimIn.Text != "00:00" {
 		t.Fatalf("focused entry text rewritten mid-edit: %q", c.trimIn.Text)
 	}
@@ -1277,7 +1277,7 @@ func TestOnTimelineSegmentsKeepFocusedEntryText(t *testing.T) {
 
 	canvas.Focus(c.trimOut)
 	c.trimOut.SetText("")
-	c.onTimelineSegments([]model.TimeRange{{Start: time.Second, End: 9 * time.Second}})
+	c.onTimelineSegments([]model.TimeRange{{Start: time.Second, End: 9 * time.Second}}, -1)
 	if c.trimOut.Text != "" {
 		t.Fatalf("focused out entry rewritten mid-edit: %q", c.trimOut.Text)
 	}
@@ -1308,7 +1308,7 @@ func TestBoundaryDisplayWritesDoNotReenterEditing(t *testing.T) {
 	// Ctrl+[ at 66.667ms commits the exact frame position; the entry
 	// displays its millisecond truncation without feeding it back.
 	c.trimTimeline.SetSegments([]model.TimeRange{{Start: 66667 * time.Microsecond, End: 100 * time.Millisecond}})
-	c.onTimelineSegments(c.trimTimeline.Segments())
+	c.onTimelineSegments(c.trimTimeline.Segments(), -1)
 	if got := segmentBoundary(c.trimSelection, 0, 0); got != 66667*time.Microsecond {
 		t.Fatalf("exact in boundary collapsed to display text: %s, want 66.667ms", got)
 	}
@@ -1335,6 +1335,56 @@ func TestBoundaryDisplayWritesDoNotReenterEditing(t *testing.T) {
 	}
 	if c.trimIn.Text != "" || c.trimOut.Text != "" {
 		t.Fatalf("reset left entry text: %q / %q", c.trimIn.Text, c.trimOut.Text)
+	}
+}
+
+// Regression (Codex review round 1): committing a handle drag replaced
+// the whole authoritative selection with the timeline's clamped display
+// copy, so an out-of-range boundary typed into one segment was silently
+// clamped — and its validation error cleared — when another segment's
+// handle was dragged. A drag commits only the segment it edited; the
+// programmatic echo (SetSegments) keeps the wholesale semantics.
+func TestDragCommitKeepsTypedBoundsOfOtherSegments(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	duration := 30 * time.Second
+	c.media = model.MediaInfo{Duration: duration}
+	c.trimTimeline.SetDuration(duration)
+	setTrimSegments(c,
+		model.TimeRange{Start: 0, End: 5 * time.Second},
+		model.TimeRange{Start: 8 * time.Second, End: 12 * time.Second},
+		model.TimeRange{Start: 15 * time.Second, End: 20 * time.Second},
+	)
+
+	// Type an out-of-range Out into segment 3: the typed value stays
+	// authoritative while the timeline displays the clamped view.
+	c.onTimelineSelected(2)
+	c.trimOut.SetText("00:00:40.000")
+	if got := segmentBoundary(c.trimSelection, 2, 1); got != 40*time.Second {
+		t.Fatalf("typed out boundary = %s, want 40s kept authoritative", got)
+	}
+
+	// Drag segment 1's Out handle to 3s and commit the gesture.
+	c.trimTimeline.drag = tlOut
+	c.trimTimeline.dragSeg = 0
+	c.trimTimeline.segments[0].End = 3 * time.Second
+	c.trimTimeline.release()
+
+	if got := segmentBoundary(c.trimSelection, 0, 1); got != 3*time.Second {
+		t.Fatalf("dragged boundary = %s, want 3s committed", got)
+	}
+	if got := segmentBoundary(c.trimSelection, 2, 1); got != 40*time.Second {
+		t.Fatalf("typed boundary clamped by an unrelated drag: %s, want 40s", got)
+	}
+	if !strings.Contains(c.trimMessage.Text, "exceeds the input duration") {
+		t.Fatalf("validation error lost after unrelated drag: %q", c.trimMessage.Text)
+	}
+
+	// The programmatic echo (SetSegments) still commits the whole
+	// clamped copy: the controller sent it, so it is authoritative.
+	c.onTimelineSegments(c.trimTimeline.Segments(), -1)
+	if got := segmentBoundary(c.trimSelection, 2, 1); got != duration {
+		t.Fatalf("echo boundary = %s, want clamped to %s", got, duration)
 	}
 }
 
@@ -2056,7 +2106,7 @@ func TestTimelineSetSegmentsClampsAndFires(t *testing.T) {
 	tl := newSizedTimeline(t)
 	tl.SetDuration(10 * time.Second)
 	var fired [][]model.TimeRange
-	tl.onSegments = func(segments []model.TimeRange) {
+	tl.onSegments = func(segments []model.TimeRange, _ int) {
 		fired = append(fired, segments)
 	}
 	// Out-of-range bounds clamp; the loud variant fires onSegments with

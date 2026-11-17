@@ -511,16 +511,27 @@ func (c *Controller) focusedBoundaryEntry() fyne.Focusable {
 
 // onTimelineSegments commits new segment boundaries from a handle drag
 // and from programmatic loud SetSegments calls (Reset, boundary
-// shortcuts without a single-boundary handler). An entry that currently
-// holds keyboard focus is the one being typed into — rewriting it
-// mid-edit corrupts the value (valid prefixes like "00:00" parse and
-// apply immediately, and the user's next keystrokes would land inside
-// the reformatted text), so the focused entry keeps its in-flight text
-// as authoritative and only the other entry mirrors the commit. The
-// entries always describe the selected segment.
-func (c *Controller) onTimelineSegments(segments []model.TimeRange) {
+// shortcuts without a single-boundary handler). A drag (edited >= 0)
+// commits only the segment whose handle moved: the timeline's copy
+// displays clamped coordinates, and committing it wholesale would
+// silently clamp away an out-of-range boundary typed into a different
+// segment — the exact silent rewrite setTrimBoundary's SetSegmentsSilent
+// call exists to prevent — and clear that entry's validation error. A
+// programmatic echo (edited < 0) carries the whole authoritative copy
+// back and commits it as-is. An entry that currently holds keyboard
+// focus is the one being typed into — rewriting it mid-edit corrupts
+// the value (valid prefixes like "00:00" parse and apply immediately,
+// and the user's next keystrokes would land inside the reformatted
+// text), so the focused entry keeps its in-flight text as authoritative
+// and only the other entry mirrors the commit. The entries always
+// describe the selected segment.
+func (c *Controller) onTimelineSegments(segments []model.TimeRange, edited int) {
 	c.trimInValid, c.trimOutValid = true, true
-	c.trimSelection = model.TrimSelection{Segments: segments}
+	if edited >= 0 && edited < len(segments) && edited < len(c.trimSelection.Segments) {
+		c.trimSelection.Segments[edited] = segments[edited]
+	} else {
+		c.trimSelection = model.TrimSelection{Segments: segments}
+	}
 	selected := c.trimTimeline.Selected()
 	c.trimSelected = selected
 	if selected < len(segments) {

@@ -88,7 +88,11 @@ type timeline struct {
 	onPlayhead func(time.Duration)
 	// onSegments fires when a handle drag commits (MouseUp / DragEnd)
 	// and when segments are set programmatically via SetSegments.
-	onSegments func(segments []model.TimeRange)
+	// edited is the index of the segment whose handle the drag moved
+	// (>= 0), or -1 for programmatic calls — the controller keeps the
+	// authoritative boundaries of every segment the gesture did not
+	// edit, so a typed out-of-range value elsewhere is not lost.
+	onSegments func(segments []model.TimeRange, edited int)
 	// onSelected fires when a pointer gesture changes the selected
 	// segment (region click or handle grab). Programmatic SetSelected
 	// is controller-driven and fires nothing.
@@ -149,7 +153,7 @@ func (t *timeline) Duration() time.Duration { return t.duration }
 func (t *timeline) SetSegments(segments []model.TimeRange) {
 	t.SetSegmentsSilent(segments)
 	if t.onSegments != nil {
-		t.onSegments(t.Segments())
+		t.onSegments(t.Segments(), -1)
 	}
 }
 
@@ -518,7 +522,7 @@ func (t *timeline) DragEnd() {
 func (t *timeline) release() {
 	if t.drag == tlIn || t.drag == tlOut {
 		if t.onSegments != nil {
-			t.onSegments(t.Segments())
+			t.onSegments(t.Segments(), t.dragSeg)
 		}
 	}
 	t.drag = tlNone
