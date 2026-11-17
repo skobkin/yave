@@ -32,10 +32,12 @@ type frameDocument struct {
 // outlasted any fixed second-based margin). The read therefore
 // extends until a frame lands beyond the window end, proving the
 // buffer flushed; the extension doubles per attempt, bounded by the
-// attempt cap. A read that reaches the media end flushes the decoder
-// completely (an EOF read on a 60s mpeg4 -bf 2 fixture reported every
-// frame, including the reorder-delay tail), so a capped result there
-// is final. A cap reached short of the media end means readahead
+// attempt cap. A read that reaches the selected video stream's end
+// flushes its decoder completely (a read past the last video packet
+// of a 3s-video/15s-audio fixture reported every frame, including the
+// reorder-delay tail), so a capped result there is final — the
+// container duration alone is the wrong reference when audio outlives
+// the video. A cap reached short of the stream end means readahead
 // remained that could still prove completeness — the probe fails
 // rather than return a silently partial window, which the frame index
 // would navigate by frames that do not exist. The [from, to] filter
@@ -79,7 +81,7 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 	// requested window is input-relative (the timeline ffmpeg's
 	// input-side -ss and the UI playhead use). Probe the container's
 	// format start_time and shift the bounds into the absolute domain.
-	origin, duration, err := inputOrigin(ctx, resolved, inputPath)
+	origin, videoEnd, err := inputOrigin(ctx, resolved, inputPath)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -135,15 +137,15 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 			return filtered, origin, nil
 		}
 		// The cap is exhausted without proof. A final read that reached
-		// the media end hit EOF, which flushes the decoder completely —
-		// the result is final and an empty window genuinely holds no
-		// frames. Short of the media end, an extension could still prove
-		// completeness: fail rather than return a silently partial
-		// window. An unknown duration cannot prove EOF, so it keeps the
-		// lenient final result.
+		// the video stream's end exhausted its packets, which flushes
+		// the decoder completely — the result is final and an empty
+		// window genuinely holds no frames. Short of the stream end, an
+		// extension could still prove completeness: fail rather than
+		// return a silently partial window. An unknown stream end cannot
+		// prove EOF, so it keeps the lenient final result.
 		if attempt >= frameProbeAttempts-1 {
-			if duration > 0 && to+margin < duration {
-				return nil, 0, fmt.Errorf("probe frame times %q: window %s..%s incomplete: frames buffered behind the decoder reorder delay outlast the %s read margin, and the media continues past the read end", inputPath, from, to, margin)
+			if videoEnd > 0 && to+margin < videoEnd {
+				return nil, 0, fmt.Errorf("probe frame times %q: window %s..%s incomplete: frames buffered behind the decoder reorder delay outlast the %s read margin, and the video continues past the read end", inputPath, from, to, margin)
 			}
 			return filtered, origin, nil
 		}
@@ -153,15 +155,21 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 // inputOrigin reports the input's format start_time — the reference
 // ffmpeg's input-side -ss seeks against and the domain -read_intervals
 // expects — as an absolute timestamp, together with the input-relative
-// playable duration (normalizeDuration): the window loop needs the
-// media end to tell a final EOF read from one that stopped short with
-// readahead remaining. A plain zero-origin file (the common case)
-// yields 0; a missing, "N/A" or unparseable origin degrades to 0
-// rather than failing the window fetch.
+// end of the selected video stream: the window loop needs that end to
+// tell a final read (past the last video packet, whose decoder flush is
+// complete) from one that stopped short with readahead remaining. The
+// stream end is (stream start_time − origin) + stream duration; the
+// input-relative container duration (normalizeDuration) stands in when
+// the stream reports no usable timestamps — audio outliving the video
+// would otherwise hold windows short of the video end incomplete
+// forever. A plain zero-origin file (the common case) yields 0; a
+// missing, "N/A" or unparseable origin degrades to 0 rather than
+// failing the window fetch.
 func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration, time.Duration, error) {
 	out, err := exec.CommandContext(ctx, resolved, //nolint:gosec // G204: resolved via exec.LookPath
 		"-v", "error",
-		"-show_entries", "format=start_time,duration,format_name",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=start_time,duration:format=start_time,duration,format_name",
 		"-of", "json",
 		inputPath,
 	).CombinedOutput()
@@ -181,6 +189,10 @@ func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration
 	// absolute and leaving frame times unnormalized on any
 	// nonzero-origin input.
 	var document struct {
+		Streams []struct {
+			StartTime string `json:"start_time"`
+			Duration  string `json:"duration"`
+		} `json:"streams"`
 		Format struct {
 			FormatName string `json:"format_name"`
 			Duration   string `json:"duration"`
@@ -196,9 +208,18 @@ func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration
 	// value errors out and degrades to zero by design.
 	seconds, err := strconv.ParseFloat(strings.TrimSpace(document.Format.StartTime), 64)
 	if err != nil {
-		return 0, duration, nil //nolint:nilerr // "N/A" or unparseable origin degrades to zero by design
+		seconds = 0 // "N/A" or unparseable origin degrades to zero by design
 	}
-	return time.Duration(seconds * float64(time.Second)), duration, nil
+	origin := time.Duration(seconds * float64(time.Second))
+	videoEnd := duration
+	if len(document.Streams) > 0 {
+		start, startOK := parseSeconds(document.Streams[0].StartTime)
+		length, lengthOK := parseSeconds(document.Streams[0].Duration)
+		if startOK && lengthOK && length >= 0 {
+			videoEnd = start - origin + length
+		}
+	}
+	return origin, videoEnd, nil
 }
 
 // parseFrameTimes converts raw absolute frame timestamps into

@@ -491,6 +491,110 @@ func TestFrameTimesReportsIncompleteWindowOnSlowBFrames(t *testing.T) {
 	}
 }
 
+// Regression: the completeness reference was the container duration, so
+// audio outliving the video held windows short of the video end
+// incomplete forever — a 3s video with a 15s audio track made
+// FrameTimes(0, 4s) fail although the capped read (4s+4s) passes the
+// video stream's last packet, whose decoder flush is complete. The
+// stream end, not the container duration, proves the window final.
+func TestFrameTimesUsesVideoStreamEndWhenAudioOutlivesVideo(t *testing.T) {
+	dir := t.TempDir()
+	document := `{
+	  "frames": [
+	    {"best_effort_timestamp_time": "0.000000"},
+	    {"best_effort_timestamp_time": "1.000000"},
+	    {"best_effort_timestamp_time": "2.000000"},
+	    {"best_effort_timestamp_time": "2.900000"}
+	  ]
+	}`
+	format := `{"streams":[{"start_time":"0.000000","duration":"3.000000"}],` +
+		`"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"15.000000","start_time":"0.000000"}}`
+	fake := writeFakeFFprobeFormat(t, dir, document, format)
+	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mp4", 0, 4*time.Second)
+	if err != nil {
+		t.Fatalf("window past the video stream end must be final, not an error: %v", err)
+	}
+	want := []time.Duration{0, time.Second, 2 * time.Second, 2900 * time.Millisecond}
+	if len(times) != len(want) {
+		t.Fatalf("times = %v, want %v", times, want)
+	}
+	for i := range want {
+		if !durationClose(times[i], want[i], time.Microsecond) {
+			t.Errorf("times[%d] = %s, want %s", i, times[i], want[i])
+		}
+	}
+}
+
+// The mirrored direction: audio shorter than the video must not end the
+// window early either — with a 3s audio track and a 10s video stream,
+// the capped read (2s+4s) stops before the stream end and readahead
+// remains, so the probe must still fail instead of accepting a partial
+// window justified by the short container duration.
+func TestFrameTimesFailsWhenVideoContinuesPastShortAudioEnd(t *testing.T) {
+	dir := t.TempDir()
+	document := `{
+	  "frames": [
+	    {"best_effort_timestamp_time": "0.000000"},
+	    {"best_effort_timestamp_time": "1.000000"},
+	    {"best_effort_timestamp_time": "2.000000"}
+	  ]
+	}`
+	format := `{"streams":[{"start_time":"0.000000","duration":"10.000000"}],` +
+		`"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"3.000000","start_time":"0.000000"}}`
+	fake := writeFakeFFprobeFormat(t, dir, document, format)
+	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mp4", 0, 2*time.Second)
+	if err == nil {
+		t.Fatalf("times = %v, want an incomplete-window error (the video continues to 10s)", times)
+	}
+}
+
+// Regression, real toolchain: with a 3s video and a 15s audio track,
+// FrameTimes(0, 4s) failed at the attempt cap because the capped reads
+// (5s, 6s, 8s) end before the 15s container duration — although they
+// all pass the video stream's last packet, whose decoder flush is
+// complete (all 90 frames reported). The controller treated that as a
+// permanent indexing failure and disabled frame stepping for the whole
+// input. The video stream's end, not the container duration, proves
+// the window final. 30fps and mpeg4 are native choices, so no codec
+// gating is needed.
+func TestFrameTimesCompletesVideoWindowsWhenAudioOutlivesVideo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real ffmpeg + ffprobe)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+
+	dir := t.TempDir()
+	input := dir + "/input.mp4"
+	generate := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg on a t.TempDir file
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=3:size=160x120:rate=30",
+		"-f", "lavfi", "-i", "sine=duration=15",
+		"-c:v", "mpeg4", "-bf", "2", "-q:v", "3", "-c:a", "aac", input)
+	if out, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generating test media: %v: %s", err, out)
+	}
+
+	times, _, err := FrameTimes(context.Background(), ffprobePath, input, 0, 4*time.Second)
+	if err != nil {
+		t.Fatalf("window past the 3s video end must be final, not an error: %v", err)
+	}
+	// testsrc2 at 30fps for 3s: frames at 0..2.9667s = 90 frames, every
+	// one inside the [0, 4s] window.
+	if len(times) != 90 {
+		t.Fatalf("frame count = %d, want 90 (last %v)", len(times), times[len(times)-1])
+	}
+	if last := times[len(times)-1]; !durationClose(last, 2966*time.Millisecond+667*time.Microsecond, time.Millisecond) {
+		t.Errorf("last frame = %s, want the 2.9667s video tail", last)
+	}
+}
+
 func containsField(fields []string, want string) bool {
 	for _, field := range fields {
 		if field == want {
