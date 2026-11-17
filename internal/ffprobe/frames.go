@@ -183,9 +183,13 @@ func parseFrameTimes(data []byte, origin time.Duration) ([]time.Duration, error)
 
 // parseSeconds parses an ffprobe seconds value ("1.043000", "N/A").
 // Unlike parseDuration it distinguishes malformed input from a valid 0.
+// Negative values are valid input: with a negative container origin,
+// absolute frame timestamps before zero are real positions, and the
+// [from, to] filter after normalization (raw minus origin) is what
+// bounds them onto the UI timeline.
 func parseSeconds(value string) (time.Duration, bool) {
 	seconds, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	if err != nil || seconds < 0 {
+	if err != nil {
 		return 0, false
 	}
 	return time.Duration(seconds * float64(time.Second)), true

@@ -80,6 +80,45 @@ func TestFrameTimesNonZeroStart(t *testing.T) {
 	}
 }
 
+// Regression: frame timestamps were rejected when negative, but with a
+// negative container origin the absolute timestamps before zero are
+// real positions: raw -0.52s with origin -1s normalizes to 0.48s on the
+// UI timeline. Rejecting them before normalization made frame stepping
+// miss every early frame (a negative-origin MPEG-TS reported its first
+// step target as 1s instead of 0.48s).
+func TestFrameTimesNegativeOriginNormalizesNegativeRawTimes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	document := `{
+	  "frames": [
+	    {"best_effort_timestamp_time": "-0.520000"},
+	    {"best_effort_timestamp_time": "-0.486667"},
+	    {"best_effort_timestamp_time": "0.480000"}
+	  ]
+	}`
+	fake := writeFakeFFprobe(t, dir, document, "-1.000000")
+	times, origin, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !durationClose(origin, -time.Second, time.Microsecond) {
+		t.Errorf("origin = %s, want -1s", origin)
+	}
+	want := []time.Duration{
+		480 * time.Millisecond,
+		513333 * time.Microsecond,
+		1480 * time.Millisecond,
+	}
+	if len(times) != len(want) {
+		t.Fatalf("times = %v, want %v", times, want)
+	}
+	for i := range want {
+		if !durationClose(times[i], want[i], time.Microsecond) {
+			t.Errorf("times[%d] = %s, want %s", i, times[i], want[i])
+		}
+	}
+}
+
 // -read_intervals expects absolute container timestamps; the requested
 // window is input-relative and must be shifted by the container's
 // format start_time in both directions (positive and negative origin).
