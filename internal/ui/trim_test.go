@@ -420,6 +420,70 @@ func TestFrameIndexPartialWalkCommitsAtEdge(t *testing.T) {
 	}
 }
 
+// Regression: when the walk position has no neighbor and the video
+// continues past the cached window (a frame gap longer than the fetch
+// window), the controller re-fetched the identical range around the
+// unchanged walk position forever. The stuck branch must anchor the
+// next fetch at the window edge so the window extends outward, while
+// the walk itself stays on the real position.
+func TestFrameIndexAdvancesAnchorAcrossFrameGaps(t *testing.T) {
+	t.Parallel()
+	index := newFrameIndex()
+	duration := 10 * time.Second
+	// Initial window holds only a frame at 0; the next frame is at 5s.
+	index.applyWindow(0, 2*time.Second, []time.Duration{0}, duration)
+	if _, state := index.step(0, 1, duration); state != frameStepLoading {
+		t.Fatalf("state = %v, want loading", state)
+	}
+	// A re-probe of the same range finds nothing: the anchor must move
+	// to the window edge instead of staying at the walk position.
+	at, state := index.applyWindow(0, 2*time.Second, []time.Duration{0}, duration)
+	if state != frameStepLoading || at != 2*time.Second {
+		t.Fatalf("anchor = %s/%v, want 2s/loading (the window edge)", at, state)
+	}
+	if index.pendingAt != 0 || index.pending != 1 {
+		t.Fatalf("walk drifted: pendingAt = %s pending = %d, want 0s/1", index.pendingAt, index.pending)
+	}
+	// A fetch anchored at that edge extends the window; still nothing.
+	if at, state = index.applyWindow(0, 4*time.Second, []time.Duration{0}, duration); state != frameStepLoading || at != 4*time.Second {
+		t.Fatalf("anchor = %s/%v, want 4s/loading", at, state)
+	}
+	// The window reaches the gap's far side and the walk completes.
+	at, state = index.applyWindow(2*time.Second, 6*time.Second, []time.Duration{5 * time.Second}, duration)
+	if state != frameStepMoved || at != 5*time.Second || index.pending != 0 {
+		t.Fatalf("gap walk = %s/%v pending %d, want 5s/moved/0", at, state, index.pending)
+	}
+}
+
+// Regression: an audio tail past the last video frame walks the anchor
+// to the media end; the edge commit must land on the real walk position
+// (the last frame), not on the drifted fetch anchor.
+func TestFrameIndexEdgeCommitStaysAtWalkPosition(t *testing.T) {
+	t.Parallel()
+	index := newFrameIndex()
+	duration := 10 * time.Second
+	index.applyWindow(0, 4*time.Second, []time.Duration{0, 3 * time.Second}, duration)
+	if _, state := index.step(3*time.Second, 1, duration); state != frameStepLoading {
+		t.Fatalf("state = %v, want loading", state)
+	}
+	for _, window := range [][2]time.Duration{
+		{2 * time.Second, 6 * time.Second},
+		{4 * time.Second, 8 * time.Second},
+	} {
+		at, state := index.applyWindow(window[0], window[1], []time.Duration{3 * time.Second}, duration)
+		if state != frameStepLoading {
+			t.Fatalf("window %v: state = %v, want loading (anchor advances)", window, state)
+		}
+		if at != window[1] {
+			t.Fatalf("window %v: anchor = %s, want the window edge %s", window, at, window[1])
+		}
+	}
+	at, state := index.applyWindow(6*time.Second, duration, []time.Duration{3 * time.Second}, duration)
+	if state != frameStepEdge || at != 3*time.Second || index.pending != 0 {
+		t.Fatalf("edge commit = %s/%v pending %d, want 3s/edge/0", at, state, index.pending)
+	}
+}
+
 // A landing fetch with an empty queue applies nothing — in particular it
 // must not move the playhead anywhere (a retired queue must not yank the
 // playhead back to a stale walk position).

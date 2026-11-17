@@ -730,9 +730,20 @@ func (f *frameIndex) applyPending(duration time.Duration) (time.Duration, frameS
 				f.pending = 0
 				return at, frameStepEdge
 			}
+			// The walk position is covered but has no neighbor: the next
+			// frame lies across a gap longer than the window, or after an
+			// audio tail beyond the last video frame. Return the window
+			// edge as the fetch anchor so the controller's next fetch
+			// extends outward — fetching around the unchanged walk
+			// position would re-probe the same range forever. The walk
+			// itself resumes from pendingAt (the real position), so the
+			// eventual edge commit cannot drift off the last frame.
 			f.pendingAt = at
 			f.pending = remaining * dir
-			return at, frameStepLoading
+			if dir > 0 {
+				return f.windowEnd, frameStepLoading
+			}
+			return f.windowStart, frameStepLoading
 		}
 		at = next
 		remaining--
