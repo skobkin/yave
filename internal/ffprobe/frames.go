@@ -62,7 +62,10 @@ const (
 //
 // -read_intervals seeks to the nearest keyframe at or before from, so
 // the raw window may include frames from before from — they are
-// filtered out after normalization. An inaccurate seek (rare) may miss
+// filtered out after normalization. Windows at the input's start
+// (from == 0) never seek: they read from the first packet, because a
+// seek to the first timestamp can land after it and skip the file's
+// decoded head. An inaccurate seek (rare) at a later start may miss
 // edge frames; callers detect the gap and fetch an adjacent window.
 func FrameTimes(ctx context.Context, executable, inputPath string, from, to time.Duration) ([]time.Duration, time.Duration, error) {
 	executable = strings.TrimSpace(executable)
@@ -91,6 +94,22 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 
 	for attempt := 0; ; attempt++ {
 		margin := frameProbeMargin << attempt
+		// The absolute-end form A%B is required: ffprobe measures a
+		// +duration interval from where the keyframe seek actually
+		// landed, not from the requested start, so with a large GOP a
+		// relative window stops decoding before reaching to.
+		interval := fmt.Sprintf("%s%%%s", formatProbeSeconds(from+origin), formatProbeSeconds(to+margin+origin))
+		if from <= 0 {
+			// The window begins at the input's start: read from the first
+			// packet instead of seeking. ffprobe's seek to the first
+			// timestamp can land AFTER it — on an H.264 MP4 copy-cut with
+			// a 3s GOP, -read_intervals 0%3.1 reported frames only from 2s
+			// on, dropping the 60-frame prefix the file decodes from
+			// packet 0 — and the end-coverage completeness proof cannot
+			// see a prefix the read never decoded, so the index would
+			// navigate by a window whose first frame skips the real head.
+			interval = "%" + formatProbeSeconds(to+margin+origin)
+		}
 		args := []string{
 			"-v", "error",
 			"-select_streams", "v:0",
@@ -103,11 +122,7 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 			// second, not zero.
 			"-show_entries", "frame=best_effort_timestamp_time",
 			"-of", "json",
-			// The absolute-end form A%B is required: ffprobe measures a
-			// +duration interval from where the keyframe seek actually
-			// landed, not from the requested start, so with a large GOP a
-			// relative window stops decoding before reaching to.
-			"-read_intervals", fmt.Sprintf("%s%%%s", formatProbeSeconds(from+origin), formatProbeSeconds(to+margin+origin)),
+			"-read_intervals", interval,
 			inputPath,
 		}
 		output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput() //nolint:gosec // G204: resolved via exec.LookPath

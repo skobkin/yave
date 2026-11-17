@@ -94,10 +94,46 @@ func TestFrameTimesNonZeroStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := strings.Fields(string(args))
-	for _, want := range []string{"-select_streams", "v:0", "-show_frames", "-read_intervals", "1.043%5.043"} {
+	// The window starts at 0: the read must not carry the initial seek
+	// (the bare "%end" form) — a seek to the first timestamp can land
+	// after it and silently skip the decoded prefix.
+	for _, want := range []string{"-select_streams", "v:0", "-show_frames", "-read_intervals", "%5.043"} {
 		if !containsField(fields, want) {
 			t.Errorf("args missing %q: %v", want, fields)
 		}
+	}
+}
+
+// The read-interval form follows the window start: a prefix window (from
+// 0) reads from the first packet with the bare "%end" form, because
+// ffprobe's seek to the first timestamp can land after it; a later
+// window keeps the absolute A%B seek form (the origin shifted into A).
+func TestFrameTimesReadIntervalFormFollowsWindowStart(t *testing.T) {
+	document := `{"frames": [{"best_effort_timestamp_time": "1.000000"}]}`
+	cases := []struct {
+		name     string
+		from, to time.Duration
+		want     string
+	}{
+		{"prefix window never seeks", 0, time.Second, "%3.043"},
+		{"later window seeks", time.Second, 2 * time.Second, "2.043%4.043"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			fake := writeFakeFFprobe(t, dir, document, "1.043000")
+			if _, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", tc.from, tc.to); err != nil {
+				t.Fatal(err)
+			}
+			args, err := os.ReadFile(filepath.Join(dir, "ffprobe.args")) //nolint:gosec // G304: path comes from t.TempDir
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := strings.Fields(string(args))
+			if !containsField(fields, tc.want) {
+				t.Errorf("read interval %q missing from args: %v", tc.want, fields)
+			}
+		})
 	}
 }
 
@@ -608,6 +644,58 @@ func TestFrameTimesCompletesVideoWindowsWhenAudioOutlivesVideo(t *testing.T) {
 	}
 	if last := times[len(times)-1]; !durationClose(last, 2966*time.Millisecond+667*time.Microsecond, time.Millisecond) {
 		t.Errorf("last frame = %s, want the 2.9667s video tail", last)
+	}
+}
+
+// Regression, real toolchain: ffprobe's initial seek on the prefix
+// window of an H.264 MP4 copy-cut landed AFTER the requested start —
+// reading [0, 2s] of a cut with a 3s GOP reported frames only from 2s
+// on (the seek landed at 2s), and the end-coverage completeness proof
+// accepted the window. The index then navigated a first Right press
+// straight to the 2s frame, skipping the 60 frames the file decodes
+// from packet 0. Prefix windows now read from the first packet without
+// the seek.
+func TestFrameTimesPrefixWindowOnCopyCutReturnsDecodedHead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real ffmpeg + ffprobe)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+
+	dir := t.TempDir()
+	source := dir + "/source.mp4"
+	generate := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg on a t.TempDir file
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=10:size=160x120:rate=30",
+		"-c:v", "libx264", "-g", "90", "-bf", "2", "-keyint_min", "90",
+		"-sc_threshold", "0", source)
+	if out, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generating test media: %v: %s", err, out)
+	}
+	cut := dir + "/cut.mp4"
+	cutGenerate := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: as above
+		"-hide_banner", "-loglevel", "error",
+		"-ss", "1", "-i", source, "-c", "copy", "-t", "5", cut)
+	if out, err := cutGenerate.CombinedOutput(); err != nil {
+		t.Fatalf("copy-cutting test media: %v: %s", err, out)
+	}
+
+	times, _, err := FrameTimes(context.Background(), ffprobePath, cut, 0, 2*time.Second)
+	if err != nil {
+		t.Fatalf("prefix window of the copy cut: %v", err)
+	}
+	// The cut decodes 30fps from its first packet: frames 0..2.0s.
+	if len(times) != 61 {
+		t.Fatalf("frame count = %d (first %v), want 61 frames 0..2s — a seek overshoot drops the head", len(times), times[0])
+	}
+	if !durationClose(times[0], 0, time.Millisecond) {
+		t.Errorf("first frame = %s, want 0", times[0])
 	}
 }
 
