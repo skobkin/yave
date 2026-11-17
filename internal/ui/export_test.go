@@ -476,6 +476,37 @@ func TestPlanExportShapes(t *testing.T) {
 		}
 	})
 
+	t.Run("relative output gets absolute concat-list entries", func(t *testing.T) {
+		// A template without {dir} resolves to a path relative to the
+		// process working directory, and the staging directory would be
+		// relative with it. The concat demuxer interprets list entries
+		// against the list file's directory, so a relative entry like
+		// "yave-export-X/segment001.mkv" would be re-resolved under the
+		// staging directory again and the join could not open the
+		// intermediates. The job must absolutize the staging directory.
+		c, _, _ := exportTestController(t)
+		t.Chdir(t.TempDir()) // scratch working directory for the relative output
+		setTrimSegments(c, segments[:2]...)
+		c.trimExportMode = model.TrimExportJoin
+		job, err := c.buildTrimExportJob(exportTestProfile(), "movie_joined.mkv", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer job.cleanup()
+		if !filepath.IsAbs(job.tempDir) {
+			t.Fatalf("staging dir = %s, want absolute", job.tempDir)
+		}
+		list := readFile(t, filepath.Join(job.tempDir, "concat.txt"))
+		for _, part := range job.stages[:2] {
+			if !filepath.IsAbs(part.Plan.OutputPath) {
+				t.Fatalf("intermediate %s must be absolute for the concat list", part.Plan.OutputPath)
+			}
+			if !strings.Contains(list, part.Plan.OutputPath) {
+				t.Fatalf("concat list %q misses %s", list, part.Plan.OutputPath)
+			}
+		}
+	})
+
 	t.Run("job attaches publication only to user-visible stages", func(t *testing.T) {
 		c, dir, _ := exportTestController(t)
 		setTrimSegments(c, segments[:2]...)

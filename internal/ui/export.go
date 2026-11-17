@@ -354,6 +354,17 @@ func (c *Controller) buildTrimExportJob(cp model.Profile, baseOutput string, app
 		if err != nil {
 			return nil, fmt.Errorf("create staging directory: %w", err)
 		}
+		// The concat demuxer resolves list entries against the list
+		// file's own directory, so every staged path must be absolute:
+		// a relative output (a template without {dir}) yields a relative
+		// staging directory, and an entry like "yave-export-X/part.mkv"
+		// would be re-resolved as "yave-export-X/yave-export-X/part.mkv"
+		// and the join pass could not open the intermediates. All staged
+		// paths derive from this one value.
+		if dir, err = filepath.Abs(dir); err != nil {
+			_ = os.RemoveAll(dir)
+			return nil, fmt.Errorf("resolve staging directory: %w", err)
+		}
 		job.tempDir = dir
 	}
 	planned, err := c.planExport(exportRequest{
