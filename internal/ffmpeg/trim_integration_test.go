@@ -40,31 +40,7 @@ func TestTrimIntegration(t *testing.T) {
 
 	dir := t.TempDir()
 	input := dir + "/input.mp4"
-	// A subtitle event spanning the whole input: copied subtitle events
-	// cannot be cut at trim boundaries, so a trimmed conversion must
-	// skip the stream (below) rather than let the event set the output
-	// duration.
-	subs := dir + "/subs.srt"
-	if err := os.WriteFile(subs, []byte("1\n00:00:00,000 --> 00:00:06,000\nSpanning event\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// 6-second test pattern with a sine audio track: enough room to cut
-	// [1s, 4s] out of the middle. The 3s GOP forces the demuxer to seek
-	// to the keyframe at 0 for a 1s start, so copied audio carries a
-	// second of preroll — the regression case for the Matroska variant.
-	generate := exec.CommandContext(context.Background(), ffmpegPath, []string{ //nolint:gosec // G204: integration test drives the locally discovered FFmpeg with t.TempDir paths
-		"-hide_banner", "-loglevel", "error",
-		"-f", "lavfi", "-i", "testsrc2=duration=6:size=320x240:rate=30",
-		"-f", "lavfi", "-i", "sine=frequency=440:duration=6",
-		"-i", subs,
-		"-map", "0:v:0", "-map", "1:a:0", "-map", "2:0",
-		"-c:v", "libx264", "-preset", "ultrafast", "-g", "90",
-		"-c:a", "aac", "-c:s", "mov_text", "-shortest",
-		input,
-	}...)
-	if out, err := generate.CombinedOutput(); err != nil {
-		t.Fatalf("generating test media: %v: %s", err, out)
-	}
+	writeTrimFixture(t, ffmpegPath, input, dir+"/subs.srt")
 
 	// Matroska stores unrebased timestamps and reports per-stream
 	// duration as N/A; MP4 durations are exact, so the MP4 variant can
@@ -148,6 +124,38 @@ func TestTrimIntegration(t *testing.T) {
 				t.Errorf("A/V skew = %s, exceeds %s", skew, tolerance)
 			}
 		})
+	}
+}
+
+// writeTrimFixture generates the shared integration fixture: a
+// 6-second testsrc2 pattern with a continuous 440 Hz sine audio track
+// and a subtitle event spanning the whole input. The 3s GOP (-g 90 at
+// 30fps) forces the demuxer to seek to the keyframe at 0 for a mid-file
+// start, so copied cuts snap to keyframes and copied audio carries
+// preroll — the behaviors the trim and join tests exercise. The sine is
+// continuous across the whole duration, so every join boundary sits in
+// audible signal: a gap or dropout there is measurable PCM silence.
+func writeTrimFixture(t *testing.T, ffmpegPath, input, subs string) {
+	t.Helper()
+	// A subtitle event spanning the whole input: copied subtitle events
+	// cannot be cut at trim boundaries, so a trimmed conversion must
+	// skip the stream rather than let the event set the output
+	// duration.
+	if err := os.WriteFile(subs, []byte("1\n00:00:00,000 --> 00:00:06,000\nSpanning event\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	generate := exec.CommandContext(context.Background(), ffmpegPath, []string{ //nolint:gosec // G204: integration test drives the locally discovered FFmpeg with t.TempDir paths
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=6:size=320x240:rate=30",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+		"-i", subs,
+		"-map", "0:v:0", "-map", "1:a:0", "-map", "2:0",
+		"-c:v", "libx264", "-preset", "ultrafast", "-g", "90",
+		"-c:a", "aac", "-c:s", "mov_text", "-shortest",
+		input,
+	}...)
+	if out, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generating test media: %v: %s", err, out)
 	}
 }
 
