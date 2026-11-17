@@ -582,7 +582,15 @@ func (r *timelineRenderer) syncThumbs() {
 		r.thumbs = r.thumbs[:len(r.t.thumbs)]
 	}
 	for i, img := range r.t.thumbs {
-		r.thumbs[i].Image = img
+		if r.thumbs[i].Image != img {
+			r.thumbs[i].Image = img
+			// A parent refresh re-lays-out children but does not
+			// invalidate a child canvas.Image's cached texture when the
+			// cell size is unchanged — thumbnails arriving after the
+			// empty slots were painted would stay blank until a resize.
+			// Refresh the image itself when its content changes.
+			r.thumbs[i].Refresh()
+		}
 	}
 }
 
