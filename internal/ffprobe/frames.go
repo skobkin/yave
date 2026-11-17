@@ -52,10 +52,13 @@ const (
 // normalized against the container's format start_time — the same
 // origin ffmpeg's input-side -ss seeks against — so the values sit on
 // the timeline of ffmpeg's -ss seeks and the UI's [0, duration]
-// playhead; the origin itself is returned as the second value. It reads
-// only the requested window (-read_intervals seeks on the input side),
-// so cost is independent of source length. Timestamps are sorted,
-// "N/A"/missing values skipped, duplicates deduplicated.
+// playhead. The second value is the input-relative end of the video
+// stream (0 when no video-specific end is known): frame stepping must
+// stop there, not at the container duration, which counts an audio
+// tail as video still to come. It reads only the requested window
+// (-read_intervals seeks on the input side), so cost is independent of
+// source length. Timestamps are sorted, "N/A"/missing values skipped,
+// duplicates deduplicated.
 //
 // -read_intervals seeks to the nearest keyframe at or before from, so
 // the raw window may include frames from before from — they are
@@ -134,7 +137,7 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 		// Complete once a frame landed beyond the window end — every
 		// buffered frame at or before to has then been flushed.
 		if len(times) > 0 && times[len(times)-1] > to {
-			return filtered, origin, nil
+			return filtered, videoEnd, nil
 		}
 		// The cap is exhausted without proof. A final read that reached
 		// the video stream's end exhausted its packets, which flushes
@@ -147,7 +150,7 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 			if videoEnd > 0 && to+margin < videoEnd {
 				return nil, 0, fmt.Errorf("probe frame times %q: window %s..%s incomplete: frames buffered behind the decoder reorder delay outlast the %s read margin, and the video continues past the read end", inputPath, from, to, margin)
 			}
-			return filtered, origin, nil
+			return filtered, videoEnd, nil
 		}
 	}
 }

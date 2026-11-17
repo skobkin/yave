@@ -641,6 +641,20 @@ type frameIndex struct {
 	pending   int           // signed queued steps while loading
 	pendingAt time.Duration // position the pending steps apply to
 	capacity  int
+	videoEnd  time.Duration // video stream's end from the latest fetch (0 unknown)
+}
+
+// mediaEnd returns the position frame stepping may not pass: the video
+// stream's end when the probe knows it, else the container duration.
+// The container duration counts an audio tail as video still to come —
+// walking to the edge on a 3s video beside a 1h audio track would
+// otherwise chain ~1800 window fetches through the tail before
+// reporting the edge.
+func (f *frameIndex) mediaEnd(duration time.Duration) time.Duration {
+	if f.videoEnd > 0 {
+		return f.videoEnd
+	}
+	return duration
 }
 
 func newFrameIndex() *frameIndex {
@@ -685,7 +699,8 @@ func (f *frameIndex) step(at time.Duration, dir int, duration time.Duration) (ti
 	// `at` is covered but has no neighbor in the cached frames: either
 	// the video genuinely ends/starts here, or the neighbor lies in the
 	// adjacent window.
-	if dir > 0 && f.windowEnd >= duration || dir < 0 && f.windowStart <= 0 {
+	end := f.mediaEnd(duration)
+	if dir > 0 && f.windowEnd >= end || dir < 0 && f.windowStart <= 0 {
 		return at, frameStepEdge
 	}
 	f.queue(dir, at)
@@ -710,8 +725,14 @@ func (f *frameIndex) covers(at time.Duration) bool {
 }
 
 // applyWindow merges a fetched window and applies any queued steps.
-func (f *frameIndex) applyWindow(from, to time.Duration, times []time.Duration, duration time.Duration) (time.Duration, frameStepState) {
+// videoEnd is the video stream's end the fetch reported (0 unknown);
+// the edge checks stop the walk there instead of at the container
+// duration.
+func (f *frameIndex) applyWindow(from, to time.Duration, times []time.Duration, duration, videoEnd time.Duration) (time.Duration, frameStepState) {
 	f.inflight = false
+	if videoEnd > 0 {
+		f.videoEnd = videoEnd
+	}
 	if from <= f.windowEnd && to >= f.windowStart {
 		// Overlapping/adjacent: merge into one sorted list over the
 		// union range.
@@ -787,7 +808,8 @@ func (f *frameIndex) applyPending(duration time.Duration) (time.Duration, frameS
 		}
 		next, ok := lookupStep(f.times, at, dir)
 		if !ok {
-			if dir > 0 && f.windowEnd >= duration || dir < 0 && f.windowStart <= 0 {
+			end := f.mediaEnd(duration)
+			if dir > 0 && f.windowEnd >= end || dir < 0 && f.windowStart <= 0 {
 				// The actual edge of the video: stop, queue empty.
 				f.pending = 0
 				return at, frameStepEdge
@@ -885,7 +907,7 @@ func (c *Controller) ensureFrameIndex(at time.Duration) {
 	path := c.inputPath
 	probe := c.config.FFmpeg.FFprobePath
 	go func() {
-		times, _, err := c.previews.indexFetch(ctx, probe, path, from, to)
+		times, videoEnd, err := c.previews.indexFetch(ctx, probe, path, from, to)
 		c.dispatchUI(func() {
 			if c.inputGeneration != gen {
 				return
@@ -895,7 +917,7 @@ func (c *Controller) ensureFrameIndex(at time.Duration) {
 				c.setPreviewStatus("Frame-accurate stepping unavailable: " + err.Error())
 				return
 			}
-			at, state := c.previews.index.applyWindow(from, to, times, c.media.Duration)
+			at, state := c.previews.index.applyWindow(from, to, times, c.media.Duration, videoEnd)
 			c.applyFrameStep(at, state)
 		})
 	}()
@@ -988,7 +1010,8 @@ type trimPreviews struct {
 	indexCancel   context.CancelFunc
 
 	// indexFetch reads one frame-timestamp window; seam over
-	// ffprobe.FrameTimes so tests can intercept the fetch.
+	// ffprobe.FrameTimes so tests can intercept the fetch. The second
+	// value is the video stream's end (0 unknown) the walk stops at.
 	indexFetch func(ctx context.Context, executable, inputPath string, from, to time.Duration) ([]time.Duration, time.Duration, error)
 
 	seq          uint64 // newest request wins the display

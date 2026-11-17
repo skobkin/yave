@@ -294,7 +294,7 @@ func TestFrameIndexStepAndPending(t *testing.T) {
 
 	// The window lands: queued steps apply as one atomic walk.
 	times := []time.Duration{0, 100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond}
-	at, state = index.applyWindow(0, 2*time.Second, times, duration)
+	at, state = index.applyWindow(0, 2*time.Second, times, duration, duration)
 	if state != frameStepMoved || at != 300*time.Millisecond {
 		t.Fatalf("after window: at = %s state = %v, want 300ms/moved", at, state)
 	}
@@ -314,7 +314,7 @@ func TestFrameIndexWindowCrossing(t *testing.T) {
 	t.Parallel()
 	index := newFrameIndex()
 	duration := 10 * time.Minute
-	index.applyWindow(0, 2*time.Second, []time.Duration{0, time.Second, 2 * time.Second}, duration)
+	index.applyWindow(0, 2*time.Second, []time.Duration{0, time.Second, 2 * time.Second}, duration, duration)
 
 	// A five-frame jump queued from the window's last frame.
 	for range 5 {
@@ -329,14 +329,14 @@ func TestFrameIndexWindowCrossing(t *testing.T) {
 	// The adjacent window lands with only two more frames: the walk
 	// consumes them and keeps the rest queued for the next window —
 	// never clamped to the cache boundary.
-	at, state := index.applyWindow(2*time.Second, 4*time.Second, []time.Duration{3 * time.Second, 4 * time.Second}, duration)
+	at, state := index.applyWindow(2*time.Second, 4*time.Second, []time.Duration{3 * time.Second, 4 * time.Second}, duration, duration)
 	if state != frameStepLoading || at != 4*time.Second || index.pending != 3 {
 		t.Fatalf("after adjacent window: at = %s state = %v pending = %d, want 4s/loading/3", at, state, index.pending)
 	}
 
 	// The next window completes the walk as one atomic move.
 	at, state = index.applyWindow(4*time.Second, 8*time.Second,
-		[]time.Duration{5 * time.Second, 6 * time.Second, 7 * time.Second, 8 * time.Second}, duration)
+		[]time.Duration{5 * time.Second, 6 * time.Second, 7 * time.Second, 8 * time.Second}, duration, duration)
 	if state != frameStepMoved || at != 7*time.Second || index.pending != 0 {
 		t.Fatalf("after final window: at = %s state = %v pending = %d, want 7s/moved/0", at, state, index.pending)
 	}
@@ -349,7 +349,7 @@ func TestFrameIndexWindowCrossing(t *testing.T) {
 	if _, state = index.step(8*time.Second, 1, duration); state != frameStepLoading {
 		t.Fatalf("past last cached frame = %v, want loading", state)
 	}
-	at, state = index.applyWindow(8*time.Second, duration, []time.Duration{9 * time.Second}, duration)
+	at, state = index.applyWindow(8*time.Second, duration, []time.Duration{9 * time.Second}, duration, duration)
 	if state != frameStepMoved || at != 9*time.Second {
 		t.Fatalf("after final fetch = %s/%v, want 9s/moved", at, state)
 	}
@@ -382,10 +382,41 @@ func TestFrameIndexEmptyWindowAtMediaEnd(t *testing.T) {
 	duration := 30 * time.Second
 	// The window reaches the media end and contains no frame at the
 	// end: stepping forward stops at the edge instead of looping.
-	index.applyWindow(20*time.Second, duration, nil, duration)
+	index.applyWindow(20*time.Second, duration, nil, duration, duration)
 	_, state := index.step(25*time.Second, 1, duration)
 	if state != frameStepEdge {
 		t.Fatalf("state = %v, want edge (no frames after 25s)", state)
+	}
+}
+
+// Regression: the walk's edge check used the container duration, so on
+// an input whose audio outlives its video (3s video, 1h audio) a Right
+// press at the last video frame reported "loading" and chained window
+// fetches through the entire audio tail (~1800 fetches) before ever
+// reporting the edge. The video stream end FrameTimes returns now gates
+// the walk: the edge lands in one step, on the direct path and in a
+// queued walk alike.
+func TestFrameIndexWalkStopsAtVideoStreamEnd(t *testing.T) {
+	t.Parallel()
+	index := newFrameIndex()
+	duration := time.Hour
+	videoEnd := 3 * time.Second
+	index.applyWindow(0, videoEnd,
+		[]time.Duration{0, time.Second, 2 * time.Second, videoEnd}, duration, videoEnd)
+
+	at, state := index.step(videoEnd, 1, duration)
+	if state != frameStepEdge || at != videoEnd || index.pending != 0 {
+		t.Fatalf("step past the last video frame = %s/%v pending %d, want %s/edge/0",
+			at, state, index.pending, videoEnd)
+	}
+
+	// A queued walk that runs into the video end commits the partial
+	// movement and reports the edge — same gate, pending path.
+	index.queue(1, videoEnd)
+	at, state = index.applyPending(duration)
+	if state != frameStepEdge || at != videoEnd || index.pending != 0 {
+		t.Fatalf("walk into the video end = %s/%v pending %d, want %s/edge/0",
+			at, state, index.pending, videoEnd)
 	}
 }
 
@@ -396,7 +427,7 @@ func TestFrameIndexEmptyWindowAtMediaEnd(t *testing.T) {
 func TestFrameIndexPartialWalkCommitsAtEdge(t *testing.T) {
 	index := newFrameIndex()
 	duration := 2 * time.Second
-	index.applyWindow(0, duration, []time.Duration{0, time.Second, 2 * time.Second}, duration)
+	index.applyWindow(0, duration, []time.Duration{0, time.Second, 2 * time.Second}, duration, duration)
 
 	// Four forward steps queued from 1s: only one is possible (2s is the
 	// last frame); the rest run into the media edge.
@@ -431,7 +462,7 @@ func TestFrameIndexPartialWalkCommitsAtEdge(t *testing.T) {
 func TestFrameIndexCancelledWalkCommitsWalkPosition(t *testing.T) {
 	index := newFrameIndex()
 	duration := 10 * time.Second
-	index.applyWindow(0, 2*time.Second, []time.Duration{0, time.Second, 2 * time.Second}, duration)
+	index.applyWindow(0, 2*time.Second, []time.Duration{0, time.Second, 2 * time.Second}, duration, duration)
 
 	// Three Rights from the stale playhead 2s queue a walk of three.
 	for range 3 {
@@ -442,7 +473,7 @@ func TestFrameIndexCancelledWalkCommitsWalkPosition(t *testing.T) {
 	// The fetch lands short: the walk consumes two steps and pauses at
 	// 4s with one step still queued.
 	at, state := index.applyWindow(2*time.Second, 5*time.Second,
-		[]time.Duration{2 * time.Second, 3 * time.Second, 4 * time.Second}, duration)
+		[]time.Duration{2 * time.Second, 3 * time.Second, 4 * time.Second}, duration, duration)
 	if state != frameStepLoading || at != 5*time.Second {
 		t.Fatalf("walk pause = %s/%v, want 5s/loading", at, state)
 	}
@@ -472,7 +503,7 @@ func TestFrameIndexCancelledWalkCommitsWalkPosition(t *testing.T) {
 	// The in-flight window lands with nothing queued: idle, and the
 	// committed playhead stays at the walk position.
 	if _, state := index.applyWindow(3*time.Second, 7*time.Second,
-		[]time.Duration{4 * time.Second, 5 * time.Second}, duration); state != frameStepIdle {
+		[]time.Duration{4 * time.Second, 5 * time.Second}, duration, duration); state != frameStepIdle {
 		t.Fatalf("landing state = %v, want idle", state)
 	}
 	if c.trimTimeline.Playhead() != 4*time.Second {
@@ -491,13 +522,13 @@ func TestFrameIndexAdvancesAnchorAcrossFrameGaps(t *testing.T) {
 	index := newFrameIndex()
 	duration := 10 * time.Second
 	// Initial window holds only a frame at 0; the next frame is at 5s.
-	index.applyWindow(0, 2*time.Second, []time.Duration{0}, duration)
+	index.applyWindow(0, 2*time.Second, []time.Duration{0}, duration, duration)
 	if _, state := index.step(0, 1, duration); state != frameStepLoading {
 		t.Fatalf("state = %v, want loading", state)
 	}
 	// A re-probe of the same range finds nothing: the anchor must move
 	// to the window edge instead of staying at the walk position.
-	at, state := index.applyWindow(0, 2*time.Second, []time.Duration{0}, duration)
+	at, state := index.applyWindow(0, 2*time.Second, []time.Duration{0}, duration, duration)
 	if state != frameStepLoading || at != 2*time.Second {
 		t.Fatalf("anchor = %s/%v, want 2s/loading (the window edge)", at, state)
 	}
@@ -505,11 +536,11 @@ func TestFrameIndexAdvancesAnchorAcrossFrameGaps(t *testing.T) {
 		t.Fatalf("walk drifted: pendingAt = %s pending = %d, want 0s/1", index.pendingAt, index.pending)
 	}
 	// A fetch anchored at that edge extends the window; still nothing.
-	if at, state = index.applyWindow(0, 4*time.Second, []time.Duration{0}, duration); state != frameStepLoading || at != 4*time.Second {
+	if at, state = index.applyWindow(0, 4*time.Second, []time.Duration{0}, duration, duration); state != frameStepLoading || at != 4*time.Second {
 		t.Fatalf("anchor = %s/%v, want 4s/loading", at, state)
 	}
 	// The window reaches the gap's far side and the walk completes.
-	at, state = index.applyWindow(2*time.Second, 6*time.Second, []time.Duration{5 * time.Second}, duration)
+	at, state = index.applyWindow(2*time.Second, 6*time.Second, []time.Duration{5 * time.Second}, duration, duration)
 	if state != frameStepMoved || at != 5*time.Second || index.pending != 0 {
 		t.Fatalf("gap walk = %s/%v pending %d, want 5s/moved/0", at, state, index.pending)
 	}
@@ -522,7 +553,7 @@ func TestFrameIndexEdgeCommitStaysAtWalkPosition(t *testing.T) {
 	t.Parallel()
 	index := newFrameIndex()
 	duration := 10 * time.Second
-	index.applyWindow(0, 4*time.Second, []time.Duration{0, 3 * time.Second}, duration)
+	index.applyWindow(0, 4*time.Second, []time.Duration{0, 3 * time.Second}, duration, duration)
 	if _, state := index.step(3*time.Second, 1, duration); state != frameStepLoading {
 		t.Fatalf("state = %v, want loading", state)
 	}
@@ -530,7 +561,7 @@ func TestFrameIndexEdgeCommitStaysAtWalkPosition(t *testing.T) {
 		{2 * time.Second, 6 * time.Second},
 		{4 * time.Second, 8 * time.Second},
 	} {
-		at, state := index.applyWindow(window[0], window[1], []time.Duration{3 * time.Second}, duration)
+		at, state := index.applyWindow(window[0], window[1], []time.Duration{3 * time.Second}, duration, duration)
 		if state != frameStepLoading {
 			t.Fatalf("window %v: state = %v, want loading (anchor advances)", window, state)
 		}
@@ -538,7 +569,7 @@ func TestFrameIndexEdgeCommitStaysAtWalkPosition(t *testing.T) {
 			t.Fatalf("window %v: anchor = %s, want the window edge %s", window, at, window[1])
 		}
 	}
-	at, state := index.applyWindow(6*time.Second, duration, []time.Duration{3 * time.Second}, duration)
+	at, state := index.applyWindow(6*time.Second, duration, []time.Duration{3 * time.Second}, duration, duration)
 	if state != frameStepEdge || at != 3*time.Second || index.pending != 0 {
 		t.Fatalf("edge commit = %s/%v pending %d, want 3s/edge/0", at, state, index.pending)
 	}
@@ -561,7 +592,7 @@ func TestFrameIndexMergesPressesIntoPendingWalk(t *testing.T) {
 	index := c.previews.index
 	index.applyWindow(0, 4*time.Second, []time.Duration{
 		0, time.Second, 2 * time.Second, 3 * time.Second, 4 * time.Second,
-	}, duration)
+	}, duration, duration)
 	step := func(at time.Duration) (time.Duration, bool) {
 		return c.trimTimeline.stepFrame(at, 1)
 	}
@@ -581,7 +612,7 @@ func TestFrameIndexMergesPressesIntoPendingWalk(t *testing.T) {
 	// sticks (one step left), anchored at the edge. The displayed
 	// playhead is still 4s — loading never commits.
 	at, state := index.applyWindow(4*time.Second, 6*time.Second,
-		[]time.Duration{5 * time.Second, 6 * time.Second}, duration)
+		[]time.Duration{5 * time.Second, 6 * time.Second}, duration, duration)
 	if state != frameStepLoading || at != 6*time.Second || index.pending != 1 || index.pendingAt != 6*time.Second {
 		t.Fatalf("partial walk = %s/%v pending %d at %s, want 6s/loading/1 at 6s", at, state, index.pending, index.pendingAt)
 	}
@@ -597,7 +628,7 @@ func TestFrameIndexMergesPressesIntoPendingWalk(t *testing.T) {
 
 	// The [4,8] fetch lands and the walk completes at 8s.
 	at, state = index.applyWindow(4*time.Second, 8*time.Second,
-		[]time.Duration{7 * time.Second, 8 * time.Second}, duration)
+		[]time.Duration{7 * time.Second, 8 * time.Second}, duration, duration)
 	if state != frameStepMoved || at != 8*time.Second || index.pending != 0 {
 		t.Fatalf("completed walk = %s/%v pending %d, want 8s/moved/0", at, state, index.pending)
 	}
@@ -611,7 +642,7 @@ func TestFrameIndexIdleLandingDoesNotMovePlayhead(t *testing.T) {
 	c.trimTimeline.SetPlayhead(7 * time.Second)
 
 	at, state := c.previews.index.applyWindow(6*time.Second, 8*time.Second,
-		[]time.Duration{6 * time.Second, 7 * time.Second}, c.media.Duration)
+		[]time.Duration{6 * time.Second, 7 * time.Second}, c.media.Duration, c.media.Duration)
 	if state != frameStepIdle || at != 0 {
 		t.Fatalf("landing with no queue = %s/%v, want 0/idle", at, state)
 	}
@@ -1193,7 +1224,7 @@ func TestManualSeekRetiresQueuedFrameWalk(t *testing.T) {
 
 	// The window lands: nothing is applied, the playhead stays.
 	at, state := c.previews.index.applyWindow(4*time.Second, 6*time.Second,
-		[]time.Duration{5 * time.Second, 5*time.Second + 33*time.Millisecond}, c.media.Duration)
+		[]time.Duration{5 * time.Second, 5*time.Second + 33*time.Millisecond}, c.media.Duration, c.media.Duration)
 	if state != frameStepIdle {
 		t.Fatalf("landing state = %v, want idle", state)
 	}
@@ -1233,13 +1264,13 @@ func TestFrameIndexEvictsAwayFromBackwardWalk(t *testing.T) {
 
 	// A full window near the middle.
 	index.applyWindow(20*time.Second, 24*time.Second,
-		[]time.Duration{20 * time.Second, 21 * time.Second, 22 * time.Second, 23 * time.Second}, duration)
+		[]time.Duration{20 * time.Second, 21 * time.Second, 22 * time.Second, 23 * time.Second}, duration, duration)
 
 	// The user steps backward past the window edge; the adjacent (lower)
 	// window lands and merges past capacity.
 	index.queue(-1, 20*time.Second)
 	at, state := index.applyWindow(18*time.Second, 20*time.Second,
-		[]time.Duration{17 * time.Second, 18 * time.Second, 19 * time.Second}, duration)
+		[]time.Duration{17 * time.Second, 18 * time.Second, 19 * time.Second}, duration, duration)
 	if state != frameStepMoved || at != 19*time.Second {
 		t.Fatalf("backward walk = %s/%v, want 19s/moved", at, state)
 	}
@@ -1251,10 +1282,10 @@ func TestFrameIndexEvictsAwayFromBackwardWalk(t *testing.T) {
 	forward := newFrameIndex()
 	forward.capacity = 4
 	forward.applyWindow(20*time.Second, 24*time.Second,
-		[]time.Duration{20 * time.Second, 21 * time.Second, 22 * time.Second, 23 * time.Second}, duration)
+		[]time.Duration{20 * time.Second, 21 * time.Second, 22 * time.Second, 23 * time.Second}, duration, duration)
 	forward.queue(1, 23*time.Second)
 	forward.applyWindow(23*time.Second, 25*time.Second,
-		[]time.Duration{24 * time.Second, 25 * time.Second}, duration)
+		[]time.Duration{24 * time.Second, 25 * time.Second}, duration, duration)
 	if forward.windowStart != 22*time.Second {
 		t.Fatalf("forward eviction windowStart = %s, want 22s (low end dropped)", forward.windowStart)
 	}
@@ -1263,7 +1294,7 @@ func TestFrameIndexEvictsAwayFromBackwardWalk(t *testing.T) {
 func TestResetTrimForNewInputClearsState(t *testing.T) {
 	c := testTrimController(t)
 	c.trimEnable.SetChecked(true)
-	c.previews.index.applyWindow(0, time.Second, []time.Duration{0, time.Second}, c.media.Duration)
+	c.previews.index.applyWindow(0, time.Second, []time.Duration{0, time.Second}, c.media.Duration, c.media.Duration)
 	c.previews.cache.Put(time.Second, image.NewRGBA(image.Rect(0, 0, 2, 2)))
 	c.previews.stripRunning = true
 
@@ -1650,7 +1681,7 @@ func TestFrameIndexEvictsAroundPendingPosition(t *testing.T) {
 	index.capacity = 5
 	duration := 60 * time.Second
 	index.applyWindow(10*time.Second, 20*time.Second,
-		[]time.Duration{10 * time.Second, 12 * time.Second, 14 * time.Second, 16 * time.Second, 18 * time.Second, 20 * time.Second}, duration)
+		[]time.Duration{10 * time.Second, 12 * time.Second, 14 * time.Second, 16 * time.Second, 18 * time.Second, 20 * time.Second}, duration, duration)
 
 	// Right from 9s: the walk queues at 9s, below the window start.
 	if _, state := index.step(9*time.Second, 1, duration); state != frameStepLoading {
@@ -1660,7 +1691,7 @@ func TestFrameIndexEvictsAroundPendingPosition(t *testing.T) {
 	// half must be the low one around pendingAt 9s — not the front
 	// eviction the forward direction used to pick.
 	at, state := index.applyWindow(7*time.Second, 11*time.Second,
-		[]time.Duration{7 * time.Second, 8 * time.Second, 9 * time.Second, 10 * time.Second, 11 * time.Second}, duration)
+		[]time.Duration{7 * time.Second, 8 * time.Second, 9 * time.Second, 10 * time.Second, 11 * time.Second}, duration, duration)
 	if state != frameStepMoved || at != 10*time.Second {
 		t.Fatalf("walk = %s/%v, want 10s/moved", at, state)
 	}

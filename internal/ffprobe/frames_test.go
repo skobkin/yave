@@ -68,12 +68,16 @@ func TestFrameTimesNonZeroStart(t *testing.T) {
 	  ]
 	}`
 	fake := writeFakeFFprobe(t, dir, document, "1.043000")
-	times, start, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 3*time.Second)
+	times, videoEnd, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !durationClose(start, 1043*time.Millisecond, time.Microsecond) {
-		t.Errorf("start = %s, want 1.043s", start)
+	// The fake's format document carries no duration and no DURATION
+	// tag: no video-specific end is known, and 0 reports that. The
+	// origin shift itself is asserted through the normalized frame
+	// times and the probe window below.
+	if videoEnd != 0 {
+		t.Errorf("videoEnd = %s, want 0 (unknown)", videoEnd)
 	}
 	// Values come from float seconds strings; compare within 1 µs.
 	want := []time.Duration{0, 33333 * time.Microsecond, 66667 * time.Microsecond}
@@ -113,12 +117,12 @@ func TestFrameTimesNegativeOriginNormalizesNegativeRawTimes(t *testing.T) {
 	  ]
 	}`
 	fake := writeFakeFFprobe(t, dir, document, "-1.000000")
-	times, origin, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 2*time.Second)
+	times, videoEnd, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !durationClose(origin, -time.Second, time.Microsecond) {
-		t.Errorf("origin = %s, want -1s", origin)
+	if videoEnd != 0 {
+		t.Errorf("videoEnd = %s, want 0 (unknown: no duration in the fake)", videoEnd)
 	}
 	want := []time.Duration{
 		480 * time.Millisecond,
@@ -290,12 +294,15 @@ func TestInputOriginRealDocumentShape(t *testing.T) {
 	dir := t.TempDir()
 	document := `{"frames": []}`
 	fake := writeFakeFFprobe(t, dir, document, "10.000000")
-	times, origin, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, time.Second)
+	times, videoEnd, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !durationClose(origin, 10*time.Second, time.Microsecond) {
-		t.Errorf("origin = %s, want 10s", origin)
+	// The fake has a start_time but no duration and no DURATION tag, so
+	// no video-specific end is knowable and 0 reports that; the origin
+	// itself is exercised through the translated probe window.
+	if videoEnd != 0 {
+		t.Errorf("videoEnd = %s, want 0 (unknown)", videoEnd)
 	}
 	if len(times) != 0 {
 		t.Errorf("times = %v, want none (empty frame document)", times)
@@ -441,15 +448,18 @@ func TestFrameTimesAcceptsFinalWindowAtMediaEnd(t *testing.T) {
 	}`
 	format := `{"format":{"format_name":"matroska,webm","duration":"62.000000","start_time":"2.000000"}}`
 	fake := writeFakeFFprobeFormat(t, dir, document, format)
-	times, origin, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 55*time.Second, 57*time.Second)
+	times, videoEnd, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 55*time.Second, 57*time.Second)
 	if err != nil {
 		t.Fatalf("window at media end must be final, not an error: %v", err)
 	}
 	if len(times) != 0 {
 		t.Errorf("times = %v, want none inside [55s, 57s]", times)
 	}
-	if !durationClose(origin, 2*time.Second, time.Microsecond) {
-		t.Errorf("origin = %s, want 2s", origin)
+	// The video end is input-relative: the Matroska duration is absolute
+	// (62s on the container's line), so 2s of origin comes off — 60s,
+	// which the 57s+4s final read covers.
+	if !durationClose(videoEnd, 60*time.Second, time.Microsecond) {
+		t.Errorf("videoEnd = %s, want 60s", videoEnd)
 	}
 }
 
@@ -510,9 +520,15 @@ func TestFrameTimesUsesVideoStreamEndWhenAudioOutlivesVideo(t *testing.T) {
 	format := `{"streams":[{"start_time":"0.000000","duration":"3.000000"}],` +
 		`"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"15.000000","start_time":"0.000000"}}`
 	fake := writeFakeFFprobeFormat(t, dir, document, format)
-	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mp4", 0, 4*time.Second)
+	times, videoEnd, err := FrameTimes(context.Background(), fake, "/tmp/in.mp4", 0, 4*time.Second)
 	if err != nil {
 		t.Fatalf("window past the video stream end must be final, not an error: %v", err)
+	}
+	// The reported end is the video stream's (3s), not the container's
+	// 15s — the frame walk stops at the stream end, not in the audio
+	// tail.
+	if !durationClose(videoEnd, 3*time.Second, time.Microsecond) {
+		t.Errorf("videoEnd = %s, want 3s", videoEnd)
 	}
 	want := []time.Duration{0, time.Second, 2 * time.Second, 2900 * time.Millisecond}
 	if len(times) != len(want) {
@@ -628,9 +644,14 @@ func TestFrameTimesUsesDurationTagWhenStreamDurationMissing(t *testing.T) {
 			format := `{"streams":[{"start_time":"` + tc.origin + `","tags":{"DURATION":"` + tc.tag + `"}}],` +
 				`"format":{"format_name":"matroska,webm","duration":"18.000000","start_time":"` + tc.origin + `"}}`
 			fake := writeFakeFFprobeFormat(t, dir, document, format)
-			times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 4*time.Second)
+			times, videoEnd, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 0, 4*time.Second)
 			if err != nil {
 				t.Fatalf("window past the tagged video end must be final, not an error: %v", err)
+			}
+			// The tag is an absolute end position: 3s at origin 0, 13s at
+			// origin 10 — both input-relative video ends of 3s.
+			if !durationClose(videoEnd, 3*time.Second, time.Microsecond) {
+				t.Errorf("videoEnd = %s, want 3s", videoEnd)
 			}
 			want := []time.Duration{0, time.Second, 2 * time.Second, 2900 * time.Millisecond}
 			if len(times) != len(want) {
