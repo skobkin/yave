@@ -752,26 +752,67 @@ func (f *frameIndex) applyWindow(from, to time.Duration, times []time.Duration, 
 		f.windowStart, f.windowEnd = from, to
 	}
 	if len(f.times) > f.capacity {
-		drop := len(f.times) - f.capacity
-		// Keep the contiguous half around the walk position, not around
-		// the walk direction: a Right walk parked just below windowStart
-		// fetched the low-end frames it needed, and front eviction threw
-		// exactly those away — applyPending found its position
-		// uncovered, re-fetched the identical range, and every landing
-		// evicted it again, an unbounded probe loop (the mirror held for
-		// a Left walk just above windowEnd). Evicting the far side keeps
-		// pendingAt covered in both directions; the backward-direction
-		// case this replaces is the one where pendingAt lies low, so the
-		// retained side is the same.
-		if f.pendingAt <= (f.windowStart+f.windowEnd)/2 {
-			f.times = f.times[:len(f.times)-drop]
-			f.windowEnd = f.times[len(f.times)-1]
-		} else {
-			f.times = f.times[drop:]
+		// The retained slice must leave the pending walk able to move:
+		// anchored at the walk position and extending in the walk
+		// direction, so the neighbor applyPending needs survives the
+		// trim. Keeping the half of the window the walk position lies in
+		// (the earlier rule) looped on dense sources, where a single
+		// fetch window holds more frames than the capacity (2500fps in a
+		// 2s window vs 4096 entries): the kept half ended exactly at
+		// pendingAt, the walk's neighbor fell in the evicted half, and
+		// every landing re-fetched and re-evicted the identical range
+		// forever. An earlier rule still — plain front/back eviction by
+		// walk direction — dropped the frames a walk parked outside the
+		// window had just fetched, the same loop shape. When no frame
+		// sits at-or-across the walk position, the midpoint fallback
+		// keeps the contiguous half around it.
+		total := len(f.times)
+		start, end := 0, total
+		switch {
+		case f.pending > 0:
+			if p := lastFrameAtOrBefore(f.times, f.pendingAt); p >= 0 {
+				start, end = p, min(p+f.capacity, total)
+			}
+		case f.pending < 0:
+			if q := firstFrameAtOrAfter(f.times, f.pendingAt); q >= 0 {
+				start, end = max(q+1-f.capacity, 0), q+1
+			}
+		default:
+			drop := total - f.capacity
+			if f.pendingAt <= (f.windowStart+f.windowEnd)/2 {
+				end = total - drop
+			} else {
+				start = drop
+			}
+		}
+		f.times = f.times[start:end]
+		// A clamped edge marks the frames dropped beyond it as unknown
+		// again; a whole kept side keeps the fetched bound, preserving
+		// the knowledge that its gap holds no frames.
+		if start > 0 {
 			f.windowStart = f.times[0]
+		}
+		if end < total {
+			f.windowEnd = f.times[len(f.times)-1]
 		}
 	}
 	return f.applyPending(duration)
+}
+
+// lastFrameAtOrBefore returns the index of the last cached frame at or
+// before `at`, or -1 when every frame lies after it. times is sorted.
+func lastFrameAtOrBefore(times []time.Duration, at time.Duration) int {
+	return sort.Search(len(times), func(i int) bool { return times[i] > at }) - 1
+}
+
+// firstFrameAtOrAfter returns the index of the first cached frame at or
+// after `at`, or -1 when every frame lies before it. times is sorted.
+func firstFrameAtOrAfter(times []time.Duration, at time.Duration) int {
+	i := sort.Search(len(times), func(i int) bool { return times[i] >= at })
+	if i == len(times) {
+		return -1
+	}
+	return i
 }
 
 // applyError marks indexing failed: frame stepping becomes unavailable

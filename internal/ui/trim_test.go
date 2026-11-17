@@ -1255,8 +1255,8 @@ func TestResetRetiresQueuedFrameWalk(t *testing.T) {
 // oldest timestamps — exactly the low-end frames the pending backward
 // walk had just fetched. The walk target then sat outside the window,
 // re-queued, the same window was fetched and evicted again: an unbounded
-// probe loop with no progress. Eviction now moves away from the pending
-// walk target.
+// probe loop with no progress. Eviction now anchors the retained slice
+// at the walk position and extends it in the walk direction.
 func TestFrameIndexEvictsAwayFromBackwardWalk(t *testing.T) {
 	index := newFrameIndex()
 	index.capacity = 4
@@ -1267,7 +1267,9 @@ func TestFrameIndexEvictsAwayFromBackwardWalk(t *testing.T) {
 		[]time.Duration{20 * time.Second, 21 * time.Second, 22 * time.Second, 23 * time.Second}, duration, duration)
 
 	// The user steps backward past the window edge; the adjacent (lower)
-	// window lands and merges past capacity.
+	// window lands and merges past capacity. The retained slice ends at
+	// the walk position and reaches backward, so the fetched low frames
+	// survive and the walk moves.
 	index.queue(-1, 20*time.Second)
 	at, state := index.applyWindow(18*time.Second, 20*time.Second,
 		[]time.Duration{17 * time.Second, 18 * time.Second, 19 * time.Second}, duration, duration)
@@ -1278,7 +1280,8 @@ func TestFrameIndexEvictsAwayFromBackwardWalk(t *testing.T) {
 		t.Fatalf("windowStart = %s, want the just-fetched 18s (low end kept)", index.windowStart)
 	}
 
-	// Forward walks keep the existing low-end eviction.
+	// Forward walks anchor the same way: the slice starts at the walk
+	// position and reaches forward, dropping the low end.
 	forward := newFrameIndex()
 	forward.capacity = 4
 	forward.applyWindow(20*time.Second, 24*time.Second,
@@ -1286,8 +1289,8 @@ func TestFrameIndexEvictsAwayFromBackwardWalk(t *testing.T) {
 	forward.queue(1, 23*time.Second)
 	forward.applyWindow(23*time.Second, 25*time.Second,
 		[]time.Duration{24 * time.Second, 25 * time.Second}, duration, duration)
-	if forward.windowStart != 22*time.Second {
-		t.Fatalf("forward eviction windowStart = %s, want 22s (low end dropped)", forward.windowStart)
+	if forward.windowStart != 23*time.Second {
+		t.Fatalf("forward eviction windowStart = %s, want 23s (anchored at the walk position)", forward.windowStart)
 	}
 }
 
@@ -1674,8 +1677,8 @@ func TestPreviewStatusKeepsIndexingFailure(t *testing.T) {
 // frames around pendingAt, and the front eviction threw exactly those
 // away — applyPending found its position uncovered, re-fetched the
 // identical range, and every landing evicted it again: stepping stuck
-// while ffprobe was spawned forever. Eviction now keeps the half of
-// the window the walk position lies in.
+// while ffprobe was spawned forever. Eviction now anchors the retained
+// slice at the walk position, extending in the walk direction.
 func TestFrameIndexEvictsAroundPendingPosition(t *testing.T) {
 	index := newFrameIndex()
 	index.capacity = 5
@@ -1688,14 +1691,47 @@ func TestFrameIndexEvictsAroundPendingPosition(t *testing.T) {
 		t.Fatalf("state = %v, want loading", state)
 	}
 	// The fetch lands [7s, 11s]; merged over capacity, the retained
-	// half must be the low one around pendingAt 9s — not the front
-	// eviction the forward direction used to pick.
+	// slice starts at the walk position 9s and reaches forward, keeping
+	// the walk's neighbor and the frames the walk is heading into.
 	at, state := index.applyWindow(7*time.Second, 11*time.Second,
 		[]time.Duration{7 * time.Second, 8 * time.Second, 9 * time.Second, 10 * time.Second, 11 * time.Second}, duration, duration)
 	if state != frameStepMoved || at != 10*time.Second {
 		t.Fatalf("walk = %s/%v, want 10s/moved", at, state)
 	}
-	if index.windowStart != 7*time.Second || index.windowEnd != 11*time.Second {
-		t.Fatalf("retained window = [%s, %s], want [7s, 11s]", index.windowStart, index.windowEnd)
+	if index.windowStart != 9*time.Second || index.windowEnd != 14*time.Second {
+		t.Fatalf("retained window = [%s, %s], want [9s, 14s]", index.windowStart, index.windowEnd)
+	}
+}
+
+// Regression: when a single fetch window holds more frames than the
+// cache capacity (a 2s window at 2500fps against 4096 entries), the
+// midpoint rule kept the half ending exactly at the walk position —
+// the walk's neighbor sat in the evicted half, the landing re-fetched
+// the identical range and re-evicted the neighbor, and pressing Right
+// looped ffprobe forever with no movement. The anchored slice keeps
+// the neighbor and the walk moves in one landing.
+func TestFrameIndexEvictionKeepsWalkNeighborOnDenseSources(t *testing.T) {
+	t.Parallel()
+	index := newFrameIndex()
+	index.capacity = 4
+	duration := time.Minute
+
+	// A dense source: the initial window holds more frames than fit.
+	index.applyWindow(0, 200*time.Millisecond,
+		[]time.Duration{0, 50 * time.Millisecond, 100 * time.Millisecond, 150 * time.Millisecond, 200 * time.Millisecond}, duration, duration)
+
+	// Right at the cached end 150ms: no forward neighbor, fetch queued.
+	if _, state := index.step(150*time.Millisecond, 1, duration); state != frameStepLoading {
+		t.Fatalf("state = %v, want loading", state)
+	}
+	// The adjacent window lands and merges over capacity: the retained
+	// slice starts at the walk position 150ms and reaches forward.
+	at, state := index.applyWindow(150*time.Millisecond, 350*time.Millisecond,
+		[]time.Duration{
+			150 * time.Millisecond, 200 * time.Millisecond, 250 * time.Millisecond,
+			300 * time.Millisecond, 350 * time.Millisecond,
+		}, duration, duration)
+	if state != frameStepMoved || at != 200*time.Millisecond {
+		t.Fatalf("dense walk = %s/%v, want 200ms/moved (neighbor retained)", at, state)
 	}
 }
