@@ -112,3 +112,30 @@ func TestValidateOutputRejectsSameExistingFile(t *testing.T) {
 		t.Fatal("ValidateOutput() accepted a hard link to the source")
 	}
 }
+
+func TestSegmentPath(t *testing.T) {
+	tests := []struct {
+		name  string
+		path  string
+		index int
+		count int
+		want  string
+	}{
+		{name: "single segment unchanged", path: "/out/movie.mkv", index: 1, count: 1, want: "/out/movie.mkv"},
+		{name: "zero count unchanged", path: "/out/movie.mkv", index: 1, count: 0, want: "/out/movie.mkv"},
+		{name: "two digits for small counts", path: "/out/movie.mkv", index: 1, count: 3, want: "/out/movie_part01.mkv"},
+		{name: "second part", path: "/out/movie.mkv", index: 2, count: 3, want: "/out/movie_part02.mkv"},
+		{name: "width grows at ten parts", path: "/out/movie.mkv", index: 10, count: 12, want: "/out/movie_part10.mkv"},
+		{name: "width grows at hundred parts", path: "/out/movie.mkv", index: 1, count: 100, want: "/out/movie_part001.mkv"},
+		{name: "extension without dot prefix", path: "clip.mp4", index: 2, count: 2, want: "clip_part02.mp4"},
+		{name: "no extension appends", path: "/out/movie", index: 1, count: 2, want: "/out/movie_part01"},
+		{name: "dotfile keeps suffix at end", path: "/out/.hidden", index: 1, count: 2, want: "/out/.hidden_part01"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SegmentPath(tt.path, tt.index, tt.count); got != tt.want {
+				t.Fatalf("SegmentPath(%q, %d, %d) = %q, want %q", tt.path, tt.index, tt.count, got, tt.want)
+			}
+		})
+	}
+}

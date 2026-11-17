@@ -189,6 +189,41 @@ func sanitizeDimension(value int) string {
 	return strconv.Itoa(value)
 }
 
+// SegmentPath returns the output path for segment index (1-based) of a
+// separate multi-segment export: path with a deterministic _partNN suffix
+// inserted before the extension. A count of one or less returns path
+// unchanged, so single-segment exports keep today's names. The suffix is
+// inserted after template resolution — callers resolve the template once
+// and share the result across every part, keeping {datetime} identical —
+// and survives the same alphabet the template sanitizer uses.
+func SegmentPath(path string, index, count int) string {
+	if count <= 1 {
+		return path
+	}
+	return insertBeforeExt(path, partSuffix(index, count))
+}
+
+// partSuffix renders the zero-padded segment marker. The field width is
+// two at minimum and grows with the segment count, so every part of a
+// given export shares one width and names sort chronologically.
+func partSuffix(index, count int) string {
+	width := max(2, len(strconv.Itoa(count)))
+	return fmt.Sprintf("_part%0*d", width, index)
+}
+
+// insertBeforeExt appends suffix to path before its extension. The last
+// dot counts as an extension separator only when it is not the first
+// character of the base name, so dotfiles and extension-less names keep
+// the suffix at the end.
+func insertBeforeExt(path, suffix string) string {
+	base := filepath.Base(path)
+	ext := filepath.Ext(base)
+	if ext == "" || ext == base {
+		return path + suffix
+	}
+	return strings.TrimSuffix(path, ext) + suffix + ext
+}
+
 func samePath(left, right string) bool {
 	if filepath.Separator == '\\' {
 		return strings.EqualFold(left, right)
