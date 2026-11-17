@@ -81,15 +81,68 @@ func TestValidateTrim(t *testing.T) {
 			wantErrors: 1, wantSubstring: "exceeds",
 		},
 		{
-			// Temporary Phase-1 restriction; lifted once multi-segment
-			// trimming lands (see model.TrimSelection).
-			name: "two segments rejected",
+			name: "multiple separated segments valid",
 			trim: model.TrimSelection{Segments: []model.TimeRange{
 				{Start: time.Second, End: 2 * time.Second},
 				{Start: 3 * time.Second, End: 4 * time.Second},
+				{Start: 5 * time.Second, End: 6 * time.Second},
 			}},
 			media: media, encoder: "libx264",
-			wantErrors: 1, wantSubstring: "single segment",
+		},
+		{
+			name: "adjacent segments allowed",
+			trim: model.TrimSelection{Segments: []model.TimeRange{
+				{Start: time.Second, End: 5 * time.Second},
+				{Start: 5 * time.Second, End: 8 * time.Second},
+			}},
+			media: media, encoder: "libx264",
+		},
+		{
+			name: "overlap rejected",
+			trim: model.TrimSelection{Segments: []model.TimeRange{
+				{Start: time.Second, End: 5 * time.Second},
+				{Start: 4 * time.Second, End: 8 * time.Second},
+			}},
+			media: media, encoder: "libx264",
+			wantErrors: 1, wantSubstring: "segment 2 starts before segment 1 ends",
+		},
+		{
+			name: "disordered disjoint segments rejected",
+			trim: model.TrimSelection{Segments: []model.TimeRange{
+				{Start: 5 * time.Second, End: 6 * time.Second},
+				{Start: time.Second, End: 2 * time.Second},
+			}},
+			media: media, encoder: "libx264",
+			wantErrors: 1, wantSubstring: "chronological and non-overlapping",
+		},
+		{
+			name: "multi-segment error carries segment prefix",
+			trim: model.TrimSelection{Segments: []model.TimeRange{
+				{Start: time.Second, End: 2 * time.Second},
+				{Start: 3 * time.Second, End: 2 * time.Second},
+			}},
+			media: media, encoder: "libx264",
+			wantErrors: 1, wantSubstring: "segment 2: trim end must be after start",
+		},
+		{
+			name: "each bad segment reported",
+			trim: model.TrimSelection{Segments: []model.TimeRange{
+				{Start: -time.Second, End: 0},
+				{Start: time.Second, End: 2 * time.Second},
+				{Start: 3 * time.Second, End: duration + time.Second},
+			}},
+			media: media, encoder: "libx264",
+			wantErrors: 2, wantSubstring: "segment 3: trim end exceeds",
+		},
+		{
+			name: "multi-segment copy warns once",
+			trim: model.TrimSelection{Segments: []model.TimeRange{
+				{Start: time.Second, End: 2 * time.Second},
+				{Start: 3 * time.Second, End: 4 * time.Second},
+				{Start: 5 * time.Second, End: 6 * time.Second},
+			}},
+			media: media, encoder: "copy",
+			wantWarnings: 1, wantSubstring: "keyframes",
 		},
 	}
 
@@ -116,6 +169,104 @@ func TestValidateTrim(t *testing.T) {
 			}
 			if tt.wantErrors == 0 && !result.Valid() {
 				t.Errorf("expected valid result, got %v", result.Errors)
+			}
+		})
+	}
+}
+
+func TestValidateTrimExport(t *testing.T) {
+	t.Parallel()
+	media := &model.MediaInfo{Duration: 10 * time.Minute}
+	multi := model.TrimSelection{Segments: []model.TimeRange{
+		{Start: time.Second, End: 2 * time.Second},
+		{Start: 3 * time.Second, End: 4 * time.Second},
+	}}
+	encodedAudio := model.AudioSettings{Mode: model.AudioEncode, Encoder: "aac"}
+
+	tests := []struct {
+		name          string
+		trim          model.TrimSelection
+		mode          model.TrimExportMode
+		media         *model.MediaInfo
+		videoEncoder  string
+		audio         model.AudioSettings
+		wantErrors    int
+		wantWarnings  int
+		wantSubstring string
+	}{
+		{
+			name: "video copy join rejected",
+			trim: multi, mode: model.TrimExportJoin, media: media,
+			videoEncoder: "copy", audio: encodedAudio,
+			wantErrors: 1, wantSubstring: "cannot be combined with joining segments",
+		},
+		{
+			name: "video copy case-insensitive rejected",
+			trim: multi, mode: model.TrimExportJoin, media: media,
+			videoEncoder: "Copy", audio: encodedAudio,
+			wantErrors: 1,
+		},
+		{
+			name: "encoded video join clean",
+			trim: multi, mode: model.TrimExportJoin, media: media,
+			videoEncoder: "libx264", audio: encodedAudio,
+		},
+		{
+			name: "audio copy mode join warns",
+			trim: multi, mode: model.TrimExportJoin, media: media,
+			videoEncoder: "libx264",
+			audio:        model.AudioSettings{Mode: model.AudioCopy},
+			wantWarnings: 1, wantSubstring: "copied audio",
+		},
+		{
+			name: "audio copy encoder join warns",
+			trim: multi, mode: model.TrimExportJoin, media: media,
+			videoEncoder: "libx264",
+			audio:        model.AudioSettings{Mode: model.AudioEncode, Encoder: "copy"},
+			wantWarnings: 1, wantSubstring: "copied audio",
+		},
+		{
+			name: "separate mode never checked",
+			trim: multi, mode: model.TrimExportSeparate, media: media,
+			videoEncoder: "copy", audio: model.AudioSettings{Mode: model.AudioCopy},
+		},
+		{
+			name: "single-segment join unchecked",
+			trim: model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 2 * time.Second}}},
+			mode: model.TrimExportJoin, media: media,
+			videoEncoder: "copy", audio: model.AudioSettings{Mode: model.AudioCopy},
+		},
+		{
+			name: "inactive unchecked",
+			trim: model.TrimSelection{}, mode: model.TrimExportJoin, media: media,
+			videoEncoder: "copy", audio: model.AudioSettings{Mode: model.AudioCopy},
+		},
+		{
+			name: "nil media unchecked",
+			trim: multi, mode: model.TrimExportJoin, media: nil,
+			videoEncoder: "copy", audio: model.AudioSettings{Mode: model.AudioCopy},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ValidateTrimExport(tt.trim, tt.mode, tt.media, tt.videoEncoder, tt.audio)
+			if len(result.Errors) != tt.wantErrors {
+				t.Errorf("errors = %d (%v), want %d", len(result.Errors), result.Errors, tt.wantErrors)
+			}
+			if len(result.Warnings) != tt.wantWarnings {
+				t.Errorf("warnings = %d (%v), want %d", len(result.Warnings), result.Warnings, tt.wantWarnings)
+			}
+			if tt.wantSubstring != "" {
+				found := false
+				for _, issue := range append(append([]Issue{}, result.Errors...), result.Warnings...) {
+					if strings.Contains(issue.Message, tt.wantSubstring) {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("no issue mentions %q: %v", tt.wantSubstring, result)
+				}
 			}
 		})
 	}
