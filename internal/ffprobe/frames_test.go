@@ -15,6 +15,14 @@ import (
 // writeFakeFFprobe installs a shell script that records its arguments
 // and answers the origin probe (format=start_time) with formatStart;
 // every other invocation prints the given frame document.
+//
+// Tests using this helper must not run in parallel: while WriteFile
+// holds the script's write fd open, a fork in any concurrent test
+// inherits it, and the child holds it past exec — the kernel then
+// rejects the sibling's exec of its own fresh script with
+// "text file busy" (golang/go#22315). The spawns are milliseconds, so
+// serializing them costs nothing measurable; rename-based writes do
+// not help, because the inherited fd tracks the inode, not the path.
 func writeFakeFFprobe(t *testing.T, dir, document, formatStart string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -39,7 +47,6 @@ func writeFakeFFprobe(t *testing.T, dir, document, formatStart string) string {
 }
 
 func TestFrameTimesNonZeroStart(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	// The container starts at 1.043 s and so do the frames: normalized
 	// values must begin at 0 so they sit on the same timeline as
@@ -88,7 +95,6 @@ func TestFrameTimesNonZeroStart(t *testing.T) {
 // miss every early frame (a negative-origin MPEG-TS reported its first
 // step target as 1s instead of 0.48s).
 func TestFrameTimesNegativeOriginNormalizesNegativeRawTimes(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	document := `{
 	  "frames": [
@@ -124,7 +130,6 @@ func TestFrameTimesNegativeOriginNormalizesNegativeRawTimes(t *testing.T) {
 // window is input-relative and must be shifted by the container's
 // format start_time in both directions (positive and negative origin).
 func TestFrameTimesTranslatesProbeWindow(t *testing.T) {
-	t.Parallel()
 	cases := []struct {
 		name       string
 		origin     string
@@ -136,7 +141,6 @@ func TestFrameTimesTranslatesProbeWindow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			dir := t.TempDir()
 			document := `{"frames": []}`
 			fake := writeFakeFFprobe(t, dir, document, tc.origin)
@@ -163,7 +167,6 @@ func durationClose(got, want, tolerance time.Duration) bool {
 }
 
 func TestFrameTimesReorderAndDedup(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	// best_effort values may arrive out of presentation order; "N/A"
 	// frames are skipped; duplicates collapse.
@@ -200,7 +203,6 @@ func TestFrameTimesReorderAndDedup(t *testing.T) {
 // indexed position and the extracted frame disagreed by one second.
 // Normalization now uses the container origin only.
 func TestFrameTimesVideoOffsetFromContainer(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	document := `{
   "frames": [
@@ -225,7 +227,6 @@ func TestFrameTimesVideoOffsetFromContainer(t *testing.T) {
 }
 
 func TestFrameTimesWindowFiltering(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	// -read_intervals seeks to a keyframe before the requested start,
 	// so the raw document can contain earlier frames; they must be
@@ -256,7 +257,6 @@ func TestFrameTimesWindowFiltering(t *testing.T) {
 }
 
 func TestFrameTimesGuards(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	fake := writeFakeFFprobe(t, dir, `{"frames": []}`, "0.000000")
 	if _, _, err := FrameTimes(context.Background(), fake, "", 0, time.Second); err == nil {
@@ -278,7 +278,6 @@ func TestFrameTimesGuards(t *testing.T) {
 // frame windows probed in the wrong domain). Lock the real document
 // shape, including keys beyond start_time, as the decoding contract.
 func TestInputOriginRealDocumentShape(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	document := `{"frames": []}`
 	fake := writeFakeFFprobe(t, dir, document, "10.000000")
