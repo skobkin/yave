@@ -618,6 +618,16 @@ func (f *frameIndex) step(at time.Duration, dir int, duration time.Duration) (ti
 	if f.failed {
 		return at, frameStepUnavailable
 	}
+	if f.pending != 0 {
+		// A walk is already in flight: the new press joins it and will be
+		// applied from the walk position when the next window lands. It
+		// must not take the immediate cached-neighbor shortcut below —
+		// the displayed playhead is stale (loading never commits), so the
+		// shortcut moves from the wrong position, commits it, and the
+		// playhead callback clears the queued remainder: steps lost.
+		f.queue(dir, f.pendingAt)
+		return f.pendingAt, frameStepLoading
+	}
 	if !f.covers(at) {
 		f.queue(dir, at)
 		return at, frameStepLoading

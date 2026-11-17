@@ -484,6 +484,65 @@ func TestFrameIndexEdgeCommitStaysAtWalkPosition(t *testing.T) {
 	}
 }
 
+// Regression: five Right presses from 2s queue a walk; while the next
+// window fetch is in flight (the walk stuck at 6s with one step left),
+// a sixth press used to find a cached neighbor from the stale displayed
+// playhead (4s), commit 5s immediately, and the playhead callback
+// cleared the queued remainder — landing at 5s instead of 8s. A press
+// during a walk must merge into it; the production widget callback path
+// must report no move, so onTimelinePlayhead never retires the queue.
+func TestFrameIndexMergesPressesIntoPendingWalk(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	duration := 10 * time.Second
+	c.media = model.MediaInfo{Duration: duration}
+	c.trimTimeline.SetDuration(duration)
+
+	index := c.previews.index
+	index.applyWindow(0, 4*time.Second, []time.Duration{
+		0, time.Second, 2 * time.Second, 3 * time.Second, 4 * time.Second,
+	}, duration)
+	step := func(at time.Duration) (time.Duration, bool) {
+		return c.trimTimeline.stepFrame(at, 1)
+	}
+	// Five presses from 2s: two immediate moves, three queued.
+	if at, ok := step(2 * time.Second); !ok || at != 3*time.Second {
+		t.Fatalf("first step = %s/%v, want 3s/moved", at, ok)
+	}
+	if at, ok := step(3 * time.Second); !ok || at != 4*time.Second {
+		t.Fatalf("second step = %s/%v, want 4s/moved", at, ok)
+	}
+	for range 3 {
+		if _, ok := step(4 * time.Second); ok {
+			t.Fatal("steps past the cached edge must report loading")
+		}
+	}
+	// The [4,6] window lands mid-walk: the walk advances 4->5->6 and
+	// sticks (one step left), anchored at the edge. The displayed
+	// playhead is still 4s — loading never commits.
+	at, state := index.applyWindow(4*time.Second, 6*time.Second,
+		[]time.Duration{5 * time.Second, 6 * time.Second}, duration)
+	if state != frameStepLoading || at != 6*time.Second || index.pending != 1 || index.pendingAt != 6*time.Second {
+		t.Fatalf("partial walk = %s/%v pending %d at %s, want 6s/loading/1 at 6s", at, state, index.pending, index.pendingAt)
+	}
+
+	// The sixth press, with the fetch in flight: must join the walk (no
+	// move reported, so the timeline never commits or retires).
+	if at, ok := step(4 * time.Second); ok || at != 6*time.Second {
+		t.Fatalf("press during walk = %s/%v, want 6s/loading (merged)", at, ok)
+	}
+	if index.pending != 2 || index.pendingAt != 6*time.Second {
+		t.Fatalf("queue = %d at %s, want 2 at 6s", index.pending, index.pendingAt)
+	}
+
+	// The [4,8] fetch lands and the walk completes at 8s.
+	at, state = index.applyWindow(4*time.Second, 8*time.Second,
+		[]time.Duration{7 * time.Second, 8 * time.Second}, duration)
+	if state != frameStepMoved || at != 8*time.Second || index.pending != 0 {
+		t.Fatalf("completed walk = %s/%v pending %d, want 8s/moved/0", at, state, index.pending)
+	}
+}
+
 // A landing fetch with an empty queue applies nothing — in particular it
 // must not move the playhead anywhere (a retired queue must not yank the
 // playhead back to a stale walk position).
