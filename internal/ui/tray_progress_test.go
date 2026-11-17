@@ -74,7 +74,7 @@ func TestSetRunResultResetsTrayProgressForEveryOutcome(t *testing.T) {
 				trayProgress: indicator,
 			}
 
-			controller.setRunResult(tt.err)
+			controller.setRunResult(tt.err, 0, 1)
 
 			if got := names[len(names)-1]; got != "app_icon.svg" {
 				t.Fatalf("last tray icon = %q, want base app icon", got)

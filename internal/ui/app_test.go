@@ -211,7 +211,7 @@ func TestSetRunResultSelectsRunTabOnFailure(t *testing.T) {
 	c.runTab = container.NewTabItem("Run", widget.NewLabel("run"))
 	c.tabs = container.NewAppTabs(otherTab, c.runTab)
 
-	c.setRunResult(errors.New("FFmpeg failed: exit status 1"))
+	c.setRunResult(errors.New("FFmpeg failed: exit status 1"), 0, 1)
 
 	if c.tabs.Selected() != c.runTab {
 		t.Fatal("Run tab was not selected")
