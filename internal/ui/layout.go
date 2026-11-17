@@ -38,6 +38,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		c.trimEnable,
 		c.trimTimeline,
 		c.trimMessage,
+		trimSegmentsRow(c),
 		trimBoundariesRow(c),
 	)
 	trimTab := container.NewBorder(nil, controls, nil, nil, trimPreviewSection(c))
@@ -112,6 +113,17 @@ func overlayChipRectangle() *canvas.Rectangle {
 // trimEntryWidth fits a full HH:MM:SS.mmm timestamp with room to
 // spare; the natural Entry width is a couple of characters.
 const trimEntryWidth = 140
+
+// trimSegmentsRow holds the export-mode dropdown and the segment
+// add/delete buttons on one line above the boundary fields: the mode
+// governs the whole export job, while Add/Delete manage the segment
+// list the boundary entries edit.
+func trimSegmentsRow(c *Controller) fyne.CanvasObject {
+	return container.NewHBox(
+		widget.NewLabel("Export"), c.trimExport,
+		c.trimAdd, c.trimDelete,
+	)
+}
 
 // trimBoundariesRow lays the boundary fields out on a single line: In
 // and Out entries with their Set buttons, the selected duration, and

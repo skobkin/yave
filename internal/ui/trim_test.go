@@ -204,7 +204,7 @@ func TestTrimEmptyBoundaryBlocksConversion(t *testing.T) {
 	if !c.trimSelection.Active() {
 		t.Fatal("the last valid selection must survive for display")
 	}
-	c.updateTrimMessages("libx265")
+	c.updateTrimMessages("libx265", model.AudioSettings{})
 	if !strings.Contains(c.trimMessage.Text, "In timecode is required") {
 		t.Fatalf("validation message must surface the empty boundary: %q", c.trimMessage.Text)
 	}
@@ -215,22 +215,248 @@ func TestUpdateTrimMessagesTracksEncoder(t *testing.T) {
 	c.trimEnabled = true
 	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 5 * time.Second}}}
 
-	c.updateTrimMessages("libx265")
+	c.updateTrimMessages("libx265", model.AudioSettings{})
 	if strings.Contains(c.trimMessage.Text, "keyframes") {
 		t.Fatalf("real encoder must not show the copy warning: %q", c.trimMessage.Text)
 	}
-	c.updateTrimMessages("copy")
+	c.updateTrimMessages("copy", model.AudioSettings{})
 	if !strings.Contains(c.trimMessage.Text, "keyframes") {
 		t.Fatalf("copy encoder must show the keyframe warning: %q", c.trimMessage.Text)
 	}
-	c.updateTrimMessages("hevc_vaapi")
+	c.updateTrimMessages("hevc_vaapi", model.AudioSettings{})
 	if strings.Contains(c.trimMessage.Text, "keyframes") {
 		t.Fatalf("warning must disappear after switching away from copy: %q", c.trimMessage.Text)
 	}
 	c.trimEnabled = false
-	c.updateTrimMessages("copy")
+	c.updateTrimMessages("copy", model.AudioSettings{})
 	if strings.Contains(c.trimMessage.Text, "keyframes") {
 		t.Fatalf("disabled trim must hide the warning: %q", c.trimMessage.Text)
+	}
+}
+
+// --- segment management ---
+
+func TestAddTrimSegmentClampsIntoGap(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.media = model.MediaInfo{Duration: 30 * time.Second}
+	c.trimTimeline.SetDuration(30 * time.Second)
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{
+		{Start: time.Second, End: 5 * time.Second},
+		{Start: 8 * time.Second, End: 12 * time.Second},
+	}}
+	c.trimTimeline.SetSegmentsSilent(c.trimSelection.Segments)
+
+	// A gap with ≥5s of room caps the new segment at 5 seconds.
+	c.trimTimeline.SetPlayhead(20 * time.Second)
+	c.addTrimSegment()
+	if len(c.trimSelection.Segments) != 3 {
+		t.Fatalf("segments after add = %v", c.trimSelection.Segments)
+	}
+	if seg := c.trimSelection.Segments[2]; seg.Start != 20*time.Second || seg.End != 25*time.Second {
+		t.Fatalf("new segment = %v, want [20s, 25s] (5s cap)", seg)
+	}
+	if c.trimSelected != 2 || c.trimTimeline.Selected() != 2 {
+		t.Fatalf("selection after add = %d (widget %d), want 2", c.trimSelected, c.trimTimeline.Selected())
+	}
+	if c.trimIn.Text != formatTimestamp(20*time.Second) || c.trimOut.Text != formatTimestamp(25*time.Second) {
+		t.Fatalf("entries after add = %q / %q, want the new segment", c.trimIn.Text, c.trimOut.Text)
+	}
+
+	// A narrower gap clamps to adjacency instead of overlapping.
+	c.trimTimeline.SetPlayhead(6 * time.Second)
+	c.addTrimSegment()
+	if seg := c.trimSelection.Segments[1]; seg.Start != 6*time.Second || seg.End != 8*time.Second {
+		t.Fatalf("gap-limited segment = %v, want [6s, 8s] (adjacent to the next segment)", seg)
+	}
+
+	// Segment edges count: a playhead exactly at a segment's End starts
+	// an adjacent segment (half-open).
+	c.trimTimeline.SetPlayhead(12 * time.Second)
+	c.addTrimSegment()
+	if seg := c.trimSelection.Segments[3]; seg.Start != 12*time.Second || seg.End != 17*time.Second {
+		t.Fatalf("edge segment = %v, want [12s, 17s]", seg)
+	}
+
+	// No overlaps anywhere.
+	for i := 1; i < len(c.trimSelection.Segments); i++ {
+		if c.trimSelection.Segments[i].Start < c.trimSelection.Segments[i-1].End {
+			t.Fatalf("add created an overlap: %v", c.trimSelection.Segments)
+		}
+	}
+}
+
+func TestAddTrimSegmentRejectsImpossibleSpots(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.media = model.MediaInfo{Duration: 30 * time.Second}
+	c.trimTimeline.SetDuration(30 * time.Second)
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{
+		{Start: time.Second, End: 5 * time.Second},
+		{Start: 8 * time.Second, End: 12 * time.Second},
+	}}
+
+	// At a segment Start (half-open) any positive length would overlap.
+	c.trimTimeline.SetPlayhead(8 * time.Second)
+	c.addTrimSegment()
+	if len(c.trimSelection.Segments) != 2 {
+		t.Fatalf("add at a segment start created %v", c.trimSelection.Segments)
+	}
+	if c.trimMessage.Text == "" {
+		t.Fatal("an impossible add must explain itself, not silently no-op")
+	}
+
+	// Strictly inside a segment: same.
+	c.trimTimeline.SetPlayhead(10 * time.Second)
+	c.addTrimSegment()
+	if len(c.trimSelection.Segments) != 2 || c.trimMessage.Text == "" {
+		t.Fatalf("add inside a segment: %v / %q", c.trimSelection.Segments, c.trimMessage.Text)
+	}
+
+	// No room at the very end.
+	c.trimTimeline.SetPlayhead(30 * time.Second)
+	c.addTrimSegment()
+	if len(c.trimSelection.Segments) != 2 || c.trimMessage.Text == "" {
+		t.Fatalf("add past the end: %v / %q", c.trimSelection.Segments, c.trimMessage.Text)
+	}
+
+	// A disordered (typed) list refuses instead of inserting ambiguously.
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{
+		{Start: 8 * time.Second, End: 12 * time.Second},
+		{Start: time.Second, End: 5 * time.Second},
+	}}
+	c.trimTimeline.SetPlayhead(20 * time.Second)
+	c.addTrimSegment()
+	if len(c.trimSelection.Segments) != 2 || c.trimMessage.Text == "" {
+		t.Fatalf("add into a disordered list: %v / %q", c.trimSelection.Segments, c.trimMessage.Text)
+	}
+}
+
+func TestDeleteTrimSegment(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.media = model.MediaInfo{Duration: 30 * time.Second}
+	c.trimTimeline.SetDuration(30 * time.Second)
+	segments := []model.TimeRange{
+		{Start: time.Second, End: 5 * time.Second},
+		{Start: 8 * time.Second, End: 12 * time.Second},
+	}
+	c.trimSelection = model.TrimSelection{Segments: append([]model.TimeRange(nil), segments...)}
+	c.trimTimeline.SetSegmentsSilent(c.trimSelection.Segments)
+
+	// Deleting the first leaves the second; the selection lands on the
+	// segment that took the deleted slot and the entries follow it.
+	c.trimSelected = 0
+	c.trimTimeline.SetSelected(0)
+	c.deleteTrimSegment()
+	if len(c.trimSelection.Segments) != 1 || c.trimSelection.Segments[0] != segments[1] {
+		t.Fatalf("segments after delete = %v, want [%v]", c.trimSelection.Segments, segments[1])
+	}
+	if c.trimSelected != 0 || c.trimTimeline.Selected() != 0 {
+		t.Fatalf("selection after delete = %d (widget %d), want 0", c.trimSelected, c.trimTimeline.Selected())
+	}
+	if c.trimIn.Text != formatTimestamp(8*time.Second) || c.trimOut.Text != formatTimestamp(12*time.Second) {
+		t.Fatalf("entries after delete = %q / %q, want the surviving segment", c.trimIn.Text, c.trimOut.Text)
+	}
+
+	// Down to one segment Delete is disabled and a programmatic call
+	// keeps the last segment.
+	if !c.trimDelete.Disabled() {
+		t.Fatal("Delete must be disabled with a single segment")
+	}
+	c.deleteTrimSegment()
+	if len(c.trimSelection.Segments) != 1 {
+		t.Fatalf("delete kept %v, want the single segment", c.trimSelection.Segments)
+	}
+
+	// Deleting the last segment folds the selection to the new last.
+	c.trimSelection = model.TrimSelection{Segments: append([]model.TimeRange(nil), segments...)}
+	c.trimSelected = 1
+	c.trimTimeline.SetSelected(1)
+	c.deleteTrimSegment()
+	if len(c.trimSelection.Segments) != 1 || c.trimSelected != 0 ||
+		c.trimIn.Text != formatTimestamp(time.Second) {
+		t.Fatalf("tail delete: %v / sel %d / in %q", c.trimSelection.Segments, c.trimSelected, c.trimIn.Text)
+	}
+}
+
+func TestResetTrimForNewInputResetsSegmentState(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.media = model.MediaInfo{Duration: 30 * time.Second}
+	c.trimTimeline.SetDuration(30 * time.Second)
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{
+		{Start: time.Second, End: 5 * time.Second},
+		{Start: 8 * time.Second, End: 12 * time.Second},
+	}}
+	c.trimTimeline.SetSegmentsSilent(c.trimSelection.Segments)
+	c.trimSelected = 1
+	// Switch to join through the real dropdown callback.
+	c.trimExport.SetSelected(model.TrimExportJoin.String())
+	if c.trimExportMode != model.TrimExportJoin {
+		t.Fatalf("dropdown callback did not update the mode: %v", c.trimExportMode)
+	}
+
+	c.resetTrimForNewInput()
+
+	if c.trimExportMode != model.TrimExportSeparate {
+		t.Fatalf("export mode after reset = %v, want separate", c.trimExportMode)
+	}
+	if got := c.trimExport.Selected; got != model.TrimExportSeparate.String() {
+		t.Fatalf("export dropdown after reset = %q, want %q", got, model.TrimExportSeparate.String())
+	}
+	if c.trimSelected != 0 {
+		t.Fatalf("selected index after reset = %d, want 0", c.trimSelected)
+	}
+	if c.trimEnabled || c.trimSelection.Active() {
+		t.Fatal("trim must be fully disabled after an input change")
+	}
+}
+
+// Join-mode export checks surface inline: video stream copy is a blocking
+// error, copied audio a warning, and the separate-files mode adds nothing.
+func TestJoinExportInlineMessages(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.media = model.MediaInfo{Duration: 30 * time.Second}
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{
+		{Start: time.Second, End: 5 * time.Second},
+		{Start: 8 * time.Second, End: 12 * time.Second},
+	}}
+	c.trimExportMode = model.TrimExportJoin
+
+	// Video copy + join: error.
+	c.updateTrimMessages("copy", model.AudioSettings{})
+	if !strings.Contains(c.trimMessage.Text, "video stream copy cannot be combined with joining") {
+		t.Fatalf("video copy + join must error inline: %q", c.trimMessage.Text)
+	}
+	// A real encoder + copied audio: warning only (via the Mode
+	// representation).
+	c.updateTrimMessages("libx265", model.AudioSettings{Mode: model.AudioCopy})
+	if strings.Contains(c.trimMessage.Text, "cannot be combined") {
+		t.Fatalf("encoded video + join must not error: %q", c.trimMessage.Text)
+	}
+	if !strings.Contains(c.trimMessage.Text, "joining with copied audio") {
+		t.Fatalf("copied audio + join must warn inline: %q", c.trimMessage.Text)
+	}
+	// The Encoder="copy" representation warns identically.
+	c.updateTrimMessages("libx265", model.AudioSettings{Mode: model.AudioEncode, Encoder: " copy "})
+	if !strings.Contains(c.trimMessage.Text, "joining with copied audio") {
+		t.Fatalf("encoder=\"copy\" + join must warn inline: %q", c.trimMessage.Text)
+	}
+	// Encoded audio: no warning.
+	c.updateTrimMessages("libx265", model.AudioSettings{Mode: model.AudioEncode, Encoder: "libopus"})
+	if strings.Contains(c.trimMessage.Text, "joining with copied audio") {
+		t.Fatalf("encoded audio + join must not warn: %q", c.trimMessage.Text)
+	}
+	// Switching back to separate files drops every join-specific message.
+	c.trimExportMode = model.TrimExportSeparate
+	c.updateTrimMessages("copy", model.AudioSettings{})
+	if strings.Contains(c.trimMessage.Text, "joining") {
+		t.Fatalf("separate mode must not show join messages: %q", c.trimMessage.Text)
+	}
+	if !strings.Contains(c.trimMessage.Text, "keyframes") {
+		t.Fatalf("the plain copy warning must survive in separate mode: %q", c.trimMessage.Text)
 	}
 }
 
@@ -1525,11 +1751,11 @@ func TestTrimStatusLabelsCollapseWhenEmpty(t *testing.T) {
 	c.trimInValid = true
 	c.trimOut.Text = formatTimestamp(5 * time.Second)
 	c.trimOutValid = true
-	c.updateTrimMessages("libx265")
+	c.updateTrimMessages("libx265", model.AudioSettings{})
 	if !c.trimMessage.Hidden {
 		t.Errorf("a clean validation run must hide the trim message, got %q", c.trimMessage.Text)
 	}
-	c.updateTrimMessages("copy")
+	c.updateTrimMessages("copy", model.AudioSettings{})
 	if c.trimMessage.Hidden {
 		t.Errorf("the stream-copy warning must show the trim message, got %q", c.trimMessage.Text)
 	}
@@ -1575,7 +1801,7 @@ func TestTrimTabLayout(t *testing.T) {
 		t.Fatalf("border bottom is %T, want the controls container", content.Objects[1])
 	}
 
-	var boundaries *fyne.Container
+	var boundaries, segments *fyne.Container
 	containsAll := func(objs []fyne.CanvasObject, want ...fyne.CanvasObject) bool {
 		for _, w := range want {
 			found := false
@@ -1595,6 +1821,9 @@ func TestTrimTabLayout(t *testing.T) {
 	walk = func(box *fyne.Container) {
 		if containsAll(box.Objects, c.trimReset) {
 			boundaries = box
+		}
+		if containsAll(box.Objects, c.trimExport, c.trimAdd, c.trimDelete) {
+			segments = box
 		}
 		for _, obj := range box.Objects {
 			switch o := obj.(type) {
@@ -1627,9 +1856,12 @@ func TestTrimTabLayout(t *testing.T) {
 	if boundaries == nil {
 		t.Fatal("In, Out and Reset must share one row container")
 	}
+	if segments == nil {
+		t.Fatal("export mode and segment buttons must share one row container")
+	}
 	// The controls VBox is glued to the bottom edge, in this order.
 	wantControls := []fyne.CanvasObject{
-		c.previewStatus, c.trimEnable, c.trimTimeline, c.trimMessage, boundaries,
+		c.previewStatus, c.trimEnable, c.trimTimeline, c.trimMessage, segments, boundaries,
 	}
 	if len(controls.Objects) != len(wantControls) {
 		t.Fatalf("bottom controls hold %d rows, want %d", len(controls.Objects), len(wantControls))

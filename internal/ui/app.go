@@ -14,18 +14,23 @@ import (
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/profiles"
 	"git.skobk.in/skobkin/yave/internal/resources"
+	"git.skobk.in/skobkin/yave/internal/transcode"
 )
 
 type Controller struct {
-	app          fyne.App
-	window       fyne.Window
-	configPath   string
-	config       model.Config
-	caps         model.Capabilities
-	media        model.MediaInfo
-	inputPath    string
-	outputPath   string
-	runControl   conversionControl
+	app        fyne.App
+	window     fyne.Window
+	configPath string
+	config     model.Config
+	caps       model.Capabilities
+	media      model.MediaInfo
+	inputPath  string
+	outputPath string
+	runControl conversionControl
+	// runStages executes a staged conversion sequence. A seam so tests
+	// can intercept the runner; New defaults it to
+	// (transcode.Runner{}).RunSequence.
+	runStages    func(*transcode.RunControl, []transcode.Stage, transcode.Callbacks) error
 	cancelTimer  *time.Timer
 	cancelDelay  time.Duration
 	cancelStage  cancellationStage
@@ -69,6 +74,10 @@ type Controller struct {
 	// trimSelected is the index of the segment the boundary entries,
 	// Set In/Out buttons, and Ctrl+[/] chords edit. UI-thread state.
 	trimSelected int
+	// trimExportMode is the job-scoped export mode (separate files per
+	// segment vs. join into one output). Like the trim selection it is
+	// reset on every input change and never persisted into profiles.
+	trimExportMode model.TrimExportMode
 	// displayingBoundaries guards programmatic writes into the boundary
 	// entries: Entry.SetText fires OnChanged whenever the text differs,
 	// and the editing callback would re-parse the millisecond-truncated
@@ -85,6 +94,9 @@ type Controller struct {
 	trimSetIn        *widget.Button
 	trimSetOut       *widget.Button
 	trimReset        *widget.Button
+	trimExport       *widget.Select
+	trimAdd          *widget.Button
+	trimDelete       *widget.Button
 	trimDuration     *widget.Label
 	trimMessage      *widget.Label // trim validation: entry errors + copy warning
 	previewStatus    *widget.Label // extraction/indexing status, separate from validation
@@ -202,6 +214,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 		inputPath:  initialInput,
 	}
 	c.previews = newTrimPreviews()
+	c.runStages = (transcode.Runner{}).RunSequence
 	c.createWidgets()
 	c.window.SetContent(c.buildLayout())
 	c.window.Resize(fyne.NewSize(1050, 760))

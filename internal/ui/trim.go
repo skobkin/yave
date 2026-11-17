@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -118,6 +119,16 @@ func (c *Controller) resetTrimSelection() {
 func (c *Controller) resetTrimForNewInput() {
 	c.trimEnabled = false
 	c.trimSelection = model.TrimSelection{}
+	c.trimSelected = 0
+	// The export mode is job-scoped like the selection: a new input
+	// starts fresh on separate files. The dropdown mirrors it with its
+	// callback detached — the reset is not a user edit, and changed()
+	// would run a full control/preview rebuild mid-reset.
+	c.trimExportMode = model.TrimExportSeparate
+	onChanged := c.trimExport.OnChanged
+	c.trimExport.OnChanged = nil
+	c.trimExport.SetSelected(c.trimExportMode.String())
+	c.trimExport.OnChanged = onChanged
 	c.trimInValid, c.trimOutValid = true, true
 	// SetChecked below fires setTrimEnabled(false), which early-returns
 	// because trimEnabled is already false — the controls must be
@@ -165,10 +176,11 @@ func boundaryEntryProblem(label string, valid bool, text string) string {
 
 // updateTrimMessages recomputes the Trim tab's validation message from
 // current state. It runs from refresh() — the universal recompute point
-// — so the stream-copy warning stays synchronized across enable/disable,
-// encoder and profile switches, and input changes without depending on
+// — so the stream-copy warning and the join-export checks stay
+// synchronized across enable/disable, encoder and profile switches,
+// export-mode changes, and input changes without depending on
 // boundary-edit callbacks.
-func (c *Controller) updateTrimMessages(encoder string) {
+func (c *Controller) updateTrimMessages(encoder string, audio model.AudioSettings) {
 	var parts []string
 	if c.trimEnabled {
 		for _, problem := range []string{
@@ -180,6 +192,11 @@ func (c *Controller) updateTrimMessages(encoder string) {
 			}
 		}
 		result := validation.ValidateTrim(c.trimSelection, &c.media, encoder)
+		// Join-mode export checks (video-copy rejection, audio-copy
+		// gap warning) merge here: ValidateTrimExport is a no-op unless
+		// joining more than one segment, so the separate-file mode adds
+		// nothing.
+		result.Merge(validation.ValidateTrimExport(c.trimSelection, c.trimExportMode, &c.media, encoder, audio))
 		for _, issue := range result.Errors {
 			parts = append(parts, "Error: "+issue.Message)
 		}
@@ -314,6 +331,100 @@ func (c *Controller) updateTrimDurationLabel() {
 	selected := segmentBoundary(c.trimSelection, c.trimSelected, 1) -
 		segmentBoundary(c.trimSelection, c.trimSelected, 0)
 	c.trimDuration.SetText(formatTimestamp(selected) + " of " + formatTimestamp(c.trimSelection.Total()))
+}
+
+// --- segment management ---
+
+// addTrimSegment inserts a new segment starting at the playhead, sized
+// min(5s, room-to-the-next-constraint), and selects it. The playhead
+// must sit in a genuine gap with room for a positive length: starting
+// a segment at or inside an existing one (half-open: Start ≤ playhead <
+// End) would overlap it, and any other impossible spot gets an
+// explanatory message — the button never silently no-ops and never
+// relocates the request to the nearest gap.
+func (c *Controller) addTrimSegment() {
+	if !c.trimEnabled || !c.trimSelection.Active() {
+		return
+	}
+	at := c.trimTimeline.Playhead()
+	segs := c.trimSelection.Segments
+	if !sort.SliceIsSorted(segs, func(i, j int) bool { return segs[i].Start < segs[j].Start }) {
+		// Typed boundary edits may disorder the list; that is already a
+		// validation error, and inserting into a disordered list has no
+		// well-defined meaning.
+		c.setTrimMessage("Fix the invalid (overlapping or disordered) trim segments before adding another one.")
+		return
+	}
+	nextStart, insertAt := c.media.Duration, len(segs)
+	for i, seg := range segs {
+		if seg.Start <= at && at < seg.End {
+			c.setTrimMessage(fmt.Sprintf("The playhead is inside segment %d — move it into a gap to add a segment there.", i+1))
+			return
+		}
+		if seg.Start > at {
+			nextStart, insertAt = seg.Start, i
+			break
+		}
+	}
+	room := nextStart - at
+	if room <= 0 {
+		c.setTrimMessage("No room for a new segment at the playhead — move it earlier in the video.")
+		return
+	}
+	seg := model.TimeRange{Start: at, End: at + min(5*time.Second, room)}
+	segs = slices.Insert(slices.Clone(segs), insertAt, seg)
+	c.trimSelection = model.TrimSelection{Segments: segs}
+	// The new segment is the selected one; its boundaries become the
+	// entries' content and both entries are valid by construction. The
+	// segment list lands first: SetSelected clamps against the list
+	// length, so selecting the new tail index needs the grown list in.
+	c.trimSelected = insertAt
+	c.trimInValid, c.trimOutValid = true, true
+	c.trimTimeline.SetSegmentsSilent(segs)
+	c.trimTimeline.SetSelected(insertAt)
+	c.setBoundaryDisplay(c.trimIn, formatTimestamp(seg.Start))
+	c.setBoundaryDisplay(c.trimOut, formatTimestamp(seg.End))
+	c.updateTrimDurationLabel()
+	c.refresh()
+}
+
+// deleteTrimSegment removes the selected segment (never the last one —
+// the Delete button is disabled at one segment). The selection moves to
+// the segment that took the deleted slot, or to the new last segment,
+// and the entries mirror its boundaries.
+func (c *Controller) deleteTrimSegment() {
+	if !c.trimEnabled || !c.trimSelection.Active() || len(c.trimSelection.Segments) <= 1 {
+		return
+	}
+	selected := c.trimSelected
+	if selected < 0 || selected >= len(c.trimSelection.Segments) {
+		selected = 0
+	}
+	segs := slices.Delete(slices.Clone(c.trimSelection.Segments), selected, selected+1)
+	c.trimSelection = model.TrimSelection{Segments: segs}
+	if c.trimSelected >= len(segs) {
+		c.trimSelected = len(segs) - 1
+	}
+	c.trimInValid, c.trimOutValid = true, true
+	c.trimTimeline.SetSegmentsSilent(segs)
+	c.trimTimeline.SetSelected(c.trimSelected)
+	seg := segs[c.trimSelected]
+	c.setBoundaryDisplay(c.trimIn, formatTimestamp(seg.Start))
+	c.setBoundaryDisplay(c.trimOut, formatTimestamp(seg.End))
+	c.updateTrimDurationLabel()
+	c.refresh()
+}
+
+// updateSegmentButtons keeps Delete's availability honest: deleting is
+// a no-op with a single segment (one must always remain), so the button
+// is disabled there rather than silently doing nothing. Called from
+// refresh() — the recompute point every segment mutation flows through.
+func (c *Controller) updateSegmentButtons() {
+	if c.trimEnabled && c.trimSelection.Active() && len(c.trimSelection.Segments) > 1 {
+		c.trimDelete.Enable()
+		return
+	}
+	c.trimDelete.Disable()
 }
 
 // withSegmentBoundary replaces the Start (start=-1 keeps it) or End of

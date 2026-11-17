@@ -88,9 +88,10 @@ func (c *Controller) refresh() {
 		}
 	}
 	// The Trim tab's validation message (boundary errors + stream-copy
-	// warning) recomputes here so it stays synchronized with every
-	// state change that flows through refresh().
-	c.updateTrimMessages(p.Video.Encoder)
+	// warning + join-export checks) recomputes here so it stays
+	// synchronized with every state change that flows through refresh().
+	c.updateTrimMessages(p.Video.Encoder, p.Audio)
+	c.updateSegmentButtons()
 	if c.runControl == nil {
 		c.start.Enable()
 	} else {

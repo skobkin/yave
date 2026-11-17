@@ -691,10 +691,13 @@ func absFloat32(v float32) float32 {
 }
 
 // translucent re-colors c with the given alpha, keeping its RGB. The
-// RGBA() components are 16-bit; NRGBA wants the top 8.
+// conversion goes through color.NRGBAModel (like overlayChipRectangle)
+// rather than hand-shifting the 16-bit RGBA() components, which gosec
+// cannot prove fit into 8 bits.
 func translucent(c color.Color, alpha uint8) color.NRGBA {
-	r, g, b, _ := c.RGBA()
-	return color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: alpha}
+	nrgba := color.NRGBAModel.Convert(c).(color.NRGBA)
+	nrgba.A = alpha
+	return nrgba
 }
 
 // --- rendering ---

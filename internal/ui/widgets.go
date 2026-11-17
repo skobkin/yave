@@ -159,6 +159,22 @@ func (c *Controller) createWidgets() {
 		c.resetTrimSelection()
 		c.refresh()
 	})
+	// Export mode + segment management share the trimSegmentsRow row.
+	// The dropdown starts on the default (separate files) with its
+	// callback attached only afterwards: SetSelected at creation must
+	// mirror the field without counting as a user edit.
+	c.trimExport = widget.NewSelect([]string{
+		model.TrimExportSeparate.String(),
+		model.TrimExportJoin.String(),
+	}, nil)
+	c.trimExportMode = model.TrimExportSeparate
+	c.trimExport.SetSelected(c.trimExportMode.String())
+	c.trimExport.OnChanged = func(option string) {
+		c.trimExportMode = trimExportModeFromOption(option)
+		c.changed(option)
+	}
+	c.trimAdd = widget.NewButton("Add segment", c.addTrimSegment)
+	c.trimDelete = widget.NewButton("Delete segment", c.deleteTrimSegment)
 	c.trimDuration = widget.NewLabel("")
 	c.trimMessage = widget.NewLabel("")
 	c.trimMessage.Wrapping = fyne.TextWrapWord
@@ -174,6 +190,7 @@ func (c *Controller) createWidgets() {
 	c.previewImage.FillMode = canvas.ImageFillContain
 	c.trimControls = []fyne.CanvasObject{
 		c.trimTimeline, c.trimIn, c.trimOut, c.trimSetIn, c.trimSetOut, c.trimReset,
+		c.trimExport, c.trimAdd, c.trimDelete,
 	}
 	for _, control := range c.trimControls {
 		if d, ok := control.(fyne.Disableable); ok {
@@ -204,6 +221,17 @@ func (c *Controller) changed(string) {
 	}
 	c.updateControlState()
 	c.refresh()
+}
+
+// trimExportModeFromOption maps a trimExport dropdown option back to its
+// export mode. Unknown text falls back to the default (separate files) —
+// the dropdown only ever offers the two known options, so this guards
+// programmatic selections like a reset to "".
+func trimExportModeFromOption(option string) model.TrimExportMode {
+	if option == model.TrimExportJoin.String() {
+		return model.TrimExportJoin
+	}
+	return model.TrimExportSeparate
 }
 
 // rebuildFormOnSignature swaps the form inside box when signature
