@@ -420,6 +420,66 @@ func TestFrameIndexPartialWalkCommitsAtEdge(t *testing.T) {
 	}
 }
 
+// Regression: an opposite press that cancelled the last queued step
+// reported loading instead of committing the walk. Three Rights from
+// 2s advance the walk to 4s with one step remaining; Left zeroes the
+// queue, the landing window applied nothing (idle), so the displayed
+// playhead stayed at 2s and the loading status never cleared. A newly
+// zeroed queue is a completed walk at pendingAt — commit it. This is
+// distinct from retirement by a manual seek, which points pendingAt at
+// the seek target before the fetch lands.
+func TestFrameIndexCancelledWalkCommitsWalkPosition(t *testing.T) {
+	index := newFrameIndex()
+	duration := 10 * time.Second
+	index.applyWindow(0, 2*time.Second, []time.Duration{0, time.Second, 2 * time.Second}, duration)
+
+	// Three Rights from the stale playhead 2s queue a walk of three.
+	for range 3 {
+		if _, state := index.step(2*time.Second, 1, duration); state != frameStepLoading {
+			t.Fatalf("queued step state = %v, want loading", state)
+		}
+	}
+	// The fetch lands short: the walk consumes two steps and pauses at
+	// 4s with one step still queued.
+	at, state := index.applyWindow(2*time.Second, 5*time.Second,
+		[]time.Duration{2 * time.Second, 3 * time.Second, 4 * time.Second}, duration)
+	if state != frameStepLoading || at != 5*time.Second {
+		t.Fatalf("walk pause = %s/%v, want 5s/loading", at, state)
+	}
+	if index.pendingAt != 4*time.Second || index.pending != 1 {
+		t.Fatalf("walk state = %s/%d, want 4s/1", index.pendingAt, index.pending)
+	}
+
+	// Left cancels the remainder: the walk position commits as movement.
+	at, state = index.step(2*time.Second, -1, duration)
+	if state != frameStepMoved || at != 4*time.Second {
+		t.Fatalf("cancelled walk = %s/%v, want 4s/moved", at, state)
+	}
+
+	c := testTrimController(t)
+	c.media = model.MediaInfo{Duration: duration}
+	c.trimEnabled = true
+	c.trimTimeline.SetDuration(duration)
+	c.setPreviewStatus("Loading frame index…")
+	c.applyFrameStep(at, state)
+	if c.trimTimeline.Playhead() != 4*time.Second {
+		t.Fatalf("playhead = %s, want the walk position 4s", c.trimTimeline.Playhead())
+	}
+	if !c.previewStatus.Hidden {
+		t.Fatalf("loading status still shown after the cancelled walk committed")
+	}
+
+	// The in-flight window lands with nothing queued: idle, and the
+	// committed playhead stays at the walk position.
+	if _, state := index.applyWindow(3*time.Second, 7*time.Second,
+		[]time.Duration{4 * time.Second, 5 * time.Second}, duration); state != frameStepIdle {
+		t.Fatalf("landing state = %v, want idle", state)
+	}
+	if c.trimTimeline.Playhead() != 4*time.Second {
+		t.Fatalf("playhead = %s, want it to stay at 4s after the landing", c.trimTimeline.Playhead())
+	}
+}
+
 // Regression: when the walk position has no neighbor and the video
 // continues past the cached window (a frame gap longer than the fetch
 // window), the controller re-fetched the identical range around the

@@ -646,6 +646,17 @@ func (f *frameIndex) step(at time.Duration, dir int, duration time.Duration) (ti
 		// shortcut moves from the wrong position, commits it, and the
 		// playhead callback clears the queued remainder: steps lost.
 		f.queue(dir, f.pendingAt)
+		if f.pending == 0 {
+			// The opposite press cancelled the walk's remaining steps
+			// exactly. The walk has already moved to pendingAt (every
+			// applied step consumed queue), so commit that position
+			// instead of reporting loading — a landing window would find
+			// nothing queued (frameStepIdle), stranding the walk position
+			// and leaving the loading status stuck. This is distinct from
+			// retirement by a manual seek, which resets pendingAt to the
+			// seek target before the fetch lands.
+			return f.pendingAt, frameStepMoved
+		}
 		return f.pendingAt, frameStepLoading
 	}
 	if !f.covers(at) {
