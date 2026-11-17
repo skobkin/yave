@@ -133,6 +133,19 @@ func (t *timeline) SetRange(in, out time.Duration) {
 // Range returns the current selection boundaries.
 func (t *timeline) Range() (time.Duration, time.Duration) { return t.in, t.out }
 
+// SetRangeSilent updates the displayed boundaries without firing
+// onRange. Boundary-entry edits use it: the typed value stays
+// authoritative in the controller — validation must see an out-of-range
+// entry as an error, not have it silently clamp to whatever the
+// timeline displays — while the widget still shows the clamped view.
+// Pointer drags and the boundary shortcuts keep using SetRange, whose
+// callback commits the clamped coordinates as the selection.
+func (t *timeline) SetRangeSilent(in, out time.Duration) {
+	t.in = t.clamp(in)
+	t.out = t.clamp(out)
+	t.Refresh()
+}
+
 // SetPlayhead moves the committed playhead, clamped to [0, duration].
 // onPlayhead is not fired for programmatic moves.
 func (t *timeline) SetPlayhead(at time.Duration) {

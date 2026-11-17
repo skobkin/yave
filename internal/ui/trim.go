@@ -244,11 +244,18 @@ func (c *Controller) setTrimBoundary(which string, text string) {
 	case "in":
 		c.trimInValid = true
 		c.trimSelection = withBoundary(c.trimSelection, at, -1)
-		c.trimTimeline.SetRange(at, boundaryOf(c.trimSelection, 1))
+		// Silent on purpose: SetRange would echo the clamped coordinates
+		// back through onRange and overwrite the typed value — an
+		// out-of-range entry would keep displaying its text while the
+		// selection (and the generated command) silently used the
+		// clamped one, with no validation error. The typed value stays
+		// authoritative (updateTrimMessages surfaces ValidateTrim's
+		// error) and the timeline shows the clamped view.
+		c.trimTimeline.SetRangeSilent(at, boundaryOf(c.trimSelection, 1))
 	case "out":
 		c.trimOutValid = true
 		c.trimSelection = withBoundary(c.trimSelection, -1, at)
-		c.trimTimeline.SetRange(boundaryOf(c.trimSelection, 0), at)
+		c.trimTimeline.SetRangeSilent(boundaryOf(c.trimSelection, 0), at)
 	}
 	c.updateTrimDurationLabel()
 	c.refresh()

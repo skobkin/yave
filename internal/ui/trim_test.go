@@ -1005,6 +1005,49 @@ func TestBoundaryDisplayWritesDoNotReenterEditing(t *testing.T) {
 	}
 }
 
+// Regression: a typed out-of-range boundary was clamped by SetRange and
+// echoed back through onRange, overwriting the typed selection: the
+// field kept showing 00:11:00.000 on a 10-minute input while the stored
+// selection (and the generated command) silently used 10 minutes, and
+// ValidateTrim — which rejects End > Duration — never saw the typed
+// value. The typed value must stay authoritative; only the timeline's
+// view clamps.
+func TestTypedOutOfRangeBoundaryStaysAuthoritative(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	duration := 10 * time.Minute
+	c.media = model.MediaInfo{Duration: duration}
+	c.resetTrimSelection()
+
+	c.setTrimBoundary("out", "00:11:00.000")
+	if got := boundaryOf(c.trimSelection, 1); got != 11*time.Minute {
+		t.Fatalf("typed out boundary clamped to %s, want the typed 11m", got)
+	}
+	if _, out := c.trimTimeline.Range(); out != duration {
+		t.Fatalf("timeline displays out %s, want the clamped view %s", out, duration)
+	}
+	if !strings.Contains(c.trimMessage.Text, "exceeds the input duration") {
+		t.Fatalf("validation message = %q, want the exceeds-duration error", c.trimMessage.Text)
+	}
+	sel := c.trimRequest()
+	if !sel.Active() || boundaryOf(sel, 1) != 11*time.Minute {
+		t.Fatalf("trimRequest lost the typed boundary: %+v", sel)
+	}
+	if result := validation.ValidateTrim(sel, &c.media, "libx265"); result.Valid() {
+		t.Fatal("Start must see the typed out-of-range boundary as invalid")
+	}
+
+	// A crossed typed pair stays authoritative the same way (the
+	// timeline displays it as-is) and validation rejects it.
+	c.setTrimBoundary("in", "00:12:00.000")
+	if got := boundaryOf(c.trimSelection, 0); got != 12*time.Minute {
+		t.Fatalf("typed in boundary = %s, want the typed 12m", got)
+	}
+	if result := validation.ValidateTrim(c.trimRequest(), &c.media, "libx265"); result.Valid() {
+		t.Fatal("crossed boundaries must fail validation")
+	}
+}
+
 // Regression: a queued frame walk survived a manual seek — when the
 // window fetch landed, applyPending walked from the stale position and
 // moved the playhead back, overriding the user's newer click.
