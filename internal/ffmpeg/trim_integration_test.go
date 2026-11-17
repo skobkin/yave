@@ -15,7 +15,9 @@ import (
 // TestTrimIntegration is the end-to-end check that an active trim
 // produces an output whose duration matches the selected range and
 // whose audio and video stay in sync. It uses the real FFmpeg
-// toolchain and skips when it is unavailable.
+// toolchain and skips when it is unavailable or lacks the required
+// encoders (codec availability is a property of the host build, and
+// executable discovery alone does not establish it).
 func TestTrimIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test (real FFmpeg)")
@@ -27,6 +29,9 @@ func TestTrimIntegration(t *testing.T) {
 	if _, err := exec.LookPath("ffprobe"); err != nil {
 		t.Skip("ffprobe not installed")
 	}
+	// libx264 generates the fixture, aac its audio, libx265 is the
+	// profile under test ("x265 Software Archive").
+	requireEncoders(t, ffmpegPath, "libx264", "aac", "libx265")
 
 	dir := t.TempDir()
 	input := dir + "/input.mp4"
@@ -95,6 +100,34 @@ func TestTrimIntegration(t *testing.T) {
 	}
 	if skew > tolerance {
 		t.Errorf("A/V skew = %s, exceeds %s", skew, tolerance)
+	}
+}
+
+// requireEncoders skips the test when the installed FFmpeg cannot run
+// it. The -encoders listing is matched by exact field, so libx264rgb
+// never satisfies a libx264 requirement by substring.
+func requireEncoders(t *testing.T, ffmpegPath string, want ...string) {
+	t.Helper()
+	out, err := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg, fixed argument
+		"-hide_banner", "-encoders").Output()
+	if err != nil {
+		t.Skipf("listing FFmpeg encoders: %v", err)
+	}
+	have := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			have[fields[1]] = true
+		}
+	}
+	var missing []string
+	for _, name := range want {
+		if !have[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Skipf("FFmpeg lacks required encoders: %s", strings.Join(missing, ", "))
 	}
 }
 

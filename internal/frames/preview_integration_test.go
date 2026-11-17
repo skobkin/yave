@@ -5,9 +5,38 @@ import (
 	"image"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
+
+// requireEncoders skips the test when the installed FFmpeg cannot run
+// it. The -encoders listing is matched by exact field, so a similarly
+// named encoder never satisfies a requirement by substring.
+func requireEncoders(t *testing.T, ffmpegPath string, want ...string) {
+	t.Helper()
+	out, err := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg, fixed argument
+		"-hide_banner", "-encoders").Output()
+	if err != nil {
+		t.Skipf("listing FFmpeg encoders: %v", err)
+	}
+	have := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			have[fields[1]] = true
+		}
+	}
+	var missing []string
+	for _, name := range want {
+		if !have[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Skipf("FFmpeg lacks required encoders: %s", strings.Join(missing, ", "))
+	}
+}
 
 // TestPreviewIntegration is the end-to-end check that the Preview
 // command's filtergraph is accepted by a real FFmpeg and that the
@@ -15,7 +44,9 @@ import (
 // aspect ratio preserved, smaller frames are never upscaled. It exists
 // because the scale filter's min() expression must be quoted for
 // ffmpeg's filtergraph parser (commas split filters) — a regression
-// fake executables cannot catch.
+// fake executables cannot catch. It skips when FFmpeg is unavailable
+// or lacks libx264 (the fixture encoder; a property of the host build
+// that executable discovery alone does not establish).
 func TestPreviewIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test (real FFmpeg)")
@@ -24,6 +55,7 @@ func TestPreviewIntegration(t *testing.T) {
 	if err != nil {
 		t.Skip("ffmpeg not installed")
 	}
+	requireEncoders(t, ffmpegPath, "libx264")
 
 	generate := func(t *testing.T, w, h int) string {
 		t.Helper()
