@@ -25,6 +25,16 @@ type frameDocument struct {
 	Frames []frameEntry `json:"frames"`
 }
 
+// frameProbeMargin extends the read past the requested window end:
+// -read_intervals stops reading at the end, so frames already fed to
+// the decoder but buffered behind the B-frame reorder delay are never
+// flushed and the window silently misses its tail (a 29.97fps window
+// through 2s reported only up to 1.868533s). The margin exceeds any
+// realistic reorder lookahead; the [from, to] filter below keeps the
+// result exact, and the cost is a slightly longer window on an already
+// windowed read.
+const frameProbeMargin = time.Second
+
 // FrameTimes returns decoded first-video-stream frame timestamps
 // (presentation order, best_effort_timestamp_time) within [from, to],
 // normalized against the container's format start_time — the same
@@ -79,8 +89,11 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 		// The absolute-end form A%B is required: ffprobe measures a
 		// +duration interval from where the keyframe seek actually
 		// landed, not from the requested start, so with a large GOP a
-		// relative window stops decoding before reaching to.
-		"-read_intervals", fmt.Sprintf("%s%%%s", formatProbeSeconds(from+origin), formatProbeSeconds(to+origin)),
+		// relative window stops decoding before reaching to. The read
+		// extends past to by frameProbeMargin so decoder-buffered
+		// frames at the window tail are flushed; the filter below
+		// keeps the result inside [from, to].
+		"-read_intervals", fmt.Sprintf("%s%%%s", formatProbeSeconds(from+origin), formatProbeSeconds(to+frameProbeMargin+origin)),
 		inputPath,
 	}
 	output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput() //nolint:gosec // G204: resolved via exec.LookPath

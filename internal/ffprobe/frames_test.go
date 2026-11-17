@@ -3,6 +3,7 @@ package ffprobe
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -73,7 +74,7 @@ func TestFrameTimesNonZeroStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := strings.Fields(string(args))
-	for _, want := range []string{"-select_streams", "v:0", "-show_frames", "-read_intervals", "1.043%4.043"} {
+	for _, want := range []string{"-select_streams", "v:0", "-show_frames", "-read_intervals", "1.043%5.043"} {
 		if !containsField(fields, want) {
 			t.Errorf("args missing %q: %v", want, fields)
 		}
@@ -130,8 +131,8 @@ func TestFrameTimesTranslatesProbeWindow(t *testing.T) {
 		from, to   time.Duration
 		wantWindow string
 	}{
-		{"positive origin", "10.000000", 2 * time.Second, 5 * time.Second, "12.000%15.000"},
-		{"negative origin", "-1.500000", 2 * time.Second, 5 * time.Second, "0.500%3.500"},
+		{"positive origin", "10.000000", 2 * time.Second, 5 * time.Second, "12.000%16.000"},
+		{"negative origin", "-1.500000", 2 * time.Second, 5 * time.Second, "0.500%4.500"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -290,6 +291,52 @@ func TestInputOriginRealDocumentShape(t *testing.T) {
 	}
 	if len(times) != 0 {
 		t.Errorf("times = %v, want none (empty frame document)", times)
+	}
+}
+
+// Regression: -read_intervals stops reading at the window end, so
+// frames buffered behind the decoder's B-frame reorder delay were
+// never flushed: a 30fps B-frame fixture reported its [0,2s] window
+// only through 1.9s (58 frames of 61), and stepping backward from a
+// 2s playhead landed on 1.9s instead of the immediately preceding
+// frame. The read now extends by frameProbeMargin and filters to the
+// requested window. Uses the real toolchain — the buffering is
+// decoder behavior no fake executable can reproduce; mpeg4 with -bf 2
+// is a native encoder, so no codec gating is needed.
+func TestFrameTimesFlushesBufferedFrames(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real ffmpeg + ffprobe)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+
+	dir := t.TempDir()
+	input := dir + "/input.mp4"
+	generate := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg on a t.TempDir file
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=4:size=160x120:rate=30",
+		"-c:v", "mpeg4", "-bf", "2", "-q:v", "3", input)
+	if out, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generating test media: %v: %s", err, out)
+	}
+
+	times, _, err := FrameTimes(context.Background(), ffprobePath, input, 0, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 30fps over [0,2s] inclusive = 61 frames (0 through 2.0): the
+	// buffered tail must be present, not clipped by the read end.
+	if len(times) != 61 {
+		t.Fatalf("frame count = %d, want 61 (last %v)", len(times), times[len(times)-1])
+	}
+	if last := times[len(times)-1]; last < 2*time.Second-time.Millisecond {
+		t.Errorf("last frame in window = %s, want the 2.0s tail", last)
 	}
 }
 
