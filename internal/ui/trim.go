@@ -728,12 +728,17 @@ func (f *frameIndex) applyWindow(from, to time.Duration, times []time.Duration, 
 	}
 	if len(f.times) > f.capacity {
 		drop := len(f.times) - f.capacity
-		if f.pending < 0 {
-			// Backward navigation: the walk needs the low-end frames the
-			// fetch just added — evict the high end instead. Dropping the
-			// front would delete exactly what the merge added, leaving
-			// the walk target uncovered: it re-queues, the same window is
-			// fetched and evicted again — an unbounded probe loop.
+		// Keep the contiguous half around the walk position, not around
+		// the walk direction: a Right walk parked just below windowStart
+		// fetched the low-end frames it needed, and front eviction threw
+		// exactly those away — applyPending found its position
+		// uncovered, re-fetched the identical range, and every landing
+		// evicted it again, an unbounded probe loop (the mirror held for
+		// a Left walk just above windowEnd). Evicting the far side keeps
+		// pendingAt covered in both directions; the backward-direction
+		// case this replaces is the one where pendingAt lies low, so the
+		// retained side is the same.
+		if f.pendingAt <= (f.windowStart+f.windowEnd)/2 {
 			f.times = f.times[:len(f.times)-drop]
 			f.windowEnd = f.times[len(f.times)-1]
 		} else {

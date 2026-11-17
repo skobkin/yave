@@ -1637,3 +1637,34 @@ func TestPreviewStatusKeepsIndexingFailure(t *testing.T) {
 		t.Fatalf("status = %q, want hidden after the index reset", c.previewStatus.Text)
 	}
 }
+
+// Regression: eviction used the walk direction alone. A Right walk
+// parked just below the cached window's start fetched the low-end
+// frames around pendingAt, and the front eviction threw exactly those
+// away — applyPending found its position uncovered, re-fetched the
+// identical range, and every landing evicted it again: stepping stuck
+// while ffprobe was spawned forever. Eviction now keeps the half of
+// the window the walk position lies in.
+func TestFrameIndexEvictsAroundPendingPosition(t *testing.T) {
+	index := newFrameIndex()
+	index.capacity = 5
+	duration := 60 * time.Second
+	index.applyWindow(10*time.Second, 20*time.Second,
+		[]time.Duration{10 * time.Second, 12 * time.Second, 14 * time.Second, 16 * time.Second, 18 * time.Second, 20 * time.Second}, duration)
+
+	// Right from 9s: the walk queues at 9s, below the window start.
+	if _, state := index.step(9*time.Second, 1, duration); state != frameStepLoading {
+		t.Fatalf("state = %v, want loading", state)
+	}
+	// The fetch lands [7s, 11s]; merged over capacity, the retained
+	// half must be the low one around pendingAt 9s — not the front
+	// eviction the forward direction used to pick.
+	at, state := index.applyWindow(7*time.Second, 11*time.Second,
+		[]time.Duration{7 * time.Second, 8 * time.Second, 9 * time.Second, 10 * time.Second, 11 * time.Second}, duration)
+	if state != frameStepMoved || at != 10*time.Second {
+		t.Fatalf("walk = %s/%v, want 10s/moved", at, state)
+	}
+	if index.windowStart != 7*time.Second || index.windowEnd != 11*time.Second {
+		t.Fatalf("retained window = [%s, %s], want [7s, 11s]", index.windowStart, index.windowEnd)
+	}
+}
