@@ -3,6 +3,7 @@ package transcode
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,14 @@ import (
 type Callbacks struct {
 	OnLog      func(string)
 	OnProgress func(model.Progress)
+	// OnStageStart fires on the run goroutine before each stage begins,
+	// including before its Verify.
+	OnStageStart func(index, total int, stage Stage)
+	// OnStageDone fires after every stage attempt, success or failure.
+	// A stage whose OutputPath is non-empty and whose err is nil
+	// published a user-visible output; OutputPath-empty stages are
+	// processing-only regardless of err.
+	OnStageDone func(index, total int, stage Stage, err error)
 }
 
 type Runner struct{}
@@ -31,10 +40,41 @@ type RunControl struct {
 	stdin              io.WriteCloser
 	cancelRequested    bool
 	terminateRequested bool
+	cancelCtx          context.Context
+	cancelFunc         context.CancelFunc
 }
 
 func NewRunControl() *RunControl {
 	return &RunControl{}
+}
+
+// CancelContext returns a context that is canceled by RequestCancel and
+// Terminate alike, created lazily. Auxiliary subprocesses of a staged run
+// (intermediate verification) run under it so a hanging probe is
+// interrupted instead of blocking the run; a request made before the
+// first call is honored immediately.
+func (c *RunControl) CancelContext() context.Context {
+	if c == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cancelCtx == nil {
+		c.cancelCtx, c.cancelFunc = context.WithCancel(context.Background())
+		if c.cancelRequested || c.terminateRequested {
+			c.cancelFunc()
+		}
+	}
+	return c.cancelCtx
+}
+
+// triggerCancelContextLocked cancels the lazily created context, if any.
+func (c *RunControl) triggerCancelContextLocked() {
+	if c.cancelFunc != nil {
+		c.cancelFunc()
+	}
 }
 
 // RequestCancel asks FFmpeg to finish its current work and close its output
@@ -50,6 +90,7 @@ func (c *RunControl) RequestCancel() {
 	}
 	c.cancelRequested = true
 	stdin := c.stdin
+	c.triggerCancelContextLocked()
 	c.mu.Unlock()
 	if stdin != nil {
 		_, _ = io.WriteString(stdin, "q\n")
@@ -69,6 +110,7 @@ func (c *RunControl) Terminate() {
 	}
 	c.terminateRequested = true
 	process := c.process
+	c.triggerCancelContextLocked()
 	c.mu.Unlock()
 	if process != nil {
 		_ = process.Kill()
@@ -159,6 +201,134 @@ func (Runner) Run(control *RunControl, plan model.RunPlan, duration time.Duratio
 	}
 	if waitErr != nil {
 		return fmt.Errorf("FFmpeg failed: %w", waitErr)
+	}
+	return nil
+}
+
+// Stage is one step of a multi-stage conversion: one FFmpeg invocation
+// with optional pre-flight verification and post-success publication.
+type Stage struct {
+	Plan     model.RunPlan
+	Duration time.Duration // progress denominator for this stage (segment length; Total for a join pass)
+	Label    string        // human-readable stage name used in errors and the run log
+	// OutputPath names the USER-VISIBLE output this stage publishes.
+	// Empty for processing-only stages (join-mode intermediate
+	// encodes): OnStageDone distinguishes successful processing
+	// (err == nil) from successful publication (err == nil && OutputPath
+	// != "") so the UI's published-output counter and log wording stay
+	// honest.
+	OutputPath string
+	// Verify, when set, runs before the stage's process starts. A
+	// verification failure skips the stage entirely. Implementations
+	// should honor the context so cancellation interrupts a hung probe.
+	Verify func(ctx context.Context) error
+	// Publish, when set, runs after a successful Run and a cancellation
+	// recheck. Publication is the commit point that makes the stage's
+	// output user-visible; a stage without Publish is processing-only.
+	Publish func() error
+}
+
+// afterRunHook, when non-nil, runs inside RunSequence between a stage's
+// successful Run and the pre-publication cancellation recheck. Nil in
+// production; tests install it to land a cancellation request in exactly
+// that window deterministically.
+var afterRunHook func(index int)
+
+// RunSequence executes stages sequentially under one control. Progress
+// is aggregated across stages, weighted by each stage's Duration, and
+// only advances the completed base when a stage actually finishes (a
+// stage's out_time is segment-relative and can be non-monotonic).
+//
+// Cancellation semantics: a graceful or forced request made at any point
+// — before the sequence, during verification, during a stage's process,
+// or between a successful Run and its publication — makes RunSequence
+// return the bare context.Canceled sentinel; no further output is
+// published and no further stage starts. Outputs already published stay
+// published (a Publish that completed before the request counts as
+// published via OnStageDone). Other errors are wrapped with the stage's
+// Label for the run log and status line.
+func (Runner) RunSequence(control *RunControl, stages []Stage, cb Callbacks) error {
+	if len(stages) == 0 {
+		return errors.New("RunSequence requires at least one stage")
+	}
+	if control == nil {
+		control = NewRunControl()
+	}
+	total := time.Duration(0)
+	for _, s := range stages {
+		total += s.Duration
+	}
+	done := func(i int, stage Stage, err error) {
+		if cb.OnStageDone != nil {
+			cb.OnStageDone(i, len(stages), stage, err)
+		}
+	}
+	fail := func(i int, stage Stage, err error) error {
+		done(i, stage, err)
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		return fmt.Errorf("%s: %w", stage.Label, err)
+	}
+	ctx := control.CancelContext()
+	var base time.Duration
+	var lastPct float64
+	for i, stage := range stages {
+		if cancel, terminate := control.requested(); cancel || terminate {
+			return fail(i, stage, context.Canceled)
+		}
+		if cb.OnStageStart != nil {
+			cb.OnStageStart(i, len(stages), stage)
+		}
+		if stage.Verify != nil {
+			if err := stage.Verify(ctx); err != nil {
+				if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+					return fail(i, stage, context.Canceled)
+				}
+				return fail(i, stage, err)
+			}
+		}
+		if cancel, terminate := control.requested(); cancel || terminate {
+			return fail(i, stage, context.Canceled)
+		}
+		err := (Runner{}).Run(control, stage.Plan, stage.Duration, Callbacks{
+			OnLog: cb.OnLog,
+			OnProgress: func(p model.Progress) {
+				if cb.OnProgress == nil || total <= 0 {
+					return
+				}
+				stageTime := p.OutTime
+				if stage.Duration > 0 && stageTime > stage.Duration {
+					stageTime = stage.Duration
+				}
+				if stageTime < 0 {
+					stageTime = 0
+				}
+				agg := float64(base+stageTime) / float64(total)
+				agg = min(1, max(lastPct, agg))
+				lastPct = agg
+				reported := p
+				reported.OutTime = base + stageTime
+				reported.Percentage = agg
+				cb.OnProgress(reported)
+			},
+		})
+		if err != nil {
+			return fail(i, stage, err)
+		}
+		if hook := afterRunHook; hook != nil {
+			hook(i)
+		}
+		if cancel, terminate := control.requested(); cancel || terminate {
+			return fail(i, stage, context.Canceled)
+		}
+		if stage.Publish != nil {
+			if err := stage.Publish(); err != nil {
+				return fail(i, stage, err)
+			}
+		}
+		done(i, stage, nil)
+		base += stage.Duration
 	}
 	return nil
 }
