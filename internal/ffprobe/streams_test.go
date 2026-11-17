@@ -3,6 +3,7 @@ package ffprobe
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -185,18 +186,37 @@ func TestCompareStreamLayouts(t *testing.T) {
 		// Real FLAC STREAMINFO dumps ffprobe reported for two
 		// one-second libx264/FLAC cuts of one input (offsets 1s and
 		// 4s): identical decoder configuration, per-segment block and
-		// frame sizes, per-segment decoded-audio MD5. Comparing the
-		// whole blob rejected valid segments, so only the configuration
-		// region (bytes 10-13) participates for FLAC.
-		flac := func(extradata string) StreamKey {
-			return StreamKey{
-				CodecType: "audio", CodecName: "flac", ChannelLayout: "mono",
-				SampleRate: 44100, Channels: 1, Extradata: extradata,
+		// frame sizes, per-segment decoded-audio MD5. The dumps go
+		// through parseStreamKeys — the production path — because the
+		// extradata normalization happens there: flattening the hexdump
+		// before parsing it destroyed its structure and silently
+		// reverted FLAC to the whole-blob comparison.
+		flacDoc := func(extradata string) []byte {
+			doc := map[string]any{"streams": []map[string]any{{
+				"codec_name": "flac", "codec_type": "audio",
+				"channel_layout": "mono", "sample_rate": "44100", "channels": 1,
+				"extradata": extradata,
+			}}}
+			b, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
 			}
+			return b
 		}
-		if err := CompareStreamLayouts(names[:2], [][]StreamKey{
-			{flac(flacSeg1Extradata)}, {flac(flacSeg2Extradata)},
-		}); err != nil {
+		parse := func(extradata string) []StreamKey {
+			keys, err := parseStreamKeys(flacDoc(extradata))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return keys
+		}
+
+		seg1 := parse(flacSeg1Extradata)
+		seg2 := parse(flacSeg2Extradata)
+		if seg1[0].Extradata == strings.Join(strings.Fields(flacSeg1Extradata), " ") {
+			t.Fatal("FLAC extradata must be reduced to the config signature, not the flattened dump")
+		}
+		if err := CompareStreamLayouts(names[:2], [][]StreamKey{seg1, seg2}); err != nil {
 			t.Fatalf("valid FLAC segments must pass verification: %v", err)
 		}
 
@@ -206,9 +226,7 @@ func TestCompareStreamLayouts(t *testing.T) {
 		if other == flacSeg1Extradata {
 			t.Fatal("test setup: sample-rate replacement did not apply")
 		}
-		err := CompareStreamLayouts(names[:2], [][]StreamKey{
-			{flac(flacSeg1Extradata)}, {flac(other)},
-		})
+		err := CompareStreamLayouts(names[:2], [][]StreamKey{seg1, parse(other)})
 		if err == nil || !strings.Contains(err.Error(), "extradata") {
 			t.Fatalf("FLAC config difference must fail with an extradata report, got %v", err)
 		}
@@ -216,12 +234,12 @@ func TestCompareStreamLayouts(t *testing.T) {
 		// Unparsable dumps cannot extract the config region and fall
 		// back to the raw comparison — strictly, never looser.
 		if err := CompareStreamLayouts(names[:2], [][]StreamKey{
-			{flac("0xAAAA")}, {flac("0xBBBB")},
+			parse("0xAAAA"), parse("0xBBBB"),
 		}); err == nil || !strings.Contains(err.Error(), "extradata") {
 			t.Fatalf("unparsable dumps must compare raw, got %v", err)
 		}
 		if err := CompareStreamLayouts(names[:2], [][]StreamKey{
-			{flac("0xAAAA")}, {flac("0xAAAA")},
+			parse("0xAAAA"), parse("0xAAAA"),
 		}); err != nil {
 			t.Fatalf("identical unparsable dumps must match: %v", err)
 		}

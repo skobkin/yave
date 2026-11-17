@@ -120,10 +120,40 @@ func parseStreamKeys(data []byte) ([]StreamKey, error) {
 			Height:        stream.Height,
 			SampleRate:    parseInt(stream.SampleRate),
 			Channels:      stream.Channels,
-			Extradata:     strings.Join(strings.Fields(stream.Extradata), " "),
+			Extradata:     streamExtradataSignature(stream.CodecName, stream.Extradata),
 		})
 	}
 	return keys, nil
+}
+
+// streamExtradataSignature normalizes an extradata field into the
+// string CompareStreamLayouts compares.
+//
+// For most codecs the field is pure configuration (AAC's
+// AudioSpecificConfig, H.264/HEVC SPS/PPS), so whitespace-normalizing
+// the probe text is enough: equivalent dumps match regardless of
+// spacing.
+//
+// FLAC is parsed instead of flattened. ffprobe reports STREAMINFO as a
+// hexdump whose structure — the line breaks and the double-space
+// separator before the ASCII column — is exactly what tells parseHexDump
+// where the bytes end and the decoration begins, so flattening first
+// destroys the parse (and splices the ASCII column into the byte
+// stream). The decoder-configuration signature is therefore extracted
+// while the dump is still intact; everything else in STREAMINFO —
+// block and frame sizes, total sample count, the MD5 of the decoded
+// audio — is per-segment data the encoder finalizes per file and must
+// not reject joinable segments. An unparsable dump falls back to the
+// whitespace-normalized raw text, keeping the comparison strict.
+func streamExtradataSignature(codecName, extradata string) string {
+	if strings.EqualFold(codecName, "flac") {
+		if b, ok := parseHexDump(extradata); ok && len(b) >= 14 {
+			config := append([]byte(nil), b[10:14]...)
+			config[3] &= 0xc0
+			return fmt.Sprintf("flac-streaminfo-config:%x", config)
+		}
+	}
+	return strings.Join(strings.Fields(extradata), " ")
 }
 
 // CompareStreamLayouts verifies that every intermediate carries the same
@@ -185,48 +215,10 @@ func streamKeyMismatch(reference, current StreamKey) (field, refVal, curVal stri
 		return "channels", fmt.Sprint(reference.Channels), fmt.Sprint(current.Channels)
 	case current.ChannelLayout != reference.ChannelLayout:
 		return "channel_layout", reference.ChannelLayout, current.ChannelLayout
-	case strings.EqualFold(reference.CodecName, "flac"):
-		// FLAC STREAMINFO mixes the decoder configuration with
-		// per-segment data (see flacExtradataSignature): compare only
-		// the configuration, falling back to the raw dumps whenever the
-		// config region cannot be extracted so a format change can only
-		// tighten the check, never silently loosen it.
-		refSig, curSig := flacExtradataSignature(reference.Extradata), flacExtradataSignature(current.Extradata)
-		switch {
-		case refSig == "" || curSig == "":
-			if current.Extradata != reference.Extradata {
-				return "extradata", reference.Extradata, current.Extradata
-			}
-		case refSig != curSig:
-			return "extradata", reference.Extradata, current.Extradata
-		}
 	case current.Extradata != reference.Extradata:
 		return "extradata", reference.Extradata, current.Extradata
 	}
 	return "", "", ""
-}
-
-// flacExtradataSignature reduces a FLAC STREAMINFO hexdump to its
-// decoder-configuration bytes: the packed sample-rate, channel, and
-// bits-per-sample field (STREAMINFO bytes 10-13, the last masked to
-// its two leading bits). STREAMINFO's remaining bytes — block and
-// frame sizes, total sample count, and the MD5 of the decoded audio —
-// are per-segment data the encoder finalizes per file: segments that
-// cut different spans of one input legitimately differ there while
-// remaining joinable, so comparing the whole blob rejects valid
-// exports with a layout mismatch. Sample rate and channel count are
-// additionally compared as top-level fields; this signature keeps the
-// bit depth in the check. An empty string means the dump was
-// unparsable or too short, and the caller falls back to the raw
-// comparison.
-func flacExtradataSignature(dump string) string {
-	b, ok := parseHexDump(dump)
-	if !ok || len(b) < 14 {
-		return ""
-	}
-	config := append([]byte(nil), b[10:14]...)
-	config[3] &= 0xc0
-	return string(config)
 }
 
 // parseHexDump decodes an ffprobe hexdump — "00000000: 03bc 03bc …
