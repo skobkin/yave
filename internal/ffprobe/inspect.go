@@ -148,21 +148,26 @@ func parseDuration(value string) time.Duration {
 // ffmpeg's input-side -ss and the normalized frame index measure — from
 // ffprobe's format.duration and format.start_time. The shift is needed
 // only for Matroska: its Duration element stores the maximum block
-// timestamp, so with a positive origin (broadcast recordings with a PCR
-// offset, -output_ts_offset sources) it sits on the container's absolute
-// timestamp line and overshoots the playable span (an 8s MKV with
-// start_time 10 reports 18.023s). Span-based containers already report
-// the playable span — MP4/MOV and MPEG-TS fixtures with
-// -output_ts_offset 2 report duration 8.000 with start_time 2.000 and
-// 3.400 — and subtracting there would shorten valid inputs by the
-// origin (8s → 6s, 8s → 4.6s). Both Matroska variants identify as
-// "matroska,webm". A zero or negative origin needs no shift in any
-// container, and a Matroska duration not past its origin is already
-// span-shaped.
+// timestamp, so with a nonzero origin it sits on the container's
+// absolute timestamp line. A positive origin (broadcast recordings with
+// a PCR offset, -output_ts_offset sources) overshoots the playable span
+// (an 8s MKV with start_time 10 reports 18.023s); a negative origin
+// (-copyts/-itsoffset recordings, whose first frames sit before zero)
+// undershoots it (a 4s MKV with start_time -1.028 reports 3.009s, and
+// seeding the trim end with that silently drops the leading second).
+// Span-based containers already report the playable span — MP4/MOV and
+// MPEG-TS fixtures with -output_ts_offset 2 report duration 8.000 with
+// start_time 2.000 and 3.400 — and subtracting there would shorten
+// valid inputs by the origin (8s → 6s, 8s → 4.6s). Both Matroska
+// variants identify as "matroska,webm". A zero origin needs no shift,
+// and a Matroska duration not past its origin is already span-shaped.
 func normalizeDuration(raw, start, formatName string) time.Duration {
 	duration := parseDuration(raw)
 	if strings.Contains(formatName, "matroska") {
-		if origin := parseDuration(start); origin > 0 && duration > origin {
+		// Signed parse: the origin can be negative. The duration guard
+		// keeps a missing duration (0) from fabricating a span out of a
+		// negative origin (0 − (−1.5) would read as 1.5s of media).
+		if origin, ok := parseSeconds(start); ok && origin != 0 && duration > 0 && duration > origin {
 			duration -= origin
 		}
 	}

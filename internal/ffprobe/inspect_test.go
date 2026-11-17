@@ -3,6 +3,7 @@ package ffprobe
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -83,10 +84,13 @@ func TestParseToleratesMissingAndMalformedOptionalFields(t *testing.T) {
 // playable span (an 8s MKV with start_time 10 reported 18.023s) — so
 // trim validation accepted cuts past the video's actual end, which
 // ffmpeg cannot seek into and which produce an empty, unreadable
-// output. Duration is reported input-relative there. Span-based
-// containers (MP4/MOV, MPEG-TS) already report the playable span with
-// a positive origin — subtracting universally shortened valid inputs
-// (an 8s MP4 with start_time 2 reported 6s, an 8s MPEG-TS with
+// output. With a negative start_time (-copyts/-itsoffset recordings)
+// it undershoots instead (a 4s MKV with start_time -1.028 reported
+// 3.009s), and seeding the trim end with that dropped the leading
+// second of content. Duration is reported input-relative there.
+// Span-based containers (MP4/MOV, MPEG-TS) already report the playable
+// span with a nonzero origin — subtracting universally shortened valid
+// inputs (an 8s MP4 with start_time 2 reported 6s, an 8s MPEG-TS with
 // start_time 3.4 reported 4.6s), making the timeline end inaccessible.
 func TestParseNormalizesPositiveOriginDuration(t *testing.T) {
 	cases := []struct {
@@ -101,7 +105,8 @@ func TestParseNormalizesPositiveOriginDuration(t *testing.T) {
 		{"mpegts span preserved", "mpegts", "8.000000", "3.400000", 8 * time.Second},
 		{"matroska zero origin unchanged", "matroska,webm", "61.250000", "0.000000", 61*time.Second + 250*time.Millisecond},
 		{"matroska missing origin unchanged", "matroska,webm", "12.500000", "", 12*time.Second + 500*time.Millisecond},
-		{"matroska negative origin unchanged", "matroska,webm", "8.000000", "-1.500000", 8 * time.Second},
+		{"matroska negative origin shifted", "matroska,webm", "3.009000", "-1.028000", 4*time.Second + 37*time.Millisecond},
+		{"matroska negative origin keeps missing duration", "matroska,webm", "", "-1.500000", 0},
 		{"matroska duration not past origin", "matroska,webm", "5.000000", "10.000000", 5 * time.Second},
 	}
 	for _, tc := range cases {
@@ -122,6 +127,57 @@ func TestParseRejectsInvalidJSON(t *testing.T) {
 	_, err := Parse([]byte(`{"streams":`))
 	if err == nil || !strings.Contains(err.Error(), "decode ffprobe JSON") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Regression, real toolchain: a Matroska recording whose first frames
+// sit before timestamp zero (-copyts -itsoffset remux with
+// -avoid_negative_ts disabled; the muxer clamps the offset away without
+// them) reports a NEGATIVE start_time and a duration that undershoots
+// the playable span, because the Matroska Duration element stores the
+// maximum block timestamp on the shifted line. The origin must be
+// subtracted there too — seeding the trim end with the raw duration
+// silently dropped the leading second of content.
+func TestParseNegativeOriginMatroskaRealDocument(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real ffmpeg + ffprobe)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+
+	dir := t.TempDir()
+	input := dir + "/input.mkv"
+	generate := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg on a t.TempDir file
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=4:size=160x120:rate=30",
+		"-f", "lavfi", "-i", "sine=duration=4",
+		"-c:v", "mpeg4", "-q:v", "3", "-c:a", "aac", input)
+	if out, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generating test media: %v: %s", err, out)
+	}
+	shifted := dir + "/shifted.mkv"
+	shift := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: as above
+		"-hide_banner", "-loglevel", "error",
+		"-copyts", "-itsoffset", "-1.014", "-i", input,
+		"-c", "copy", "-avoid_negative_ts", "disabled", shifted)
+	if out, err := shift.CombinedOutput(); err != nil {
+		t.Fatalf("shifting test media: %v: %s", err, out)
+	}
+
+	info, err := Inspect(context.Background(), ffprobePath, shifted)
+	if err != nil {
+		t.Fatalf("inspecting shifted media: %v", err)
+	}
+	// The shifted file's raw duration is ~2.986 (max block timestamp at
+	// origin -1.014); the playable span is the full 4s plus muxing slack.
+	if info.Duration < 4*time.Second || info.Duration > 4*time.Second+100*time.Millisecond {
+		t.Errorf("duration = %s, want ~4.03s (the raw value must be origin-shifted)", info.Duration)
 	}
 }
 
