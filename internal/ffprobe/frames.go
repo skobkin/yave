@@ -31,10 +31,15 @@ type frameDocument struct {
 // mpeg4 window through 2s reported only frame 0 — the 2-frame delay
 // outlasted any fixed second-based margin). The read therefore
 // extends until a frame lands beyond the window end, proving the
-// buffer flushed; the extension doubles per attempt, and the attempt
-// cap bounds the retries — a window at the media end can never see a
-// frame beyond it, so completeness is unprovable there and the cap
-// decides. The [from, to] filter keeps every returned result exact.
+// buffer flushed; the extension doubles per attempt, bounded by the
+// attempt cap. A read that reaches the media end flushes the decoder
+// completely (an EOF read on a 60s mpeg4 -bf 2 fixture reported every
+// frame, including the reorder-delay tail), so a capped result there
+// is final. A cap reached short of the media end means readahead
+// remained that could still prove completeness — the probe fails
+// rather than return a silently partial window, which the frame index
+// would navigate by frames that do not exist. The [from, to] filter
+// keeps every returned result exact.
 const (
 	frameProbeMargin   = time.Second // first extension past the window end
 	frameProbeAttempts = 3           // read extensions 1s, 2s, then 4s
@@ -74,7 +79,7 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 	// requested window is input-relative (the timeline ffmpeg's
 	// input-side -ss and the UI playhead use). Probe the container's
 	// format start_time and shift the bounds into the absolute domain.
-	origin, err := inputOrigin(ctx, resolved, inputPath)
+	origin, duration, err := inputOrigin(ctx, resolved, inputPath)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -125,10 +130,21 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 			}
 		}
 		// Complete once a frame landed beyond the window end — every
-		// buffered frame at or before to has then been flushed. Windows
-		// at the media end never satisfy this, so the attempt cap serves
-		// their result instead.
-		if attempt >= frameProbeAttempts-1 || len(times) > 0 && times[len(times)-1] > to {
+		// buffered frame at or before to has then been flushed.
+		if len(times) > 0 && times[len(times)-1] > to {
+			return filtered, origin, nil
+		}
+		// The cap is exhausted without proof. A final read that reached
+		// the media end hit EOF, which flushes the decoder completely —
+		// the result is final and an empty window genuinely holds no
+		// frames. Short of the media end, an extension could still prove
+		// completeness: fail rather than return a silently partial
+		// window. An unknown duration cannot prove EOF, so it keeps the
+		// lenient final result.
+		if attempt >= frameProbeAttempts-1 {
+			if duration > 0 && to+margin < duration {
+				return nil, 0, fmt.Errorf("probe frame times %q: window %s..%s incomplete: frames buffered behind the decoder reorder delay outlast the %s read margin, and the media continues past the read end", inputPath, from, to, margin)
+			}
 			return filtered, origin, nil
 		}
 	}
@@ -136,25 +152,28 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 
 // inputOrigin reports the input's format start_time — the reference
 // ffmpeg's input-side -ss seeks against and the domain -read_intervals
-// expects — as an absolute timestamp. A plain zero-origin file (the
-// common case) yields 0; a missing, "N/A" or unparseable value
-// degrades to 0 rather than failing the window fetch.
-func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration, error) {
+// expects — as an absolute timestamp, together with the input-relative
+// playable duration (normalizeDuration): the window loop needs the
+// media end to tell a final EOF read from one that stopped short with
+// readahead remaining. A plain zero-origin file (the common case)
+// yields 0; a missing, "N/A" or unparseable origin degrades to 0
+// rather than failing the window fetch.
+func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration, time.Duration, error) {
 	out, err := exec.CommandContext(ctx, resolved, //nolint:gosec // G204: resolved via exec.LookPath
 		"-v", "error",
-		"-show_entries", "format=start_time",
+		"-show_entries", "format=start_time,duration,format_name",
 		"-of", "json",
 		inputPath,
 	).CombinedOutput()
 	if err != nil {
 		if ctx.Err() != nil {
-			return 0, ctx.Err()
+			return 0, 0, ctx.Err()
 		}
 		detail := strings.TrimSpace(string(out))
 		if detail == "" {
 			detail = err.Error()
 		}
-		return 0, fmt.Errorf("probe input origin %q: %s", inputPath, detail)
+		return 0, 0, fmt.Errorf("probe input origin %q: %s", inputPath, detail)
 	}
 	// ffprobe emits a single format object ("format"), not an array —
 	// decoding a "formats" array always produced an empty document and a
@@ -163,20 +182,23 @@ func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration
 	// nonzero-origin input.
 	var document struct {
 		Format struct {
-			StartTime string `json:"start_time"`
+			FormatName string `json:"format_name"`
+			Duration   string `json:"duration"`
+			StartTime  string `json:"start_time"`
 		} `json:"format"`
 	}
 	if err := json.Unmarshal(out, &document); err != nil {
-		return 0, fmt.Errorf("decode ffprobe format JSON: %w", err)
+		return 0, 0, fmt.Errorf("decode ffprobe format JSON: %w", err)
 	}
+	duration := normalizeDuration(document.Format.Duration, document.Format.StartTime, document.Format.FormatName)
 	// ParseFloat unlike parseSeconds so a negative container origin
 	// still shifts the window correctly. A missing, "N/A" or unparseable
 	// value errors out and degrades to zero by design.
 	seconds, err := strconv.ParseFloat(strings.TrimSpace(document.Format.StartTime), 64)
 	if err != nil {
-		return 0, nil //nolint:nilerr // "N/A" or unparseable origin degrades to zero by design
+		return 0, duration, nil //nolint:nilerr // "N/A" or unparseable origin degrades to zero by design
 	}
-	return time.Duration(seconds * float64(time.Second)), nil
+	return time.Duration(seconds * float64(time.Second)), duration, nil
 }
 
 // parseFrameTimes converts raw absolute frame timestamps into

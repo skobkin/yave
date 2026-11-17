@@ -25,6 +25,15 @@ import (
 // not help, because the inherited fd tracks the inode, not the path.
 func writeFakeFFprobe(t *testing.T, dir, document, formatStart string) string {
 	t.Helper()
+	format := `{"format":{"start_time":"` + formatStart + `"}}`
+	return writeFakeFFprobeFormat(t, dir, document, format)
+}
+
+// writeFakeFFprobeFormat is writeFakeFFprobe with the whole origin-probe
+// document under test — the EOF-completeness tests need duration and
+// format_name, not just start_time.
+func writeFakeFFprobeFormat(t *testing.T, dir, document, format string) string {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("test helper is a POSIX shell script")
 	}
@@ -33,7 +42,7 @@ func writeFakeFFprobe(t *testing.T, dir, document, formatStart string) string {
 		`printf '%s\n' "$@" >> ` + strconv.Quote(argsFile) + "\n" +
 		"case \"$*\" in\n" +
 		"*format=start_time*)\n" +
-		`  printf '{"format":{"start_time":"%s"}}\n' ` + strconv.Quote(formatStart) + "\n" +
+		"  printf '%s\\n' " + strconv.Quote(format) + "\n" +
 		"  ;;\n" +
 		"*)\n" +
 		"  cat <<'EOF'\n" + document + "\nEOF\n" +
@@ -383,6 +392,102 @@ func TestFrameTimesExtendsReadPastDecoderBuffering(t *testing.T) {
 		if !durationClose(times[i], want[i], time.Millisecond) {
 			t.Errorf("times[%d] = %s, want %s", i, times[i], want[i])
 		}
+	}
+}
+
+// Regression: a decoder reorder delay longer than every read margin (a
+// 0.2fps mpeg4 -bf 2 source holds two frames = ten seconds) left the
+// attempt cap returning a partial window as success — the [18.1s,
+// 22.1s] window of a 60s fixture reported no frames although a frame
+// exists at 20s, and the frame index stepped by frames that do not
+// exist. A capped read that stopped short of the media end has
+// readahead left that could still prove completeness, so the probe
+// must fail instead.
+func TestFrameTimesFailsWhenReadaheadRemains(t *testing.T) {
+	dir := t.TempDir()
+	document := `{
+	  "frames": [
+	    {"best_effort_timestamp_time": "0.000000"},
+	    {"best_effort_timestamp_time": "5.000000"},
+	    {"best_effort_timestamp_time": "10.000000"},
+	    {"best_effort_timestamp_time": "15.000000"}
+	  ]
+	}`
+	format := `{"format":{"format_name":"mpegts","duration":"60.000000","start_time":"0.000000"}}`
+	fake := writeFakeFFprobeFormat(t, dir, document, format)
+	from := 18*time.Second + 100*time.Millisecond
+	to := 22*time.Second + 100*time.Millisecond
+	times, _, err := FrameTimes(context.Background(), fake, "/tmp/in.ts", from, to)
+	if err == nil {
+		t.Fatalf("times = %v, want an incomplete-window error", times)
+	}
+}
+
+// The mirror case: the capped read reached the media end (to plus the
+// final margin covers the duration), so EOF flushed the decoder and the
+// result is final — an empty window is genuinely empty, not a silently
+// partial one. The fixture feeds the EOF comparison through the
+// Matroska absolute-duration normalization: a 62s container duration
+// with start_time 2 spans 60s, which the 57s+4s read end covers; an
+// unnormalized 62s would wrongly report the window incomplete.
+func TestFrameTimesAcceptsFinalWindowAtMediaEnd(t *testing.T) {
+	dir := t.TempDir()
+	document := `{
+	  "frames": [
+	    {"best_effort_timestamp_time": "2.000000"},
+	    {"best_effort_timestamp_time": "7.000000"},
+	    {"best_effort_timestamp_time": "12.000000"}
+	  ]
+	}`
+	format := `{"format":{"format_name":"matroska,webm","duration":"62.000000","start_time":"2.000000"}}`
+	fake := writeFakeFFprobeFormat(t, dir, document, format)
+	times, origin, err := FrameTimes(context.Background(), fake, "/tmp/in.mkv", 55*time.Second, 57*time.Second)
+	if err != nil {
+		t.Fatalf("window at media end must be final, not an error: %v", err)
+	}
+	if len(times) != 0 {
+		t.Errorf("times = %v, want none inside [55s, 57s]", times)
+	}
+	if !durationClose(origin, 2*time.Second, time.Microsecond) {
+		t.Errorf("origin = %s, want 2s", origin)
+	}
+}
+
+// Regression, real toolchain: the attempt cap returned the [18.1s,
+// 22.1s] window of a 60s 0.2fps mpeg4 -bf 2 fixture as an empty
+// success — the ten-second reorder delay outlasts every read margin
+// and the frame at 20s stays buffered — so the frame index treated the
+// window as complete and stepped by frames that do not exist. The
+// probe must report the window incomplete while the media continues
+// past the capped read end. 0.2fps and mpeg4 are native lavfi and
+// encoder choices, so no codec gating is needed.
+func TestFrameTimesReportsIncompleteWindowOnSlowBFrames(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real ffmpeg + ffprobe)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+
+	dir := t.TempDir()
+	input := dir + "/input.mp4"
+	generate := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg on a t.TempDir file
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=60:size=160x120:rate=1/5",
+		"-c:v", "mpeg4", "-bf", "2", "-q:v", "3", input)
+	if out, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generating test media: %v: %s", err, out)
+	}
+
+	times, _, err := FrameTimes(context.Background(), ffprobePath, input,
+		18*time.Second+100*time.Millisecond, 22*time.Second+100*time.Millisecond)
+	if err == nil {
+		t.Fatalf("times = %v, want an incomplete-window error (the frame at 20s stays buffered)", times)
 	}
 }
 
