@@ -60,11 +60,20 @@ func (c *Controller) loadProfile(p model.Profile) {
 	// too: a profile saved without a preset/tune must land on
 	// "(default)", not keep the previously loaded profile's selection
 	// (which would be emitted for this profile and persisted by Save).
-	if p.Video.Preset == "" && c.presetSelect.Selected != "" {
+	// An encoder without a curated preset/tune list keeps its value in
+	// the free-text entry, so clear the dropdown there as well: the
+	// selection left by a previous profile is not this profile's state,
+	// and updateControlState treats a non-empty selection as current —
+	// switching to a curated encoder would re-select it (populate from
+	// text only happens when the selection is empty), overriding the
+	// loaded value (load x265 "slow", load VAAPI "medium", switch to
+	// libx264: the stale dropdown regenerated "slow").
+	ve := c.currentVideoEncoder()
+	if (p.Video.Preset == "" || ve == nil || len(ve.Presets()) == 0) && c.presetSelect.Selected != "" {
 		c.presetSelect.ClearSelected()
 	}
 	c.populatePresetOptions(p.Video.Preset)
-	if p.Video.Tune == "" && c.tuneSelect.Selected != "" {
+	if (p.Video.Tune == "" || ve == nil || len(ve.Tunes()) == 0) && c.tuneSelect.Selected != "" {
 		c.tuneSelect.ClearSelected()
 	}
 	c.populateTuneOptions(p.Video.Tune)

@@ -377,6 +377,66 @@ func TestSliderValuesRoundTripThroughProfile(t *testing.T) {
 	}
 }
 
+// Regression: loading a profile whose encoder has no curated preset or
+// tune list (the VAAPI encoders) kept the previous profile's dropdown
+// selection alive — populate empties the options but not the selection,
+// and updateControlState treats a non-empty selection as current state.
+// Load x265 "slow", then VAAPI "medium", then switch to libx264: the
+// stale dropdown re-selected "slow" and the generated profile emitted
+// it instead of the loaded "medium" (which only lived in the hidden
+// text entry). The load clears the dropdown when the loaded encoder has
+// no curated list, so the next curated switch seeds from the loaded
+// value.
+func TestProfileLoadClearsPresetSelectionForPresetlessEncoders(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	c.loadProfile(model.Profile{
+		Name:      "x265-slow",
+		Container: "mkv",
+		Video:     model.VideoSettings{Encoder: "libx265", Preset: "slow", Tune: "fast"},
+	})
+	if got := c.presetSelect.Selected; got != "slow" {
+		t.Fatalf("preset selection after x265 load = %q, want slow", got)
+	}
+
+	// A preset-less encoder's saved value lives only in the free-text
+	// entry; the dropdown must not carry the previous profile's state.
+	c.loadProfile(model.Profile{
+		Name:      "vaapi",
+		Container: "mkv",
+		Video:     model.VideoSettings{Encoder: "hevc_vaapi", Preset: "medium", Tune: "medium"},
+	})
+	if got := c.presetSelect.Selected; got != "" {
+		t.Fatalf("preset selection after VAAPI load = %q, want cleared", got)
+	}
+	if got := c.preset.Text; got != "medium" {
+		t.Fatalf("preset text entry = %q, want medium", got)
+	}
+	if got := c.tuneSelect.Selected; got != "" {
+		t.Fatalf("tune selection after VAAPI load = %q, want cleared", got)
+	}
+	if got := c.tune.Text; got != "medium" {
+		t.Fatalf("tune text entry = %q, want medium", got)
+	}
+
+	// Switching to a curated encoder seeds the dropdown from the loaded
+	// value instead of resurrecting the previous profile's selection.
+	c.videoEncoder.SetSelected("libx264")
+	if got := c.presetSelect.Selected; got != "medium" {
+		t.Fatalf("preset after libx264 switch = %q, want the loaded medium", got)
+	}
+	if got := c.profileFromWidgets().Video.Preset; got != "medium" {
+		t.Fatalf("generated preset = %q, want medium", got)
+	}
+	if got := c.profileFromWidgets().Video.Tune; got != "medium" {
+		t.Fatalf("generated tune = %q, want medium", got)
+	}
+}
+
 func TestSVTPresetSwitchesControlsAndPreservesCategoricalValue(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
