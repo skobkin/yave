@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 
 	"git.skobk.in/skobkin/yave/internal/vaapi"
@@ -72,6 +73,17 @@ type AudioSettings struct {
 	Bitrate        string `yaml:"bitrate"`
 	Compression    int    `yaml:"compression"`
 	CopyAllStreams bool   `yaml:"copy_all_streams"`
+}
+
+// IsStreamCopy reports whether the audio settings select stream copy.
+// ffmpeg argument generation and validation must agree on this predicate,
+// so both go through this method: copy is selected either via the mode or
+// via the encoder name, case- and whitespace-insensitively.
+func (a AudioSettings) IsStreamCopy() bool {
+	if a.Mode == AudioCopy {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(a.Encoder), "copy")
 }
 
 type SubtitleSettings struct {
@@ -173,17 +185,41 @@ type TimeRange struct {
 	End   time.Duration
 }
 
+// Length returns the segment's duration (End - Start).
+func (r TimeRange) Length() time.Duration {
+	return r.End - r.Start
+}
+
+// TrimExportMode selects how a multi-segment trim selection is exported.
+// Job-scoped UI state: never persisted into profiles or config.
+type TrimExportMode uint8
+
+const (
+	// TrimExportSeparate writes every selected segment to its own output
+	// file, named by the output template plus a _partNN suffix.
+	TrimExportSeparate TrimExportMode = iota
+	// TrimExportJoin concatenates all selected segments, in chronological
+	// order, into a single output file.
+	TrimExportJoin
+)
+
+func (m TrimExportMode) String() string {
+	switch m {
+	case TrimExportJoin:
+		return "Join into one file"
+	default:
+		return "Separate files"
+	}
+}
+
 // TrimSelection holds the cut ranges applied to the current input. It
 // belongs to the input/conversion job, not to saved profiles, so it has
 // no yaml tags and is never persisted (Profile/Config stay untouched).
 // An empty selection means "no trimming".
 //
-// Phase 1 supports exactly ONE segment. The slice shape is deliberate:
-// a later phase will lift the restriction by allowing more entries, and
-// keeping the plural field now means the model, command generation, and
-// UI plumbing keep their shape. The single-segment restriction is
-// enforced in validation.ValidateTrim and is temporary — multiple
-// intervals are a planned feature, not an invalid model design.
+// Segments are half-open intervals kept in chronological order;
+// validation rejects overlaps and reordering. Single-segment callers
+// (ffmpeg.BuildCommand) use First().
 type TrimSelection struct {
 	Segments []TimeRange
 }
@@ -193,7 +229,9 @@ func (t TrimSelection) Active() bool {
 	return len(t.Segments) > 0
 }
 
-// First returns the single segment Phase 1 supports.
+// First returns the first segment, for single-segment consumers such as
+// ffmpeg.BuildCommand (which deliberately accepts exactly one segment
+// per invocation; multi-segment exports build one plan per segment).
 func (t TrimSelection) First() (TimeRange, bool) {
 	if len(t.Segments) == 0 {
 		return TimeRange{}, false
@@ -205,7 +243,7 @@ func (t TrimSelection) First() (TimeRange, bool) {
 func (t TrimSelection) Total() time.Duration {
 	var total time.Duration
 	for _, s := range t.Segments {
-		total += s.End - s.Start
+		total += s.Length()
 	}
 	return total
 }
