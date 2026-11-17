@@ -90,8 +90,17 @@ func ValidateTrimExport(trim model.TrimSelection, mode model.TrimExportMode,
 	if audio.IsStreamCopy() {
 		result.warning("trim.export", "%s",
 			"joining with copied audio can leave small gaps (about 20 ms) at each segment boundary "+
-				"from codec priming samples; encode the audio, or switch the export mode to separate files "+
+				"from codec priming samples; switch the export mode to separate files "+
 				"for gap-free parts")
+	} else if strings.Contains(strings.ToLower(strings.TrimSpace(audio.Encoder)), "aac") {
+		// Measured by the join integration tests
+		// (TestJoinAudioBoundaryContinuity): independently re-encoded AAC
+		// leaks encoder priming into every boundary as about 40 ms of
+		// decoded silence, while copied AAC stays continuous — so encoding
+		// is never a gap-free workaround for the copy-path gaps.
+		result.warning("trim.export", "%s",
+			"joining independently encoded AAC introduces silence (about 40 ms) at each segment boundary "+
+				"from encoder priming; switch the export mode to separate files for gap-free parts")
 	}
 	return result
 }

@@ -181,7 +181,7 @@ func TestValidateTrimExport(t *testing.T) {
 		{Start: time.Second, End: 2 * time.Second},
 		{Start: 3 * time.Second, End: 4 * time.Second},
 	}}
-	encodedAudio := model.AudioSettings{Mode: model.AudioEncode, Encoder: "aac"}
+	encodedAudio := model.AudioSettings{Mode: model.AudioEncode, Encoder: "flac"}
 
 	tests := []struct {
 		name          string
@@ -210,6 +210,21 @@ func TestValidateTrimExport(t *testing.T) {
 			name: "encoded video join clean",
 			trim: multi, mode: model.TrimExportJoin, media: media,
 			videoEncoder: "libx264", audio: encodedAudio,
+		},
+		{
+			// Measured by TestJoinAudioBoundaryContinuity: re-encoded AAC
+			// leaks about 40 ms of priming silence into every boundary
+			// while copied audio stays continuous.
+			name: "encoded aac join warns about priming gaps",
+			trim: multi, mode: model.TrimExportJoin, media: media,
+			videoEncoder: "libx264", audio: model.AudioSettings{Mode: model.AudioEncode, Encoder: "aac"},
+			wantWarnings: 1, wantSubstring: "encoded AAC",
+		},
+		{
+			name: "encoded fdk-aac join warns about priming gaps",
+			trim: multi, mode: model.TrimExportJoin, media: media,
+			videoEncoder: "libx264", audio: model.AudioSettings{Mode: model.AudioEncode, Encoder: "libfdk_aac"},
+			wantWarnings: 1, wantSubstring: "encoded AAC",
 		},
 		{
 			name: "audio copy mode join warns",
