@@ -66,6 +66,9 @@ type Controller struct {
 	trimSelection model.TrimSelection
 	trimInValid   bool
 	trimOutValid  bool
+	// trimSelected is the index of the segment the boundary entries,
+	// Set In/Out buttons, and Ctrl+[/] chords edit. UI-thread state.
+	trimSelected int
 	// displayingBoundaries guards programmatic writes into the boundary
 	// entries: Entry.SetText fires OnChanged whenever the text differs,
 	// and the editing callback would re-parse the millisecond-truncated

@@ -694,24 +694,36 @@ func TestTimelineCoordinateMapping(t *testing.T) {
 func TestTimelinePickTarget(t *testing.T) {
 	tl := newSizedTimeline(t)
 	tl.duration = 10 * time.Second
-	tl.in, tl.out = time.Second, 9*time.Second
-	if got := tl.pickTarget(tl.xAt(time.Second)); got != tlIn {
-		t.Errorf("on the in handle: %v, want tlIn", got)
+	tl.SetSegmentsSilent([]model.TimeRange{{Start: time.Second, End: 9 * time.Second}})
+	if got, seg := tl.pickTarget(tl.xAt(time.Second)); got != tlIn || seg != 0 {
+		t.Errorf("on the in handle: %v seg %d, want tlIn/0", got, seg)
 	}
-	if got := tl.pickTarget(tl.xAt(9 * time.Second)); got != tlOut {
-		t.Errorf("on the out handle: %v, want tlOut", got)
+	if got, seg := tl.pickTarget(tl.xAt(9 * time.Second)); got != tlOut || seg != 0 {
+		t.Errorf("on the out handle: %v seg %d, want tlOut/0", got, seg)
 	}
-	if got := tl.pickTarget(tl.xAt(5 * time.Second)); got != tlPlayhead {
+	if got, _ := tl.pickTarget(tl.xAt(5 * time.Second)); got != tlPlayhead {
 		t.Errorf("middle: %v, want tlPlayhead", got)
 	}
 	// Overlapping handles (in ≈ out): nearest wins; in wins ties.
-	tl.in, tl.out = 5*time.Second, 5*time.Second
-	if got := tl.pickTarget(tl.xAt(5*time.Second) + 2); got != tlIn {
+	tl.SetSegmentsSilent([]model.TimeRange{{Start: 5 * time.Second, End: 5 * time.Second}})
+	if got, _ := tl.pickTarget(tl.xAt(5*time.Second) + 2); got != tlIn {
 		t.Errorf("tie at overlapping handles: %v, want tlIn", got)
 	}
-	tl.out = 5*time.Second + 5*time.Millisecond
-	if got := tl.pickTarget(tl.xAt(tl.out)); got != tlOut {
+	tl.SetSegmentsSilent([]model.TimeRange{{Start: 5 * time.Second, End: 5*time.Second + 5*time.Millisecond}})
+	if got, _ := tl.pickTarget(tl.xAt(tl.Segments()[0].End)); got != tlOut {
 		t.Errorf("closer to out: %v, want tlOut", got)
+	}
+	// Multi-segment: each segment contributes its own handle pair; the
+	// nearest handle across all segments wins.
+	tl.SetSegmentsSilent([]model.TimeRange{
+		{Start: time.Second, End: 3 * time.Second},
+		{Start: 5 * time.Second, End: 7 * time.Second},
+	})
+	if got, seg := tl.pickTarget(tl.xAt(5 * time.Second)); got != tlIn || seg != 1 {
+		t.Errorf("segment 2 in handle: %v seg %d, want tlIn/1", got, seg)
+	}
+	if got, seg := tl.pickTarget(tl.xAt(3 * time.Second)); got != tlOut || seg != 0 {
+		t.Errorf("segment 1 out handle: %v seg %d, want tlOut/0", got, seg)
 	}
 }
 
@@ -748,22 +760,22 @@ func TestTimelineKeyboard(t *testing.T) {
 	}
 
 	// Ctrl+[ / Ctrl+] set the boundaries at the playhead.
-	tl.SetRange(0, tl.Duration())
+	tl.SetSegments([]model.TimeRange{{Start: 0, End: tl.Duration()}})
 	tl.KeyDown(&fyne.KeyEvent{Name: desktop.KeyControlLeft})
 	tl.TypedKey(&fyne.KeyEvent{Name: fyne.KeyLeftBracket})
-	if tl.in != 1100*time.Millisecond {
-		t.Fatalf("ctrl+[ set in = %s, want 1.1s", tl.in)
+	if tl.Segments()[0].Start != 1100*time.Millisecond {
+		t.Fatalf("ctrl+[ set in = %s, want 1.1s", tl.Segments()[0].Start)
 	}
 	tl.TypedKey(&fyne.KeyEvent{Name: fyne.KeyRightBracket})
-	if tl.out != 1100*time.Millisecond {
-		t.Fatalf("ctrl+] set out = %s, want 1.1s", tl.out)
+	if tl.Segments()[0].End != 1100*time.Millisecond {
+		t.Fatalf("ctrl+] set out = %s, want 1.1s", tl.Segments()[0].End)
 	}
 	tl.KeyUp(&fyne.KeyEvent{Name: desktop.KeyControlLeft})
 	// Without ctrl held, brackets do nothing.
 	tl.SetPlayhead(2 * time.Second)
 	tl.TypedKey(&fyne.KeyEvent{Name: fyne.KeyLeftBracket})
-	if tl.in != 1100*time.Millisecond {
-		t.Fatalf("bracket without ctrl moved in to %s", tl.in)
+	if tl.Segments()[0].Start != 1100*time.Millisecond {
+		t.Fatalf("bracket without ctrl moved in to %s", tl.Segments()[0].Start)
 	}
 	// Only the four committed steps fired onPlayhead; boundary and
 	// programmatic moves did not.
@@ -843,36 +855,37 @@ func TestTimelineCtrlBracketsViaTypedShortcut(t *testing.T) {
 	tl := newSizedTimeline(t)
 	tl.SetDuration(10 * time.Second)
 	tl.SetPlayhead(2 * time.Second)
-	tl.SetRange(0, tl.Duration())
-	var ranges []struct{ in, out time.Duration }
-	tl.onRange = func(in, out time.Duration) {
-		ranges = append(ranges, struct{ in, out time.Duration }{in, out})
+	tl.SetSegments([]model.TimeRange{{Start: 0, End: tl.Duration()}})
+	var commits int
+	tl.onSegments = func([]model.TimeRange) {
+		commits++
 	}
 
 	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyLeftBracket, Modifier: fyne.KeyModifierControl})
-	if tl.in != 2*time.Second {
-		t.Fatalf("ctrl+[ via shortcut set in = %s, want 2s", tl.in)
+	if tl.Segments()[0].Start != 2*time.Second {
+		t.Fatalf("ctrl+[ via shortcut set in = %s, want 2s", tl.Segments()[0].Start)
 	}
 	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyRightBracket, Modifier: fyne.KeyModifierControl})
-	if tl.out != 2*time.Second {
-		t.Fatalf("ctrl+] via shortcut set out = %s, want 2s", tl.out)
+	if tl.Segments()[0].End != 2*time.Second {
+		t.Fatalf("ctrl+] via shortcut set out = %s, want 2s", tl.Segments()[0].End)
 	}
-	if len(ranges) != 2 {
-		t.Fatalf("onRange fired %d times, want 2", len(ranges))
+	if commits != 2 {
+		t.Fatalf("onSegments fired %d times, want 2", commits)
 	}
 
 	// Unrelated shortcuts must not move the boundaries.
 	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyC, Modifier: fyne.KeyModifierControl})
-	if tl.in != 2*time.Second || tl.out != 2*time.Second || len(ranges) != 2 {
-		t.Fatalf("unrelated shortcut changed boundaries: in=%s out=%s ranges=%d", tl.in, tl.out, len(ranges))
+	if tl.Segments()[0].Start != 2*time.Second || tl.Segments()[0].End != 2*time.Second || commits != 2 {
+		t.Fatalf("unrelated shortcut changed boundaries: in=%s out=%s commits=%d",
+			tl.Segments()[0].Start, tl.Segments()[0].End, commits)
 	}
 
 	// Disabled timelines ignore shortcuts, like they ignore TypedKey.
 	tl.Disable()
 	tl.SetPlayhead(3 * time.Second)
 	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyLeftBracket, Modifier: fyne.KeyModifierControl})
-	if tl.in != 2*time.Second {
-		t.Fatalf("disabled timeline accepted shortcut: in=%s", tl.in)
+	if tl.Segments()[0].Start != 2*time.Second {
+		t.Fatalf("disabled timeline accepted shortcut: in=%s", tl.Segments()[0].Start)
 	}
 }
 
@@ -929,7 +942,7 @@ func TestSetTrimEnabledSeedsFullRangeAndResetKeepsEnabled(t *testing.T) {
 
 	// Reset restores the full range and keeps trimming enabled: the
 	// command keeps -ss/-t until trimming is disabled.
-	c.trimSelection = withBoundary(c.trimSelection, 3*time.Second, 7*time.Second)
+	c.trimSelection = withSegmentBoundary(c.trimSelection, 0, 3*time.Second, 7*time.Second)
 	c.resetTrimSelection()
 	if !c.trimEnabled {
 		t.Fatal("reset must keep trimming enabled")
@@ -1001,13 +1014,13 @@ func TestNewInputDisablesTrimControls(t *testing.T) {
 	}
 }
 
-// Regression: typing into a boundary entry re-fires onRange on every
+// Regression: typing into a boundary entry re-fires onSegments on every
 // keystroke (valid prefixes parse and apply immediately), and
-// onTimelineRange rewrote the very entry being typed into — the user's
-// next keystrokes landed inside the reformatted text and corrupted it.
-// The focused entry keeps its in-flight text; the other entry mirrors
-// the committed value; an unfocused commit rewrites both.
-func TestOnTimelineRangeKeepsFocusedEntryText(t *testing.T) {
+// onTimelineSegments rewrote the very entry being typed into — the
+// user's next keystrokes landed inside the reformatted text and
+// corrupted it. The focused entry keeps its in-flight text; the other
+// entry mirrors the committed value; an unfocused commit rewrites both.
+func TestOnTimelineSegmentsKeepFocusedEntryText(t *testing.T) {
 	c := testTrimController(t)
 	c.trimEnabled = true
 	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{{Start: 0, End: 5 * time.Second}}}
@@ -1021,12 +1034,12 @@ func TestOnTimelineRangeKeepsFocusedEntryText(t *testing.T) {
 		t.Fatal("entry must resolve to a canvas once attached")
 	}
 
-	canvas.Focus(c.trimIn) // focus before editing: the edit itself echoes through SetRange→onRange
+	canvas.Focus(c.trimIn) // focus before editing: the edit itself echoes through SetSegments→onSegments
 	c.trimIn.SetText("00:00")
 	if c.trimIn.Text != "00:00" {
 		t.Fatalf("typing echo rewrote the focused entry: %q", c.trimIn.Text)
 	}
-	c.onTimelineRange(0, 10*time.Second)
+	c.onTimelineSegments([]model.TimeRange{{Start: 0, End: 10 * time.Second}})
 	if c.trimIn.Text != "00:00" {
 		t.Fatalf("focused entry text rewritten mid-edit: %q", c.trimIn.Text)
 	}
@@ -1036,7 +1049,7 @@ func TestOnTimelineRangeKeepsFocusedEntryText(t *testing.T) {
 
 	canvas.Focus(c.trimOut)
 	c.trimOut.SetText("")
-	c.onTimelineRange(time.Second, 9*time.Second)
+	c.onTimelineSegments([]model.TimeRange{{Start: time.Second, End: 9 * time.Second}})
 	if c.trimOut.Text != "" {
 		t.Fatalf("focused out entry rewritten mid-edit: %q", c.trimOut.Text)
 	}
@@ -1066,21 +1079,22 @@ func TestBoundaryDisplayWritesDoNotReenterEditing(t *testing.T) {
 
 	// Ctrl+[ at 66.667ms commits the exact frame position; the entry
 	// displays its millisecond truncation without feeding it back.
-	c.trimTimeline.SetRange(66667*time.Microsecond, 100*time.Millisecond)
-	if got := boundaryOf(c.trimSelection, 0); got != 66667*time.Microsecond {
+	c.trimTimeline.SetSegments([]model.TimeRange{{Start: 66667 * time.Microsecond, End: 100 * time.Millisecond}})
+	c.onTimelineSegments(c.trimTimeline.Segments())
+	if got := segmentBoundary(c.trimSelection, 0, 0); got != 66667*time.Microsecond {
 		t.Fatalf("exact in boundary collapsed to display text: %s, want 66.667ms", got)
 	}
 	if c.trimIn.Text != formatTimestamp(66667*time.Microsecond) {
 		t.Fatalf("in entry = %q, want the truncated display text", c.trimIn.Text)
 	}
-	if got := boundaryOf(c.trimSelection, 1); got != 100*time.Millisecond {
+	if got := segmentBoundary(c.trimSelection, 0, 1); got != 100*time.Millisecond {
 		t.Fatalf("out boundary disturbed: %s, want 100ms", got)
 	}
 
 	// Set In from the playhead keeps the exact position too.
 	c.trimTimeline.SetPlayhead(133333 * time.Microsecond)
 	c.setInFromPlayhead()
-	if got := boundaryOf(c.trimSelection, 0); got != 133333*time.Microsecond {
+	if got := segmentBoundary(c.trimSelection, 0, 0); got != 133333*time.Microsecond {
 		t.Fatalf("Set In lost frame precision: %s, want 133.333ms", got)
 	}
 
@@ -1116,7 +1130,7 @@ func TestSetBoundaryFromPlayheadKeepsOppositeEntryAuthoritative(t *testing.T) {
 	c.trimTimeline.SetPlayhead(30 * time.Second)
 
 	c.setInFromPlayhead()
-	if got := boundaryOf(c.trimSelection, 0); got != 30*time.Second {
+	if got := segmentBoundary(c.trimSelection, 0, 0); got != 30*time.Second {
 		t.Fatalf("Set In boundary = %s, want 30s", got)
 	}
 	if !c.trimInValid {
@@ -1134,7 +1148,7 @@ func TestSetBoundaryFromPlayheadKeepsOppositeEntryAuthoritative(t *testing.T) {
 	c.trimInValid = false
 	c.trimTimeline.SetPlayhead(time.Minute)
 	c.setOutFromPlayhead()
-	if got := boundaryOf(c.trimSelection, 1); got != time.Minute {
+	if got := segmentBoundary(c.trimSelection, 0, 1); got != time.Minute {
 		t.Fatalf("Set Out boundary = %s, want 1m", got)
 	}
 	if c.trimInValid {
@@ -1153,7 +1167,7 @@ func TestSetBoundaryFromPlayheadKeepsOppositeEntryAuthoritative(t *testing.T) {
 		KeyName:  fyne.KeyLeftBracket,
 		Modifier: fyne.KeyModifierControl,
 	})
-	if got := boundaryOf(c.trimSelection, 0); got != 45*time.Second {
+	if got := segmentBoundary(c.trimSelection, 0, 0); got != 45*time.Second {
 		t.Fatalf("Ctrl+[ boundary = %s, want 45s", got)
 	}
 	if c.trimOutValid || c.trimOut.Text != "" {
@@ -1176,17 +1190,17 @@ func TestTypedOutOfRangeBoundaryStaysAuthoritative(t *testing.T) {
 	c.resetTrimSelection()
 
 	c.setTrimBoundary("out", "00:11:00.000")
-	if got := boundaryOf(c.trimSelection, 1); got != 11*time.Minute {
+	if got := segmentBoundary(c.trimSelection, 0, 1); got != 11*time.Minute {
 		t.Fatalf("typed out boundary clamped to %s, want the typed 11m", got)
 	}
-	if _, out := c.trimTimeline.Range(); out != duration {
+	if out := c.trimTimeline.Segments()[0].End; out != duration {
 		t.Fatalf("timeline displays out %s, want the clamped view %s", out, duration)
 	}
 	if !strings.Contains(c.trimMessage.Text, "exceeds the input duration") {
 		t.Fatalf("validation message = %q, want the exceeds-duration error", c.trimMessage.Text)
 	}
 	sel := c.trimRequest()
-	if !sel.Active() || boundaryOf(sel, 1) != 11*time.Minute {
+	if !sel.Active() || segmentBoundary(sel, 0, 1) != 11*time.Minute {
 		t.Fatalf("trimRequest lost the typed boundary: %+v", sel)
 	}
 	if result := validation.ValidateTrim(sel, &c.media, "libx265"); result.Valid() {
@@ -1196,7 +1210,7 @@ func TestTypedOutOfRangeBoundaryStaysAuthoritative(t *testing.T) {
 	// A crossed typed pair stays authoritative the same way (the
 	// timeline displays it as-is) and validation rejects it.
 	c.setTrimBoundary("in", "00:12:00.000")
-	if got := boundaryOf(c.trimSelection, 0); got != 12*time.Minute {
+	if got := segmentBoundary(c.trimSelection, 0, 0); got != 12*time.Minute {
 		t.Fatalf("typed in boundary = %s, want the typed 12m", got)
 	}
 	if result := validation.ValidateTrim(c.trimRequest(), &c.media, "libx265"); result.Valid() {
@@ -1733,5 +1747,212 @@ func TestFrameIndexEvictionKeepsWalkNeighborOnDenseSources(t *testing.T) {
 		}, duration, duration)
 	if state != frameStepMoved || at != 200*time.Millisecond {
 		t.Fatalf("dense walk = %s/%v, want 200ms/moved (neighbor retained)", at, state)
+	}
+}
+
+func TestTimelineSetSegmentsClampsAndFires(t *testing.T) {
+	tl := newSizedTimeline(t)
+	tl.SetDuration(10 * time.Second)
+	var fired [][]model.TimeRange
+	tl.onSegments = func(segments []model.TimeRange) {
+		fired = append(fired, segments)
+	}
+	// Out-of-range bounds clamp; the loud variant fires onSegments with
+	// the clamped copy.
+	tl.SetSegments([]model.TimeRange{{Start: -time.Second, End: 20 * time.Second}})
+	if seg := tl.Segments()[0]; seg.Start != 0 || seg.End != 10*time.Second {
+		t.Fatalf("clamped segment = %v, want [0, 10s]", seg)
+	}
+	if len(fired) != 1 || fired[0][0].Start != 0 || fired[0][0].End != 10*time.Second {
+		t.Fatalf("onSegments fired with %v", fired)
+	}
+	// The silent variant updates the view without the callback.
+	tl.SetSegmentsSilent([]model.TimeRange{{Start: time.Second, End: 2 * time.Second}})
+	if len(fired) != 1 {
+		t.Fatalf("SetSegmentsSilent fired onSegments %d times", len(fired)-1)
+	}
+	if tl.Segments()[0].Start != time.Second {
+		t.Fatal("SetSegmentsSilent must still update the view")
+	}
+	// A selection past the end folds back into range.
+	tl.SetSelected(5)
+	if tl.Selected() != 0 {
+		t.Fatalf("selection past the end = %d, want 0", tl.Selected())
+	}
+}
+
+func TestTimelineDragClampsToNeighbors(t *testing.T) {
+	tl := newSizedTimeline(t)
+	tl.SetDuration(30 * time.Second)
+	segments := []model.TimeRange{
+		{Start: time.Second, End: 5 * time.Second},
+		{Start: 8 * time.Second, End: 12 * time.Second},
+		{Start: 15 * time.Second, End: 20 * time.Second},
+	}
+	tl.SetSegmentsSilent(segments)
+
+	// Dragging segment 1's In below segment 0's End clamps to adjacency.
+	tl.MouseDown(&desktop.MouseEvent{
+		Button:     desktop.MouseButtonPrimary,
+		PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(8*time.Second), 0)},
+	})
+	tl.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(3*time.Second), 0)}})
+	tl.DragEnd()
+	if got := tl.Segments()[1].Start; got != 5*time.Second {
+		t.Fatalf("segment 1 In dragged to %s, want clamped 5s (segment 0 End)", got)
+	}
+
+	// Dragging segment 1's Out past segment 2's Start clamps likewise.
+	tl.MouseDown(&desktop.MouseEvent{
+		Button:     desktop.MouseButtonPrimary,
+		PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(12*time.Second), 0)},
+	})
+	tl.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(18*time.Second), 0)}})
+	tl.DragEnd()
+	if got := tl.Segments()[1].End; got != 15*time.Second {
+		t.Fatalf("segment 1 Out dragged to %s, want clamped 15s (segment 2 Start)", got)
+	}
+
+	// No overlaps were created anywhere.
+	for i := 1; i < len(tl.Segments()); i++ {
+		if tl.Segments()[i].Start < tl.Segments()[i-1].End {
+			t.Fatalf("drag created an overlap: %v", tl.Segments())
+		}
+	}
+
+	// A handle drag on segment 0 keeps segment 2 untouched. The click at
+	// 5s ties seg0's Out with seg1's In (both moved to 5s by the earlier
+	// drags); the earlier candidate wins — seg0's Out — and dragging it
+	// right clamps to seg1's current Start (adjacency).
+	tl.MouseDown(&desktop.MouseEvent{
+		Button:     desktop.MouseButtonPrimary,
+		PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(5*time.Second), 0)},
+	})
+	tl.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(9*time.Second), 0)}})
+	tl.DragEnd()
+	if tl.Segments()[2] != segments[2] {
+		t.Fatalf("segment 2 disturbed: %v", tl.Segments()[2])
+	}
+	if got := tl.Segments()[0].End; got != 5*time.Second {
+		t.Fatalf("segment 0 End dragged to %s, want clamped 5s (segment 1 Start)", got)
+	}
+}
+
+func TestTimelineSelectionViaRegionClickAndHandleGrab(t *testing.T) {
+	tl := newSizedTimeline(t)
+	tl.SetDuration(30 * time.Second)
+	tl.SetSegmentsSilent([]model.TimeRange{
+		{Start: time.Second, End: 5 * time.Second},
+		{Start: 8 * time.Second, End: 12 * time.Second},
+		{Start: 15 * time.Second, End: 20 * time.Second},
+	})
+	var selected []int
+	tl.onSelected = func(index int) { selected = append(selected, index) }
+
+	// A region click inside segment 2 selects it AND moves the playhead.
+	tl.MouseDown(&desktop.MouseEvent{
+		Button:     desktop.MouseButtonPrimary,
+		PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(17*time.Second), 0)},
+	})
+	if tl.Selected() != 2 || len(selected) != 1 || selected[0] != 2 {
+		t.Fatalf("region click selected %d (%v), want 2", tl.Selected(), selected)
+	}
+	// xAt/timeAt round-trips through 200px lose a fraction of a
+	// microsecond at 17/30 of the span; compare with a tolerance.
+	if diff := tl.Playhead() - 17*time.Second; diff > 10*time.Millisecond || diff < -10*time.Millisecond {
+		t.Fatalf("region click moved the playhead to %s, want 17s", tl.Playhead())
+	}
+	// Releasing the playhead drag fires no further selection.
+	tl.DragEnd()
+	if len(selected) != 1 {
+		t.Fatalf("release re-fired selection: %v", selected)
+	}
+
+	// Grabbing segment 0's out handle selects segment 0.
+	tl.MouseDown(&desktop.MouseEvent{
+		Button:     desktop.MouseButtonPrimary,
+		PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(5*time.Second), 0)},
+	})
+	if tl.Selected() != 0 || len(selected) != 2 || selected[1] != 0 {
+		t.Fatalf("handle grab selected %d (%v), want 0", tl.Selected(), selected)
+	}
+	tl.DragEnd()
+
+	// A click in a gap (no segment) selects nothing new.
+	tl.MouseDown(&desktop.MouseEvent{
+		Button:     desktop.MouseButtonPrimary,
+		PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(6*time.Second), 0)},
+	})
+	if tl.Selected() != 0 || len(selected) != 2 {
+		t.Fatalf("gap click changed selection: %d (%v)", tl.Selected(), selected)
+	}
+	tl.DragEnd()
+
+	// Programmatic SetSelected fires nothing.
+	tl.SetSelected(1)
+	if len(selected) != 2 {
+		t.Fatalf("SetSelected fired onSelected: %v", selected)
+	}
+}
+
+func TestTimelineKeyboardTargetsSelectedSegment(t *testing.T) {
+	tl := newSizedTimeline(t)
+	tl.SetDuration(30 * time.Second)
+	tl.SetSegments([]model.TimeRange{
+		{Start: time.Second, End: 5 * time.Second},
+		{Start: 8 * time.Second, End: 12 * time.Second},
+		{Start: 15 * time.Second, End: 20 * time.Second},
+	})
+	tl.SetSelected(1)
+
+	// Ctrl+] may extend Out toward (not past) the next segment's Start:
+	// at 13s — between segment 1's End and segment 2's Start — it
+	// extends segment 1 to 13s; past segment 2's Start it is a no-op.
+	tl.SetPlayhead(13 * time.Second)
+	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyRightBracket, Modifier: fyne.KeyModifierControl})
+	if tl.Segments()[1].End != 13*time.Second {
+		t.Fatalf("ctrl+] inside the gap did not extend: %s", tl.Segments()[1].End)
+	}
+	tl.SetPlayhead(16 * time.Second)
+	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyRightBracket, Modifier: fyne.KeyModifierControl})
+	if tl.Segments()[1].End != 13*time.Second {
+		t.Fatalf("ctrl+] past the next segment's start changed it to %s", tl.Segments()[1].End)
+	}
+	// Ctrl+] at 10s applies to segment 1 only.
+	tl.SetPlayhead(10 * time.Second)
+	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyRightBracket, Modifier: fyne.KeyModifierControl})
+	if tl.Segments()[1].End != 10*time.Second || tl.Segments()[2].End != 20*time.Second {
+		t.Fatalf("ctrl+] disturbed other segments: %v", tl.Segments())
+	}
+	// Ctrl+[ below the previous segment's End is a no-op.
+	tl.SetPlayhead(4 * time.Second)
+	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyLeftBracket, Modifier: fyne.KeyModifierControl})
+	if tl.Segments()[1].Start != 8*time.Second {
+		t.Fatalf("ctrl+[ before the previous segment's end changed it to %s", tl.Segments()[1].Start)
+	}
+	// Ctrl+[ at 8s (the segment's own Start) is fine.
+	tl.SetPlayhead(8 * time.Second)
+	tl.TypedShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyLeftBracket, Modifier: fyne.KeyModifierControl})
+	if tl.Segments()[1].Start != 8*time.Second || tl.Segments()[0].Start != time.Second {
+		t.Fatalf("ctrl+[ disturbed other segments: %v", tl.Segments())
+	}
+}
+
+func TestTimelineFocusLossClearsDragSeg(t *testing.T) {
+	tl := newSizedTimeline(t)
+	tl.SetDuration(10 * time.Second)
+	tl.SetSegmentsSilent([]model.TimeRange{
+		{Start: time.Second, End: 3 * time.Second},
+		{Start: 5 * time.Second, End: 7 * time.Second},
+	})
+	tl.drag, tl.dragSeg = tlIn, 1
+	tl.FocusLost()
+	if tl.drag != tlNone || tl.dragSeg != -1 {
+		t.Fatalf("focus loss must clear drag state: drag=%v dragSeg=%d", tl.drag, tl.dragSeg)
+	}
+	tl.drag, tl.dragSeg = tlOut, 1
+	tl.Disable()
+	if tl.drag != tlNone || tl.dragSeg != -1 {
+		t.Fatalf("disable must clear drag state: drag=%v dragSeg=%d", tl.drag, tl.dragSeg)
 	}
 }

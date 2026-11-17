@@ -10,12 +10,15 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"git.skobk.in/skobkin/yave/internal/model"
 )
 
 // tlDrag identifies which part of the timeline a pointer gesture is
 // operating on. The target is acquired on MouseDown (desktop.Mouseable)
 // so the whole gesture is unambiguous, including when handle hit zones
-// overlap near the timeline edges.
+// overlap near the timeline edges. dragSeg (on the widget) carries the
+// segment index the gesture grabbed.
 type tlDrag uint8
 
 const (
@@ -33,10 +36,11 @@ const (
 	playheadBarWidth   = 2
 )
 
-// timeline is the trim tab's scrubber: a thumbnail strip with a
-// playhead and draggable In/Out boundary handles. It is the app's only
-// custom-rendered widget and implements the desktop extensions
-// (Keyable, Mouseable, Hoverable) directly:
+// timeline is the trim tab's scrubber: a thumbnail strip with a playhead
+// and one pair of draggable In/Out boundary handles per segment, with
+// the selected segment highlighted. It is the app's only custom-rendered
+// widget and implements the desktop extensions (Keyable, Mouseable,
+// Hoverable) directly:
 //
 //   - Keyboard handling is strictly local. Keys reach only the focused
 //     widget, so arrows keep working in Entry widgets and the
@@ -51,13 +55,20 @@ const (
 //   - Hover reports the hovered timestamp immediately without ever
 //     moving the committed playhead; the controller turns it into a
 //     debounced hover preview.
+//
+// Segments are half-open intervals in caller-owned display order.
+// Pointer drags clamp against neighboring bounds, so they can never
+// create overlaps or crossings; typed edits bypass the widget and are
+// validated by the controller instead.
 type timeline struct {
 	widget.BaseWidget
 
 	duration time.Duration
 	playhead time.Duration
-	in, out  time.Duration
+	segments []model.TimeRange
+	selected int
 	thumbs   []image.Image
+	dragSeg  int // segment index for tlIn/tlOut drags; -1 otherwise
 
 	focused   bool
 	enabled   bool
@@ -73,22 +84,26 @@ type timeline struct {
 	// onPlayhead fires when the committed playhead moves (click, drag,
 	// keyboard). It does NOT fire for hover positions.
 	onPlayhead func(time.Duration)
-	// onRange fires when an In/Out handle drag commits (MouseUp /
-	// DragEnd) and when the boundaries are set programmatically via
-	// SetRange.
-	onRange func(in, out time.Duration)
+	// onSegments fires when a handle drag commits (MouseUp / DragEnd)
+	// and when segments are set programmatically via SetSegments.
+	onSegments func(segments []model.TimeRange)
+	// onSelected fires when a pointer gesture changes the selected
+	// segment (region click or handle grab). Programmatic SetSelected
+	// is controller-driven and fires nothing.
+	onSelected func(index int)
 	// onHover fires with the hovered position, or nil when the pointer
 	// leaves the widget.
 	onHover func(*time.Duration)
 	// onSetIn/onSetOut fire for the Ctrl+[ / Ctrl+] shortcuts so the
 	// controller applies a single-boundary update (own entry and
-	// validity flag only). Nil falls back to the widget's loud SetRange.
+	// validity flag only). Nil falls back to the widget's loud
+	// SetSegments.
 	onSetIn  func()
 	onSetOut func()
 }
 
 func newTimeline() *timeline {
-	t := &timeline{enabled: true, hoverX: -1}
+	t := &timeline{enabled: true, hoverX: -1, dragSeg: -1}
 	t.ExtendBaseWidget(t)
 	return t
 }
@@ -104,51 +119,87 @@ var (
 )
 
 // SetDuration replaces the media duration and clamps the existing
-// positions into the new range. Unlike SetRange it does not fire
-// onRange: a media change (new input, reset) is controller-driven, and
-// re-entering the controller would resurrect state it just cleared.
+// positions into the new range. Unlike SetSegments it does not fire
+// onSegments: a media change (new input, reset) is controller-driven,
+// and re-entering the controller would resurrect state it just cleared.
 func (t *timeline) SetDuration(d time.Duration) {
 	if d < 0 {
 		d = 0
 	}
 	t.duration = d
 	t.SetPlayhead(t.playhead)
-	t.in = t.clamp(t.in)
-	t.out = t.clamp(t.out)
+	for i := range t.segments {
+		t.segments[i].Start = t.clamp(t.segments[i].Start)
+		t.segments[i].End = t.clamp(t.segments[i].End)
+	}
 	t.Refresh()
 }
 
 // Duration returns the media duration the timeline shows.
 func (t *timeline) Duration() time.Duration { return t.duration }
 
-// SetRange replaces the selection boundaries, clamped into
-// [0, duration]. A crossed range (in > out) is displayed as-is so the
-// bars show the honest positions — validation reports it; only pointer
-// drags are prevented from crossing (they clamp in MouseDown/Dragged).
-// onRange fires so callers stay in sync with the clamped values.
-func (t *timeline) SetRange(in, out time.Duration) {
-	t.in = t.clamp(in)
-	t.out = t.clamp(out)
-	t.Refresh()
-	if t.onRange != nil {
-		t.onRange(t.in, t.out)
+// SetSegments replaces the displayed segments, clamping every bound
+// into [0, duration], and fires onSegments with the clamped copy so
+// callers stay in sync. A crossed segment (Start > End) is displayed
+// as-is so the bars show the honest positions — validation reports it;
+// only pointer drags are prevented from crossing (they clamp against
+// neighbors in MouseDown/Dragged).
+func (t *timeline) SetSegments(segments []model.TimeRange) {
+	t.SetSegmentsSilent(segments)
+	if t.onSegments != nil {
+		t.onSegments(t.Segments())
 	}
 }
 
-// Range returns the current selection boundaries.
-func (t *timeline) Range() (time.Duration, time.Duration) { return t.in, t.out }
-
-// SetRangeSilent updates the displayed boundaries without firing
-// onRange. Boundary-entry edits use it: the typed value stays
+// SetSegmentsSilent updates the displayed segments without firing
+// onSegments. Boundary-entry edits use it: the typed value stays
 // authoritative in the controller — validation must see an out-of-range
 // entry as an error, not have it silently clamp to whatever the
 // timeline displays — while the widget still shows the clamped view.
-// Pointer drags and the boundary shortcuts keep using SetRange, whose
-// callback commits the clamped coordinates as the selection.
-func (t *timeline) SetRangeSilent(in, out time.Duration) {
-	t.in = t.clamp(in)
-	t.out = t.clamp(out)
+// Pointer drags and the boundary shortcuts keep using SetSegments,
+// whose callback commits the clamped coordinates as the selection.
+func (t *timeline) SetSegmentsSilent(segments []model.TimeRange) {
+	t.segments = make([]model.TimeRange, len(segments))
+	for i, seg := range segments {
+		t.segments[i] = model.TimeRange{
+			Start: t.clamp(seg.Start),
+			End:   t.clamp(seg.End),
+		}
+	}
+	if t.selected >= len(t.segments) {
+		t.selected = max(0, len(t.segments)-1)
+	}
 	t.Refresh()
+}
+
+// Segments returns a copy of the displayed segments.
+func (t *timeline) Segments() []model.TimeRange {
+	out := make([]model.TimeRange, len(t.segments))
+	copy(out, t.segments)
+	return out
+}
+
+// SetSelected moves the selection highlight (clamped); fires nothing.
+func (t *timeline) SetSelected(index int) {
+	t.selected = t.clampIndex(index)
+	t.Refresh()
+}
+
+// Selected returns the selected segment index.
+func (t *timeline) Selected() int {
+	if len(t.segments) == 0 {
+		return 0
+	}
+	return t.selected
+}
+
+// clampIndex folds an index into [0, len(segments)-1]; an empty list
+// keeps 0.
+func (t *timeline) clampIndex(index int) int {
+	if len(t.segments) == 0 {
+		return 0
+	}
+	return min(max(0, index), len(t.segments)-1)
 }
 
 // SetPlayhead moves the committed playhead, clamped to [0, duration].
@@ -193,6 +244,7 @@ func (t *timeline) Enable() {
 func (t *timeline) Disable() {
 	t.enabled = false
 	t.drag = tlNone
+	t.dragSeg = -1
 	t.Refresh()
 }
 
@@ -219,6 +271,7 @@ func (t *timeline) FocusLost() {
 	t.shiftHeld = false
 	t.ctrlHeld = false
 	t.drag = tlNone
+	t.dragSeg = -1
 	t.Refresh()
 }
 
@@ -303,30 +356,74 @@ func (t *timeline) step(dir int) {
 	}
 }
 
+// selectedBounds returns the selected segment's index and its
+// neighbors' clamping bounds: the previous segment's End (or 0) and the
+// next segment's Start (or duration).
+func (t *timeline) selectedBounds() (index int, prevEnd, nextStart time.Duration) {
+	index = t.Selected()
+	prevEnd, nextStart = 0, t.duration
+	if index > 0 && index-1 < len(t.segments) {
+		prevEnd = t.segments[index-1].End
+	}
+	if index+1 < len(t.segments) {
+		nextStart = t.segments[index+1].Start
+	}
+	return index, prevEnd, nextStart
+}
+
 func (t *timeline) setInToPlayhead() {
-	if t.playhead > t.out {
+	index, prevEnd, _ := t.selectedBounds()
+	if index >= len(t.segments) {
+		return
+	}
+	if t.playhead < prevEnd || t.playhead > t.segments[index].End {
 		return
 	}
 	// The controller's single-boundary handler keeps the opposite entry
 	// authoritative (its validity flag and in-progress text stay
-	// untouched); a loud SetRange would mark both entries valid and
+	// untouched); a loud SetSegments would mark both entries valid and
 	// rewrite the other one from the stale stored value.
 	if t.onSetIn != nil {
 		t.onSetIn()
 		return
 	}
-	t.SetRange(t.playhead, t.out)
+	t.commitSelectedStart(t.playhead)
 }
 
 func (t *timeline) setOutToPlayhead() {
-	if t.playhead < t.in {
+	index, _, nextStart := t.selectedBounds()
+	if index >= len(t.segments) {
+		return
+	}
+	if t.playhead < t.segments[index].Start || t.playhead > nextStart {
 		return
 	}
 	if t.onSetOut != nil {
 		t.onSetOut()
 		return
 	}
-	t.SetRange(t.in, t.playhead)
+	t.commitSelectedEnd(t.playhead)
+}
+
+// commitSelectedStart/commitSelectedEnd apply a boundary to the
+// selected segment and fire onSegments — the loud fallback for
+// keyboard shortcuts when no single-boundary handler is installed.
+func (t *timeline) commitSelectedStart(at time.Duration) {
+	index, _, _ := t.selectedBounds()
+	if index >= len(t.segments) {
+		return
+	}
+	t.segments[index].Start = t.clamp(at)
+	t.SetSegments(t.segments)
+}
+
+func (t *timeline) commitSelectedEnd(at time.Duration) {
+	index, _, _ := t.selectedBounds()
+	if index >= len(t.segments) {
+		return
+	}
+	t.segments[index].End = t.clamp(at)
+	t.SetSegments(t.segments)
 }
 
 // movePlayhead commits a keyboard-driven playhead move.
@@ -339,7 +436,9 @@ func (t *timeline) movePlayhead(at time.Duration) {
 
 // --- desktop.Mouseable + fyne.Draggable ---
 
-// MouseDown acquires focus and the drag target for this gesture.
+// MouseDown acquires focus and the drag target for this gesture. A
+// handle grab also selects its segment; a plain click inside a segment
+// selects it while still moving the playhead (the click is a scrub).
 func (t *timeline) MouseDown(ev *desktop.MouseEvent) {
 	if !t.enabled || ev.Button != desktop.MouseButtonPrimary || t.duration <= 0 {
 		return
@@ -347,24 +446,24 @@ func (t *timeline) MouseDown(ev *desktop.MouseEvent) {
 	if c := fyne.CurrentApp().Driver().CanvasForObject(t); c != nil {
 		c.Focus(t)
 	}
-	switch t.pickTarget(ev.Position.X) {
+	kind, seg := t.pickTarget(ev.Position.X)
+	switch kind {
 	case tlIn:
-		t.drag = tlIn
-		t.in = t.clamp(t.timeAt(ev.Position.X))
-		if t.in > t.out {
-			t.out = t.in
-		}
+		t.drag, t.dragSeg = tlIn, seg
+		t.selectViaPointer(seg)
+		t.segments[seg].Start = t.clampToStartLower(t.timeAt(ev.Position.X), seg)
 	case tlOut:
-		t.drag = tlOut
-		t.out = t.clamp(t.timeAt(ev.Position.X))
-		if t.out < t.in {
-			t.in = t.out
-		}
+		t.drag, t.dragSeg = tlOut, seg
+		t.selectViaPointer(seg)
+		t.segments[seg].End = t.clampToEndUpper(t.timeAt(ev.Position.X), seg)
 	default:
-		t.drag = tlPlayhead
+		t.drag, t.dragSeg = tlPlayhead, -1
 		t.SetPlayhead(t.timeAt(ev.Position.X))
 		if t.onPlayhead != nil {
 			t.onPlayhead(t.playhead)
+		}
+		if at := t.timeAt(ev.Position.X); at > 0 || len(t.segments) > 0 {
+			t.selectSegmentContaining(at)
 		}
 	}
 	t.Refresh()
@@ -375,7 +474,9 @@ func (t *timeline) MouseUp(ev *desktop.MouseEvent) {
 	t.release()
 }
 
-// Dragged moves the target acquired in MouseDown.
+// Dragged moves the target acquired in MouseDown, clamped against the
+// neighboring segment bounds so a drag can never create overlaps or
+// crossings; equality is allowed (adjacent segments).
 func (t *timeline) Dragged(ev *fyne.DragEvent) {
 	if !t.enabled || t.drag == tlNone || t.duration <= 0 {
 		return
@@ -388,15 +489,9 @@ func (t *timeline) Dragged(ev *fyne.DragEvent) {
 			t.onPlayhead(t.playhead)
 		}
 	case tlIn:
-		t.in = at
-		if t.in > t.out {
-			t.out = t.in
-		}
+		t.segments[t.dragSeg].Start = t.clampToStartLower(at, t.dragSeg)
 	case tlOut:
-		t.out = at
-		if t.out < t.in {
-			t.in = t.out
-		}
+		t.segments[t.dragSeg].End = t.clampToEndUpper(at, t.dragSeg)
 	}
 	t.Refresh()
 }
@@ -409,33 +504,90 @@ func (t *timeline) DragEnd() {
 
 func (t *timeline) release() {
 	if t.drag == tlIn || t.drag == tlOut {
-		if t.onRange != nil {
-			t.onRange(t.in, t.out)
+		if t.onSegments != nil {
+			t.onSegments(t.Segments())
 		}
 	}
 	t.drag = tlNone
+	t.dragSeg = -1
+}
+
+// selectViaPointer reports a pointer-driven selection change; the
+// callback is deliberately not fired for programmatic SetSelected.
+func (t *timeline) selectViaPointer(index int) {
+	index = t.clampIndex(index)
+	if t.selected == index {
+		return
+	}
+	t.selected = index
+	if t.onSelected != nil {
+		t.onSelected(index)
+	}
+}
+
+// selectSegmentContaining selects the segment holding at, if any. A
+// segment is half-open: [Start, End); a click exactly on a following
+// segment's Start belongs to that segment. at == 0 with a segment
+// starting at 0 still selects segment 0 via the first branch.
+func (t *timeline) selectSegmentContaining(at time.Duration) {
+	for i, seg := range t.segments {
+		if at >= seg.Start && at < seg.End {
+			t.selectViaPointer(i)
+			return
+		}
+	}
+	// Degenerate (Start == End) segments contain no open interval; the
+	// click lands in a gap and changes nothing.
+}
+
+// clampToStartLower clamps a dragged Start into [prevEnd, seg.End].
+func (t *timeline) clampToStartLower(at time.Duration, seg int) time.Duration {
+	if seg < 0 || seg >= len(t.segments) {
+		return t.clamp(at)
+	}
+	lower := time.Duration(0)
+	if seg > 0 {
+		lower = t.segments[seg-1].End
+	}
+	return min(max(at, lower), t.segments[seg].End)
+}
+
+// clampToEndUpper clamps a dragged End into [seg.Start, nextStart].
+func (t *timeline) clampToEndUpper(at time.Duration, seg int) time.Duration {
+	if seg < 0 || seg >= len(t.segments) {
+		return t.clamp(at)
+	}
+	upper := t.duration
+	if seg+1 < len(t.segments) {
+		upper = t.segments[seg+1].Start
+	}
+	return min(max(at, t.segments[seg].Start), upper)
 }
 
 // pickTarget resolves the gesture target: handles first (nearest wins
-// when their hit zones overlap, e.g. in≈out), then the playhead
-// anywhere else. Full-height 12px zones keep the handles comfortably
-// clickable despite their 4px visible bars.
-func (t *timeline) pickTarget(x float32) tlDrag {
-	inX, outX := t.xAt(t.in), t.xAt(t.out)
-	dxIn, dxOut := absFloat32(x-inX), absFloat32(x-outX)
-	switch {
-	case dxIn <= handleHitHalfWidth && dxOut <= handleHitHalfWidth:
-		if dxIn <= dxOut {
-			return tlIn
+// when their hit zones overlap), then the playhead anywhere else,
+// together with the segment index the gesture grabbed (-1 for the
+// playhead). Full-height 12px zones keep the handles comfortably
+// clickable despite their 4px visible bars. Ties resolve to the earlier
+// candidate in (segment order, Start-before-End) order, preserving the
+// previous single-segment behavior where In won ties.
+func (t *timeline) pickTarget(x float32) (tlDrag, int) {
+	best := tlPlayhead
+	bestSeg := -1
+	bestDist := float32(handleHitHalfWidth + 1)
+	for i, seg := range t.segments {
+		for _, candidate := range [2]struct {
+			kind tlDrag
+			at   time.Duration
+		}{{tlIn, seg.Start}, {tlOut, seg.End}} {
+			dist := absFloat32(x - t.xAt(candidate.at))
+			if dist > handleHitHalfWidth || dist >= bestDist {
+				continue
+			}
+			best, bestSeg, bestDist = candidate.kind, i, dist
 		}
-		return tlOut
-	case dxIn <= handleHitHalfWidth:
-		return tlIn
-	case dxOut <= handleHitHalfWidth:
-		return tlOut
-	default:
-		return tlPlayhead
 	}
+	return best, bestSeg
 }
 
 // Cursor shows a resize cursor over the handles.
@@ -443,7 +595,7 @@ func (t *timeline) Cursor() desktop.Cursor {
 	if !t.enabled || t.duration <= 0 {
 		return desktop.DefaultCursor
 	}
-	if d := t.pickTarget(t.hoverX); d == tlIn || d == tlOut {
+	if kind, _ := t.pickTarget(t.hoverX); kind == tlIn || kind == tlOut {
 		return desktop.HResizeCursor
 	}
 	return desktop.DefaultCursor
@@ -538,16 +690,22 @@ func absFloat32(v float32) float32 {
 	return v
 }
 
+// translucent re-colors c with the given alpha, keeping its RGB. The
+// RGBA() components are 16-bit; NRGBA wants the top 8.
+func translucent(c color.Color, alpha uint8) color.NRGBA {
+	r, g, b, _ := c.RGBA()
+	return color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: alpha}
+}
+
 // --- rendering ---
 
 type timelineRenderer struct {
 	t          *timeline
 	background *canvas.Rectangle
 	thumbs     []*canvas.Image
-	dimBefore  *canvas.Rectangle
-	dimAfter   *canvas.Rectangle
-	inBar      *canvas.Rectangle
-	outBar     *canvas.Rectangle
+	dim        *canvas.Rectangle
+	fills      []*canvas.Rectangle
+	bars       []*canvas.Rectangle
 	playhead   *canvas.Rectangle
 	focusRing  *canvas.Rectangle
 }
@@ -556,10 +714,7 @@ func (t *timeline) CreateRenderer() fyne.WidgetRenderer {
 	r := &timelineRenderer{
 		t:          t,
 		background: canvas.NewRectangle(color.NRGBA{R: 32, G: 32, B: 32, A: 255}),
-		dimBefore:  canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 110}),
-		dimAfter:   canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 110}),
-		inBar:      canvas.NewRectangle(theme.Color(theme.ColorNamePrimary)),
-		outBar:     canvas.NewRectangle(theme.Color(theme.ColorNamePrimary)),
+		dim:        canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 110}),
 		playhead:   canvas.NewRectangle(color.NRGBA{R: 255, G: 255, B: 255, A: 255}),
 		focusRing: &canvas.Rectangle{
 			StrokeColor: theme.Color(theme.ColorNamePrimary),
@@ -594,16 +749,38 @@ func (r *timelineRenderer) syncThumbs() {
 	}
 }
 
+// syncSegments matches the renderer's fill and bar rectangles to the
+// widget's segment count: one translucent fill per segment and two
+// handle bars per segment.
+func (r *timelineRenderer) syncSegments() {
+	for len(r.fills) < len(r.t.segments) {
+		r.fills = append(r.fills, canvas.NewRectangle(color.Transparent))
+	}
+	r.fills = r.fills[:len(r.t.segments)]
+	for len(r.bars) < 2*len(r.t.segments) {
+		r.bars = append(r.bars, canvas.NewRectangle(color.Transparent))
+	}
+	r.bars = r.bars[:2*len(r.t.segments)]
+}
+
 func (r *timelineRenderer) Destroy() {}
 
 func (r *timelineRenderer) Objects() []fyne.CanvasObject {
 	r.syncThumbs()
-	objects := make([]fyne.CanvasObject, 0, len(r.thumbs)+6)
+	r.syncSegments()
+	objects := make([]fyne.CanvasObject, 0, len(r.thumbs)+len(r.fills)+len(r.bars)+4)
 	objects = append(objects, r.background)
 	for _, img := range r.thumbs {
 		objects = append(objects, img)
 	}
-	return append(objects, r.dimBefore, r.dimAfter, r.inBar, r.outBar, r.playhead, r.focusRing)
+	objects = append(objects, r.dim)
+	for _, fill := range r.fills {
+		objects = append(objects, fill)
+	}
+	for _, bar := range r.bars {
+		objects = append(objects, bar)
+	}
+	return append(objects, r.playhead, r.focusRing)
 }
 
 func (r *timelineRenderer) MinSize() fyne.Size {
@@ -612,6 +789,7 @@ func (r *timelineRenderer) MinSize() fyne.Size {
 
 func (r *timelineRenderer) Layout(size fyne.Size) {
 	r.syncThumbs()
+	r.syncSegments()
 	t := r.t
 	// Thumbnail cells stretch evenly across the width; ImageFillContain
 	// letterboxes each cell so the source aspect ratio is preserved.
@@ -624,15 +802,36 @@ func (r *timelineRenderer) Layout(size fyne.Size) {
 		img.Move(fyne.NewPos(float32(i)*cellWidth, 0))
 		img.Resize(fyne.NewSize(cellWidth, size.Height))
 	}
-	inX, outX, playX := t.xAt(t.in), t.xAt(t.out), t.xAt(t.playhead)
-	r.dimBefore.Move(fyne.NewPos(0, 0))
-	r.dimBefore.Resize(fyne.NewSize(inX, size.Height))
-	r.dimAfter.Move(fyne.NewPos(outX, 0))
-	r.dimAfter.Resize(fyne.NewSize(size.Width-outX, size.Height))
-	r.inBar.Move(fyne.NewPos(inX-handleBarWidth/2, 0))
-	r.inBar.Resize(fyne.NewSize(handleBarWidth, size.Height))
-	r.outBar.Move(fyne.NewPos(outX-handleBarWidth/2, 0))
-	r.outBar.Resize(fyne.NewSize(handleBarWidth, size.Height))
+	r.dim.Move(fyne.NewPos(0, 0))
+	r.dim.Resize(size)
+	// Everything outside the segments reads dimmed: the single full-size
+	// overlay sits under the per-segment translucent fills.
+	primary := theme.Color(theme.ColorNamePrimary)
+	foreground := theme.Color(theme.ColorNameForeground)
+	selectedFill, unselectedFill := translucent(primary, 0x30), translucent(primary, 0x18)
+	for i, seg := range t.segments {
+		startX, endX := t.xAt(seg.Start), t.xAt(seg.End)
+		fill := r.fills[i]
+		fill.Move(fyne.NewPos(startX, 0))
+		fill.Resize(fyne.NewSize(max(0, endX-startX), size.Height))
+		if i == t.selected {
+			fill.FillColor = selectedFill
+		} else {
+			fill.FillColor = unselectedFill
+		}
+		barColor := foreground
+		if i == t.selected {
+			barColor = primary
+		}
+		for j, at := range []time.Duration{seg.Start, seg.End} {
+			bar := r.bars[2*i+j]
+			barX := t.xAt(at)
+			bar.Move(fyne.NewPos(barX-handleBarWidth/2, 0))
+			bar.Resize(fyne.NewSize(handleBarWidth, size.Height))
+			bar.FillColor = barColor
+		}
+	}
+	playX := t.xAt(t.playhead)
 	r.playhead.Move(fyne.NewPos(playX-playheadBarWidth/2, 0))
 	r.playhead.Resize(fyne.NewSize(playheadBarWidth, size.Height))
 	r.focusRing.Move(fyne.NewPos(0, 0))

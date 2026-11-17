@@ -93,10 +93,12 @@ func (c *Controller) resetTrimSelection() {
 	c.trimSelection = model.TrimSelection{
 		Segments: []model.TimeRange{{Start: 0, End: c.media.Duration}},
 	}
+	c.trimSelected = 0
 	c.trimInValid, c.trimOutValid = true, true
 	c.trimTimeline.SetDuration(c.media.Duration)
 	c.trimTimeline.SetPlayhead(0)
-	c.trimTimeline.SetRange(0, c.media.Duration)
+	c.trimTimeline.SetSelected(0)
+	c.trimTimeline.SetSegments([]model.TimeRange{{Start: 0, End: c.media.Duration}})
 	c.setBoundaryDisplay(c.trimIn, formatTimestamp(0))
 	c.setBoundaryDisplay(c.trimOut, formatTimestamp(c.media.Duration))
 	c.updateTrimDurationLabel()
@@ -247,19 +249,19 @@ func (c *Controller) setTrimBoundary(which string, text string) {
 	switch which {
 	case "in":
 		c.trimInValid = true
-		c.trimSelection = withBoundary(c.trimSelection, at, -1)
-		// Silent on purpose: SetRange would echo the clamped coordinates
-		// back through onRange and overwrite the typed value — an
+		c.trimSelection = withSegmentBoundary(c.trimSelection, c.trimSelected, at, -1)
+		// Silent on purpose: SetSegments would echo the clamped coordinates
+		// back through onSegments and overwrite the typed value — an
 		// out-of-range entry would keep displaying its text while the
 		// selection (and the generated command) silently used the
 		// clamped one, with no validation error. The typed value stays
 		// authoritative (updateTrimMessages surfaces ValidateTrim's
 		// error) and the timeline shows the clamped view.
-		c.trimTimeline.SetRangeSilent(at, boundaryOf(c.trimSelection, 1))
+		c.trimTimeline.SetSegmentsSilent(c.trimSelection.Segments)
 	case "out":
 		c.trimOutValid = true
-		c.trimSelection = withBoundary(c.trimSelection, -1, at)
-		c.trimTimeline.SetRangeSilent(boundaryOf(c.trimSelection, 0), at)
+		c.trimSelection = withSegmentBoundary(c.trimSelection, c.trimSelected, -1, at)
+		c.trimTimeline.SetSegmentsSilent(c.trimSelection.Segments)
 	}
 	c.updateTrimDurationLabel()
 	c.refresh()
@@ -271,15 +273,15 @@ func (c *Controller) setInFromPlayhead() {
 	}
 	at := c.trimTimeline.Playhead()
 	c.trimInValid = true
-	c.trimSelection = withBoundary(c.trimSelection, at, -1)
+	c.trimSelection = withSegmentBoundary(c.trimSelection, c.trimSelected, at, -1)
 	c.setBoundaryDisplay(c.trimIn, formatTimestamp(at))
-	// Silent on purpose: a loud SetRange fires onRange, which marks both
-	// entries valid (unblocking conversion while the opposite entry is
-	// empty or invalid) and rewrites it from the last valid value,
+	// Silent on purpose: a loud SetSegments fires onSegments, which marks
+	// both entries valid (unblocking conversion while the opposite entry
+	// is empty or invalid) and rewrites it from the last valid value,
 	// discarding the user's in-progress edit. A single-boundary action
 	// owns only its own entry and validity flag — the boundary-entry
-	// path applies the same rule with SetRangeSilent.
-	c.trimTimeline.SetRangeSilent(at, boundaryOf(c.trimSelection, 1))
+	// path applies the same rule with SetSegmentsSilent.
+	c.trimTimeline.SetSegmentsSilent(c.trimSelection.Segments)
 	c.updateTrimDurationLabel()
 	c.refresh()
 }
@@ -290,9 +292,9 @@ func (c *Controller) setOutFromPlayhead() {
 	}
 	at := c.trimTimeline.Playhead()
 	c.trimOutValid = true
-	c.trimSelection = withBoundary(c.trimSelection, -1, at)
+	c.trimSelection = withSegmentBoundary(c.trimSelection, c.trimSelected, -1, at)
 	c.setBoundaryDisplay(c.trimOut, formatTimestamp(at))
-	c.trimTimeline.SetRangeSilent(boundaryOf(c.trimSelection, 0), at)
+	c.trimTimeline.SetSegmentsSilent(c.trimSelection.Segments)
 	c.updateTrimDurationLabel()
 	c.refresh()
 }
@@ -302,14 +304,23 @@ func (c *Controller) updateTrimDurationLabel() {
 		c.trimDuration.SetText("")
 		return
 	}
-	// The row already captions this label "Duration"; the bare
-	// timestamp avoids a redundant "Selected: " prefix.
-	c.trimDuration.SetText(formatTimestamp(c.trimSelection.Total()))
+	// The row already captions this label "Duration". A single segment
+	// shows its bare timestamp; multiple segments show the selected
+	// segment's duration against the total.
+	if len(c.trimSelection.Segments) == 1 {
+		c.trimDuration.SetText(formatTimestamp(c.trimSelection.Total()))
+		return
+	}
+	selected := segmentBoundary(c.trimSelection, c.trimSelected, 1) -
+		segmentBoundary(c.trimSelection, c.trimSelected, 0)
+	c.trimDuration.SetText(formatTimestamp(selected) + " of " + formatTimestamp(c.trimSelection.Total()))
 }
 
-// withBoundary replaces the Start (start=-1 keeps it) or End of the
-// selection's first segment, creating the segment when absent.
-func withBoundary(sel model.TrimSelection, start, end time.Duration) model.TrimSelection {
+// withSegmentBoundary replaces the Start (start=-1 keeps it) or End of
+// the selected segment, creating the segment when absent. It never
+// re-sorts: a typed edit that would disorder the segments is a
+// validation error, not something the UI hides.
+func withSegmentBoundary(sel model.TrimSelection, selected int, start, end time.Duration) model.TrimSelection {
 	if !sel.Active() {
 		sel.Segments = []model.TimeRange{{Start: start, End: end}}
 		if start < 0 {
@@ -320,23 +331,31 @@ func withBoundary(sel model.TrimSelection, start, end time.Duration) model.TrimS
 		}
 		return sel
 	}
+	if selected < 0 || selected >= len(sel.Segments) {
+		selected = 0
+	}
 	if start >= 0 {
-		sel.Segments[0].Start = start
+		sel.Segments[selected].Start = start
 	}
 	if end >= 0 {
-		sel.Segments[0].End = end
+		sel.Segments[selected].End = end
 	}
 	return sel
 }
 
-func boundaryOf(sel model.TrimSelection, index int) time.Duration {
+// segmentBoundary returns the selected segment's Start (which=0) or End
+// (which=1).
+func segmentBoundary(sel model.TrimSelection, selected, which int) time.Duration {
 	if !sel.Active() {
 		return 0
 	}
-	if index == 0 {
-		return sel.Segments[0].Start
+	if selected < 0 || selected >= len(sel.Segments) {
+		selected = 0
 	}
-	return sel.Segments[0].End
+	if which == 0 {
+		return sel.Segments[selected].Start
+	}
+	return sel.Segments[selected].End
 }
 
 // --- timeline callbacks ---
@@ -369,22 +388,49 @@ func (c *Controller) focusedBoundaryEntry() fyne.Focusable {
 	return canvas.Focused()
 }
 
-// onTimelineRange commits new boundaries from a handle drag and from
-// boundary-entry edits (SetRange fires onRange synchronously). An entry
-// that currently holds keyboard focus is the one being typed into —
-// rewriting it mid-edit corrupts the value (valid prefixes like "00:00"
-// parse and apply immediately, and the user's next keystrokes would land
-// inside the reformatted text), so the focused entry keeps its in-flight
-// text as authoritative and only the other entry mirrors the commit.
-func (c *Controller) onTimelineRange(in, out time.Duration) {
+// onTimelineSegments commits new segment boundaries from a handle drag
+// and from programmatic loud SetSegments calls (Reset, boundary
+// shortcuts without a single-boundary handler). An entry that currently
+// holds keyboard focus is the one being typed into — rewriting it
+// mid-edit corrupts the value (valid prefixes like "00:00" parse and
+// apply immediately, and the user's next keystrokes would land inside
+// the reformatted text), so the focused entry keeps its in-flight text
+// as authoritative and only the other entry mirrors the commit. The
+// entries always describe the selected segment.
+func (c *Controller) onTimelineSegments(segments []model.TimeRange) {
 	c.trimInValid, c.trimOutValid = true, true
-	c.trimSelection = withBoundary(c.trimSelection, in, out)
-	focused := c.focusedBoundaryEntry()
-	if focused != c.trimIn {
-		c.setBoundaryDisplay(c.trimIn, formatTimestamp(in))
+	c.trimSelection = model.TrimSelection{Segments: segments}
+	selected := c.trimTimeline.Selected()
+	c.trimSelected = selected
+	if selected < len(segments) {
+		focused := c.focusedBoundaryEntry()
+		if focused != c.trimIn {
+			c.setBoundaryDisplay(c.trimIn, formatTimestamp(segments[selected].Start))
+		}
+		if focused != c.trimOut {
+			c.setBoundaryDisplay(c.trimOut, formatTimestamp(segments[selected].End))
+		}
 	}
-	if focused != c.trimOut {
-		c.setBoundaryDisplay(c.trimOut, formatTimestamp(out))
+	c.updateTrimDurationLabel()
+	c.refresh()
+}
+
+// onTimelineSelected mirrors the newly selected segment's boundaries
+// into the entries. A segment switch is a committed view change: any
+// in-progress (possibly invalid) text belonged to the previous segment,
+// so both entries revert to the stored boundaries via the display-write
+// guard and validity flags reset — the stored segments are all valid by
+// construction (invalid entries never mutate them).
+func (c *Controller) onTimelineSelected(index int) {
+	if !c.trimEnabled {
+		return
+	}
+	c.trimSelected = index
+	if index < len(c.trimSelection.Segments) {
+		seg := c.trimSelection.Segments[index]
+		c.trimInValid, c.trimOutValid = true, true
+		c.setBoundaryDisplay(c.trimIn, formatTimestamp(seg.Start))
+		c.setBoundaryDisplay(c.trimOut, formatTimestamp(seg.End))
 	}
 	c.updateTrimDurationLabel()
 	c.refresh()

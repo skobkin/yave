@@ -119,7 +119,8 @@ func (c *Controller) createWidgets() {
 		return next, state == frameStepMoved
 	}
 	c.trimTimeline.onPlayhead = c.onTimelinePlayhead
-	c.trimTimeline.onRange = c.onTimelineRange
+	c.trimTimeline.onSegments = c.onTimelineSegments
+	c.trimTimeline.onSelected = c.onTimelineSelected
 	c.trimTimeline.onHover = c.onTimelineHover
 	// Ctrl+[ / Ctrl+] go through the same single-boundary handlers as
 	// the Set In/Out buttons, so both entry points keep the opposite
