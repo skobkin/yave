@@ -100,19 +100,7 @@ func Parse(data []byte) (model.MediaInfo, error) {
 		return model.MediaInfo{}, fmt.Errorf("decode ffprobe JSON: %w", err)
 	}
 
-	// ffprobe's format.duration sits on the container's absolute
-	// timestamp line: with a positive start_time (broadcast recordings
-	// with a PCR offset, -output_ts_offset sources) it counts from
-	// zero, while ffmpeg's input-side -ss and the normalized frame
-	// index measure from the first packet — an 8s file with start_time
-	// 10 reported 18.023s. Report the input-relative playable end so
-	// the timeline, trim validation, and the progress denominator all
-	// measure the same span. Zero and negative origins need no shift:
-	// the muxer duration is already last-minus-first there.
-	duration := parseDuration(document.Format.Duration)
-	if start := parseDuration(document.Format.StartTime); start > 0 && duration > start {
-		duration -= start
-	}
+	duration := normalizeDuration(document.Format.Duration, document.Format.StartTime, document.Format.FormatName)
 	info := model.MediaInfo{
 		Format:       document.Format.FormatName,
 		Duration:     duration,
@@ -154,6 +142,31 @@ func parseDuration(value string) time.Duration {
 		return 0
 	}
 	return time.Duration(seconds * float64(time.Second))
+}
+
+// normalizeDuration reports the input-relative playable end — the span
+// ffmpeg's input-side -ss and the normalized frame index measure — from
+// ffprobe's format.duration and format.start_time. The shift is needed
+// only for Matroska: its Duration element stores the maximum block
+// timestamp, so with a positive origin (broadcast recordings with a PCR
+// offset, -output_ts_offset sources) it sits on the container's absolute
+// timestamp line and overshoots the playable span (an 8s MKV with
+// start_time 10 reports 18.023s). Span-based containers already report
+// the playable span — MP4/MOV and MPEG-TS fixtures with
+// -output_ts_offset 2 report duration 8.000 with start_time 2.000 and
+// 3.400 — and subtracting there would shorten valid inputs by the
+// origin (8s → 6s, 8s → 4.6s). Both Matroska variants identify as
+// "matroska,webm". A zero or negative origin needs no shift in any
+// container, and a Matroska duration not past its origin is already
+// span-shaped.
+func normalizeDuration(raw, start, formatName string) time.Duration {
+	duration := parseDuration(raw)
+	if strings.Contains(formatName, "matroska") {
+		if origin := parseDuration(start); origin > 0 && duration > origin {
+			duration -= origin
+		}
+	}
+	return duration
 }
 
 func parseInt64(value string) int64 {
