@@ -62,12 +62,18 @@ type Controller struct {
 	// Trim state belongs to the current input/conversion job — it is
 	// reset on every input change and never persisted into profiles.
 	// See trim.go for the lifecycle rules.
-	trimEnabled     bool
-	trimSelection   model.TrimSelection
-	trimInValid     bool
-	trimOutValid    bool
-	inputGeneration uint64 // guards late async results per input
-	previews        trimPreviews
+	trimEnabled   bool
+	trimSelection model.TrimSelection
+	trimInValid   bool
+	trimOutValid  bool
+	// displayingBoundaries guards programmatic writes into the boundary
+	// entries: Entry.SetText fires OnChanged whenever the text differs,
+	// and the editing callback would re-parse the millisecond-truncated
+	// display text back over the exact selection. Set by
+	// setBoundaryDisplay around every display write.
+	displayingBoundaries bool
+	inputGeneration      uint64 // guards late async results per input
+	previews             trimPreviews
 
 	trimEnable       *widget.Check
 	trimTimeline     *timeline

@@ -128,10 +128,23 @@ func (c *Controller) createWidgets() {
 		_, err := parseTimestamp(s)
 		return err
 	}
-	c.trimIn = entry(func(text string) { c.setTrimBoundary("in", text) })
+	c.trimIn = entry(func(text string) {
+		// A display write (setBoundaryDisplay) mirrors a committed value;
+		// re-entering the editor would parse the truncated text back over
+		// the exact selection.
+		if c.displayingBoundaries {
+			return
+		}
+		c.setTrimBoundary("in", text)
+	})
 	c.trimIn.Validator = timestampValidator
 	c.trimIn.SetPlaceHolder("HH:MM:SS.mmm")
-	c.trimOut = entry(func(text string) { c.setTrimBoundary("out", text) })
+	c.trimOut = entry(func(text string) {
+		if c.displayingBoundaries {
+			return
+		}
+		c.setTrimBoundary("out", text)
+	})
 	c.trimOut.Validator = timestampValidator
 	c.trimOut.SetPlaceHolder("HH:MM:SS.mmm")
 	c.trimSetIn = widget.NewButton("Set In", c.setInFromPlayhead)

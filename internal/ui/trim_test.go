@@ -954,6 +954,57 @@ func TestOnTimelineRangeKeepsFocusedEntryText(t *testing.T) {
 	}
 }
 
+// Regression: boundary display writes went through Entry.SetText, which
+// fires OnChanged whenever the text differs — the editing callback then
+// re-parsed the millisecond-truncated display text over the exact
+// selection. A Ctrl+[ boundary at 66.667ms (30fps frame) collapsed to
+// 66ms, degrading the microsecond-precision seek times generated from
+// it. Display writes must not re-enter the editing path.
+func TestBoundaryDisplayWritesDoNotReenterEditing(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	duration := 10 * time.Second
+	c.media = model.MediaInfo{Duration: duration}
+	c.trimTimeline.SetDuration(duration)
+	// Seed the selection directly; SetText on the entries is itself an
+	// editing path, so it runs before the state is pinned.
+	c.trimIn.SetText(formatTimestamp(33333 * time.Microsecond))
+	c.trimSelection = model.TrimSelection{Segments: []model.TimeRange{
+		{Start: 33333 * time.Microsecond, End: 100 * time.Millisecond},
+	}}
+
+	// Ctrl+[ at 66.667ms commits the exact frame position; the entry
+	// displays its millisecond truncation without feeding it back.
+	c.trimTimeline.SetRange(66667*time.Microsecond, 100*time.Millisecond)
+	if got := boundaryOf(c.trimSelection, 0); got != 66667*time.Microsecond {
+		t.Fatalf("exact in boundary collapsed to display text: %s, want 66.667ms", got)
+	}
+	if c.trimIn.Text != formatTimestamp(66667*time.Microsecond) {
+		t.Fatalf("in entry = %q, want the truncated display text", c.trimIn.Text)
+	}
+	if got := boundaryOf(c.trimSelection, 1); got != 100*time.Millisecond {
+		t.Fatalf("out boundary disturbed: %s, want 100ms", got)
+	}
+
+	// Set In from the playhead keeps the exact position too.
+	c.trimTimeline.SetPlayhead(133333 * time.Microsecond)
+	c.setInFromPlayhead()
+	if got := boundaryOf(c.trimSelection, 0); got != 133333*time.Microsecond {
+		t.Fatalf("Set In lost frame precision: %s, want 133.333ms", got)
+	}
+
+	// A new-input reset clears the entries with display writes: the
+	// empty text must not fire the editing callback and mark the fields
+	// invalid (it parsed "" as an error after the valid flags were set).
+	c.resetTrimForNewInput()
+	if !c.trimInValid || !c.trimOutValid {
+		t.Fatalf("reset left entries invalid: in=%v out=%v", c.trimInValid, c.trimOutValid)
+	}
+	if c.trimIn.Text != "" || c.trimOut.Text != "" {
+		t.Fatalf("reset left entry text: %q / %q", c.trimIn.Text, c.trimOut.Text)
+	}
+}
+
 // Regression: a queued frame walk survived a manual seek — when the
 // window fetch landed, applyPending walked from the stale position and
 // moved the playhead back, overriding the user's newer click.

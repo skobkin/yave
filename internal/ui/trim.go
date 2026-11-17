@@ -97,8 +97,8 @@ func (c *Controller) resetTrimSelection() {
 	c.trimTimeline.SetDuration(c.media.Duration)
 	c.trimTimeline.SetPlayhead(0)
 	c.trimTimeline.SetRange(0, c.media.Duration)
-	c.trimIn.SetText(formatTimestamp(0))
-	c.trimOut.SetText(formatTimestamp(c.media.Duration))
+	c.setBoundaryDisplay(c.trimIn, formatTimestamp(0))
+	c.setBoundaryDisplay(c.trimOut, formatTimestamp(c.media.Duration))
 	c.updateTrimDurationLabel()
 	// SetPlayhead deliberately fires no callback, so request the preview
 	// at the reset position explicitly: Reset is a committed move and the
@@ -123,8 +123,8 @@ func (c *Controller) resetTrimForNewInput() {
 	// typing into them mutates the selection the next enable reuses.
 	c.setTrimControlsEnabled(false)
 	c.trimEnable.SetChecked(false)
-	c.trimIn.SetText("")
-	c.trimOut.SetText("")
+	c.setBoundaryDisplay(c.trimIn, "")
+	c.setBoundaryDisplay(c.trimOut, "")
 	c.setTrimMessage("")
 	c.trimDuration.SetText("")
 	c.trimTimeline.SetDuration(0)
@@ -212,6 +212,19 @@ func (c *Controller) trimEntryIssues() []validation.Issue {
 
 // --- boundary editing ---
 
+// setBoundaryDisplay writes display text into a boundary entry without
+// firing its editing callback: Entry.SetText triggers OnChanged whenever
+// the text differs, and the callback would re-parse the
+// millisecond-truncated display text and overwrite the exact selection —
+// frame-accurate boundaries (and the microsecond-precision seek times
+// generated from them) would silently collapse to the displayed
+// milliseconds on every keyboard shortcut, handle drag, and reset.
+func (c *Controller) setBoundaryDisplay(e *widget.Entry, text string) {
+	c.displayingBoundaries = true
+	defer func() { c.displayingBoundaries = false }()
+	e.SetText(text)
+}
+
 // setTrimBoundary applies a typed boundary. Invalid text keeps the last
 // valid selection (the timeline stays stable) and marks the entry
 // invalid, which blocks Start; valid text replaces that boundary.
@@ -248,7 +261,7 @@ func (c *Controller) setInFromPlayhead() {
 	at := c.trimTimeline.Playhead()
 	c.trimInValid = true
 	c.trimSelection = withBoundary(c.trimSelection, at, -1)
-	c.trimIn.SetText(formatTimestamp(at))
+	c.setBoundaryDisplay(c.trimIn, formatTimestamp(at))
 	c.trimTimeline.SetRange(at, boundaryOf(c.trimSelection, 1))
 	c.updateTrimDurationLabel()
 	c.refresh()
@@ -261,7 +274,7 @@ func (c *Controller) setOutFromPlayhead() {
 	at := c.trimTimeline.Playhead()
 	c.trimOutValid = true
 	c.trimSelection = withBoundary(c.trimSelection, -1, at)
-	c.trimOut.SetText(formatTimestamp(at))
+	c.setBoundaryDisplay(c.trimOut, formatTimestamp(at))
 	c.trimTimeline.SetRange(boundaryOf(c.trimSelection, 0), at)
 	c.updateTrimDurationLabel()
 	c.refresh()
@@ -351,10 +364,10 @@ func (c *Controller) onTimelineRange(in, out time.Duration) {
 	c.trimSelection = withBoundary(c.trimSelection, in, out)
 	focused := c.focusedBoundaryEntry()
 	if focused != c.trimIn {
-		c.trimIn.SetText(formatTimestamp(in))
+		c.setBoundaryDisplay(c.trimIn, formatTimestamp(in))
 	}
 	if focused != c.trimOut {
-		c.trimOut.SetText(formatTimestamp(out))
+		c.setBoundaryDisplay(c.trimOut, formatTimestamp(out))
 	}
 	c.updateTrimDurationLabel()
 	c.refresh()
