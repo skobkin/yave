@@ -19,6 +19,10 @@ import (
 // toolchain and skips when it is unavailable or lacks the required
 // encoders (codec availability is a property of the host build, and
 // executable discovery alone does not establish it).
+//
+// It runs against both containers: MP4 muxes an edit list that hides
+// copied-audio preroll, while Matroska shifts the whole timeline — the
+// container where the preroll regression was visible.
 func TestTrimIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test (real FFmpeg)")
@@ -45,14 +49,16 @@ func TestTrimIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 6-second test pattern with a sine audio track: enough room to cut
-	// [1s, 4s] out of the middle.
+	// [1s, 4s] out of the middle. The 3s GOP forces the demuxer to seek
+	// to the keyframe at 0 for a 1s start, so copied audio carries a
+	// second of preroll — the regression case for the Matroska variant.
 	generate := exec.CommandContext(context.Background(), ffmpegPath, []string{ //nolint:gosec // G204: integration test drives the locally discovered FFmpeg with t.TempDir paths
 		"-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "testsrc2=duration=6:size=320x240:rate=30",
 		"-f", "lavfi", "-i", "sine=frequency=440:duration=6",
 		"-i", subs,
 		"-map", "0:v:0", "-map", "1:a:0", "-map", "2:0",
-		"-c:v", "libx264", "-preset", "ultrafast",
+		"-c:v", "libx264", "-preset", "ultrafast", "-g", "90",
 		"-c:a", "aac", "-c:s", "mov_text", "-shortest",
 		input,
 	}...)
@@ -60,71 +66,88 @@ func TestTrimIntegration(t *testing.T) {
 		t.Fatalf("generating test media: %v: %s", err, out)
 	}
 
-	profile := model.BuiltinProfiles()[3] // "x265 Software Archive" — software encoder, no hardware requirements
-	profile.Video.Preset = "ultrafast"
-	profile.Subtitles.Mode = model.SubtitleCopy
 	// Matroska stores unrebased timestamps and reports per-stream
-	// duration as N/A; MP4 durations are exact, so the assertions below
+	// duration as N/A; MP4 durations are exact, so the MP4 variant can
 	// compare real stream durations.
-	profile.Container = model.ContainerMP4
-	output := dir + "/output.mp4"
-	plan, err := BuildCommand(BuildRequest{
-		FFmpegPath: ffmpegPath,
-		InputPath:  input,
-		OutputPath: output,
-		Profile:    profile,
-		Media: model.MediaInfo{
-			VideoStreams:    []model.VideoStream{{Width: 320, Height: 240}},
-			SubtitleStreams: []model.SubtitleStream{{Index: 2, Codec: "mov_text"}},
-		},
-		Trim:      model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 4 * time.Second}}},
-		Overwrite: true,
-	})
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name      string
+		container string
+		ext       string
+		subCodec  string
+	}{
+		{"mp4", model.ContainerMP4, ".mp4", "mov_text"},
+		{"mkv", model.ContainerMKV, ".mkv", "subrip"},
 	}
-	run := exec.CommandContext(context.Background(), plan.Executable, plan.Args...) //nolint:gosec // G204: the command under test, generated from test fixtures
-	if out, err := run.CombinedOutput(); err != nil {
-		t.Fatalf("running trimmed conversion: %v: %s", err, out)
-	}
-	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "subtitle streams are skipped") {
-		t.Errorf("plan warnings = %#v, want the trim subtitle-skip warning", plan.Warnings)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := model.BuiltinProfiles()[3] // "x265 Software Archive" — software encoder, no hardware requirements
+			profile.Video.Preset = "ultrafast"
+			profile.Container = tc.container
+			profile.Subtitles.Mode = model.SubtitleCopy
+			output := dir + "/output-" + tc.name + tc.ext
+			plan, err := BuildCommand(BuildRequest{
+				FFmpegPath: ffmpegPath,
+				InputPath:  input,
+				OutputPath: output,
+				Profile:    profile,
+				Media: model.MediaInfo{
+					VideoStreams:    []model.VideoStream{{Width: 320, Height: 240}},
+					SubtitleStreams: []model.SubtitleStream{{Index: 2, Codec: tc.subCodec}},
+				},
+				Trim:      model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 4 * time.Second}}},
+				Overwrite: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := exec.CommandContext(context.Background(), plan.Executable, plan.Args...) //nolint:gosec // G204: the command under test, generated from test fixtures
+			if out, err := run.CombinedOutput(); err != nil {
+				t.Fatalf("running trimmed conversion: %v: %s", err, out)
+			}
+			if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "subtitle streams are skipped") {
+				t.Errorf("plan warnings = %#v, want the trim subtitle-skip warning", plan.Warnings)
+			}
 
-	media, err := ffprobe.Inspect(context.Background(), "ffprobe", output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The copied subtitle event spans the whole input and cannot be cut:
-	// the trimmed output must have skipped the stream instead of letting
-	// the event set the container duration.
-	if len(media.SubtitleStreams) != 0 {
-		t.Errorf("trimmed output contains subtitle streams: %+v", media.SubtitleStreams)
-	}
-	const tolerance = 700 * time.Millisecond // seek and container rounding slack
-	if want := 3 * time.Second; media.Duration < want-tolerance || media.Duration > want+tolerance {
-		t.Errorf("output duration = %s, want %s ± %s", media.Duration, want, tolerance)
-	}
-	if len(media.VideoStreams) != 1 || len(media.AudioStreams) != 1 {
-		t.Fatalf("expected one video and one audio stream, got %d/%d",
-			len(media.VideoStreams), len(media.AudioStreams))
-	}
+			media, err := ffprobe.Inspect(context.Background(), "ffprobe", output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The copied subtitle event spans the whole input and cannot
+			// be cut: the trimmed output must have skipped the stream
+			// instead of letting the event set the container duration.
+			if len(media.SubtitleStreams) != 0 {
+				t.Errorf("trimmed output contains subtitle streams: %+v", media.SubtitleStreams)
+			}
+			const tolerance = 500 * time.Millisecond // seek and container rounding slack
+			if want := 3 * time.Second; media.Duration < want-tolerance || media.Duration > want+tolerance {
+				t.Errorf("output duration = %s, want %s ± %s", media.Duration, want, tolerance)
+			}
+			if len(media.VideoStreams) != 1 || len(media.AudioStreams) != 1 {
+				t.Fatalf("expected one video and one audio stream, got %d/%d",
+					len(media.VideoStreams), len(media.AudioStreams))
+			}
+			if tc.container != model.ContainerMP4 {
+				return // Matroska reports per-stream duration as N/A
+			}
 
-	// Stream-level durations: video and audio must both cover roughly
-	// the selected range and stay near each other (A/V sync sanity).
-	videoDur, audioDur := streamDurations(t, "ffprobe", output)
-	if videoDur <= 0 || audioDur <= 0 {
-		t.Fatalf("missing stream durations: video %s audio %s", videoDur, audioDur)
-	}
-	if videoDur < 3*time.Second-tolerance || videoDur > 3*time.Second+tolerance {
-		t.Errorf("video duration = %s, want ~3s", videoDur)
-	}
-	skew := videoDur - audioDur
-	if skew < 0 {
-		skew = -skew
-	}
-	if skew > tolerance {
-		t.Errorf("A/V skew = %s, exceeds %s", skew, tolerance)
+			// Stream-level durations: video and audio must both cover
+			// roughly the selected range and stay near each other (A/V
+			// sync sanity).
+			videoDur, audioDur := streamDurations(t, "ffprobe", output)
+			if videoDur <= 0 || audioDur <= 0 {
+				t.Fatalf("missing stream durations: video %s audio %s", videoDur, audioDur)
+			}
+			if videoDur < 3*time.Second-tolerance || videoDur > 3*time.Second+tolerance {
+				t.Errorf("video duration = %s, want ~3s", videoDur)
+			}
+			skew := videoDur - audioDur
+			if skew < 0 {
+				skew = -skew
+			}
+			if skew > tolerance {
+				t.Errorf("A/V skew = %s, exceeds %s", skew, tolerance)
+			}
+		})
 	}
 }
 

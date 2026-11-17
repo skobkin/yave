@@ -127,6 +127,21 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 	if p.Subtitles.Mode == model.SubtitleCopy && hasMappedSubtitles(args) {
 		args = append(args, "-c:s", "copy")
 	}
+	// Output-side zero seek. With the input-side -ss above, streams
+	// copied from before seg.Start arrive with negative rebased
+	// timestamps — copied audio has no seek-accurate drop, so a [2s,3s)
+	// cut of a 3s-GOP file carried ~2s of preroll audio that muxers
+	// resolve by shifting the whole timeline (Matroska has no edit
+	// lists): the output measured 3.018s with its video starting at
+	// 1.977s. -ss 0 discards exactly those negative packets while
+	// keeping the segment-relative out_time -progress reports. Safe
+	// only with re-encoded video, whose frames already start at zero:
+	// dropped negative packets would strand a copied video stream
+	// mid-GOP, which is why that stream keeps the keyframe-snap
+	// behavior the copy warning describes.
+	if _, ok := req.Trim.First(); ok && ve != nil {
+		args = append(args, "-ss", formatSeconds(0))
+	}
 	// Output-side duration cap. With the input-side -ss above,
 	// -progress's out_time is segment-relative, so progress computed
 	// against seg.End-seg.Start stays correct.

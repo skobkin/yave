@@ -141,6 +141,69 @@ func TestBuildCommandTrimsSkipCopiedSubtitles(t *testing.T) {
 	}
 }
 
+// Regression: with the input-side -ss, copied audio from before the cut
+// arrived with negative rebased timestamps that muxers resolve by
+// shifting the whole timeline (Matroska has no edit lists) — a [2s,3s)
+// cut measured 3.018s with its video starting at 1.977s under ~2s of
+// preroll audio. Re-encoded output now carries an output-side -ss 0
+// that discards exactly those packets; video copy keeps the whole-GOP
+// behavior, where dropping negative packets would strand the stream
+// mid-GOP.
+func TestBuildCommandTrimDropsCopiedAudioPreroll(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[3] // software encoder, no device requirements
+	profile.Container = model.ContainerMKV
+	trim := model.TrimSelection{Segments: []model.TimeRange{{Start: 2 * time.Second, End: 3 * time.Second}}}
+
+	plan, err := BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Trim:       trim,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPair(plan.Args, "-ss", "0.000000") {
+		t.Fatalf("output-side zero seek missing: %#v", plan.Args)
+	}
+	// The zero seek is output-side: after -i, at or before -t.
+	iIndex := indexOfArg(plan.Args, "-i")
+	zeroIndex := -1
+	for i := iIndex; i < len(plan.Args); i++ {
+		if plan.Args[i] == "-ss" {
+			zeroIndex = i
+			break
+		}
+	}
+	tIndex := indexOfArg(plan.Args, "-t")
+	if iIndex < 0 || zeroIndex < iIndex || tIndex < zeroIndex {
+		t.Errorf("zero seek at %d must sit between -i (at %d) and -t (at %d): %#v", zeroIndex, iIndex, tIndex, plan.Args)
+	}
+
+	// Video copy keeps the keyframe-snap behavior: no output-side zero
+	// seek, or the dropped negative packets would leave the copied
+	// stream starting mid-GOP.
+	profile.Video.Encoder = "copy"
+	plan, err = BuildCommand(BuildRequest{
+		FFmpegPath: "ffmpeg",
+		InputPath:  "/tmp/input.mkv",
+		OutputPath: "/tmp/output.mkv",
+		Profile:    profile,
+		Trim:       trim,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsPair(plan.Args, "-ss", "0.000000") {
+		t.Errorf("video copy must not emit the zero seek: %#v", plan.Args)
+	}
+	if !containsPair(plan.Args, "-ss", "2.000000") || !containsPair(plan.Args, "-t", "1.000000") {
+		t.Errorf("video copy trim flags broken: %#v", plan.Args)
+	}
+}
+
 func TestVideoCopyDoesNotFilter(t *testing.T) {
 	t.Parallel()
 	profile := model.BuiltinProfiles()[0]
