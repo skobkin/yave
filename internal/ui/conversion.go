@@ -3,14 +3,11 @@ package ui
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
-	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
 
-	"git.skobk.in/skobkin/yave/internal/ffmpeg"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/templates"
 	"git.skobk.in/skobkin/yave/internal/transcode"
@@ -58,23 +55,7 @@ func (c *Controller) refresh() {
 			c.outputPreview.SetText("Invalid template: " + err.Error())
 		} else {
 			c.outputPath = resolved
-			c.outputPreview.SetText(resolved)
-			plan, buildErr := ffmpeg.BuildCommand(ffmpeg.BuildRequest{
-				FFmpegPath: c.config.FFmpeg.FFmpegPath,
-				InputPath:  c.inputPath,
-				OutputPath: c.outputPath,
-				Profile:    p,
-				Media:      c.media,
-				Trim:       c.trimRequest(),
-			})
-			// Explain a blank preview instead of silently keeping the
-			// stale text: automatic device selection makes unreachable
-			// builds (no compatible VAAPI device) a normal preview state.
-			if buildErr != nil {
-				c.command.SetText("Command error: " + buildErr.Error())
-			} else {
-				c.command.SetText(plan.Preview)
-			}
+			c.renderExportPreview(p, resolved)
 		}
 	}
 	// Trim availability follows the input: no file or an unknown
@@ -105,6 +86,9 @@ func (c *Controller) startConversion() {
 	result := validation.Validate(p, &c.media, c.caps, c.inputPath, resolved)
 	if c.trimEnabled {
 		result.Merge(validation.ValidateTrim(c.trimSelection, &c.media, p.Video.Encoder))
+		// Join-export checks (video-copy rejection, audio-copy warning)
+		// gate BEFORE any dialog or staging directory is created.
+		result.Merge(validation.ValidateTrimExport(c.trimSelection, c.trimExportMode, &c.media, p.Video.Encoder, p.Audio))
 		// Invalid timecode entries keep the last valid selection for
 		// display, but Start must never silently use those stale
 		// boundaries.
@@ -122,30 +106,34 @@ func (c *Controller) startConversion() {
 	// resolved to a concrete path); validation above deliberately saw
 	// the raw profile so its auto semantics could apply.
 	cp := c.commandProfile()
-	start := func(overwrite bool) {
-		plan, buildErr := ffmpeg.BuildCommand(ffmpeg.BuildRequest{
-			FFmpegPath: c.config.FFmpeg.FFmpegPath,
-			InputPath:  c.inputPath, OutputPath: resolved,
-			Profile: cp, Media: c.media, Overwrite: overwrite,
-			Trim: c.trimRequest(),
-		})
-		if buildErr != nil {
-			c.showRunError("Command generation failed", buildErr.Error())
+
+	// Stat every target before the dialog: exactly the files that exist
+	// now are named, and only those may later be published with replace
+	// semantics. The base template is resolved once here so every part
+	// of a multi-segment export shares one {datetime}.
+	targets := exportTargetPaths(c.trimExportMode, c.trimRequest(), resolved)
+	existing := existingPaths(targets)
+	start := func(approved map[string]bool) {
+		job, err := c.buildTrimExportJob(cp, resolved, approved)
+		if err != nil {
+			c.showRunError("Export planning failed", err.Error())
 			return
 		}
-		c.run(plan, messages)
+		c.runJob(job, messages)
 	}
-	if _, statErr := os.Stat(resolved); statErr == nil {
-		dialog.NewConfirm("Overwrite output?",
-			"The output file already exists:\n"+resolved+"\n\nOverwrite it?",
-			func(ok bool) {
-				if ok {
-					start(true)
+	if len(existing) > 0 {
+		dialog.NewConfirm("Overwrite output?", overwritePromptMessage(existing), func(ok bool) {
+			if ok {
+				approved := make(map[string]bool, len(existing))
+				for _, path := range existing {
+					approved[path] = true
 				}
-			}, c.window).Show()
+				start(approved)
+			}
+		}, c.window).Show()
 		return
 	}
-	start(false)
+	start(map[string]bool{})
 }
 
 func (c *Controller) showRunError(status, message string) {
@@ -157,7 +145,13 @@ func (c *Controller) showRunError(status, message string) {
 	c.setProgressVisible(false)
 }
 
-func (c *Controller) run(plan model.RunPlan, messages []string) {
+// runJob starts a staged export job. The job carries every stage's
+// command, duration, and publication closure plus the config snapshot,
+// so nothing below this point touches mutable controller state. The
+// published-output tally counts stages whose OutputPath the runner
+// reports as successfully published — join-mode intermediates (empty
+// OutputPath) are never counted and never described as published.
+func (c *Controller) runJob(job *trimExportJob, messages []string) {
 	control := transcode.NewRunControl()
 	c.runControl = control
 	c.cancelStage = cancellationRunning
@@ -169,17 +163,44 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 	c.progress.SetValue(0)
 	c.setTrayProgress(0)
 	c.progressInfo.SetText("")
-	c.command.SetText(plan.Preview)
 	c.setProgressVisible(true)
-	for _, warning := range plan.Warnings {
-		messages = append(messages, "Warning: "+warning)
+
+	stages := job.stages
+	preview := stages[0].Plan.Preview
+	if len(stages) > 1 {
+		preview += "\n\n" + stagedExportNote(len(stages))
 	}
+	c.command.SetText(preview)
+
+	// Warnings deduplicate across plans: every segment of a
+	// subtitle-carrying input repeats the skip warning, and once is
+	// enough.
+	seen := make(map[string]bool)
+	var warnings []string
+	for _, stage := range stages {
+		for _, warning := range stage.Plan.Warnings {
+			if !seen[warning] {
+				seen[warning] = true
+				warnings = append(warnings, warning)
+			}
+		}
+	}
+
 	runLog, logErr := openLastRunLog()
 	c.activeRunLog = runLog
 	if logErr != nil {
 		runLog.AppendLine("Warning: complete conversion log is unavailable: " + logErr.Error())
 	}
-	runLog.AppendLine("Command: " + plan.Preview)
+	if len(stages) == 1 {
+		runLog.AppendLine("Command: " + stages[0].Plan.Preview)
+	} else {
+		for i, stage := range stages {
+			runLog.AppendLine(fmt.Sprintf("Command (%d of %d): %s", i+1, len(stages), stage.Plan.Preview))
+		}
+	}
+	for _, warning := range warnings {
+		runLog.AppendLine("Warning: " + warning)
+	}
 	for _, message := range messages {
 		runLog.AppendLine(message)
 	}
@@ -188,34 +209,43 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 	c.log.SetText(initialLog)
 	stopLogUpdates := c.startRunLogUpdates(runLog, control)
 
-	// With an active trim, ffmpeg's input-side -ss makes out_time
-	// segment-relative, so progress must be measured against the selected
-	// duration, not the whole input. Snapshot it here — run() starts on
-	// the UI thread and the selection is UI-thread state; reading it from
-	// the run goroutine would race with boundary edits and could diverge
-	// from the command already built.
-	duration := c.media.Duration
-	if seg, ok := c.trimRequest().First(); ok {
-		duration = seg.End - seg.Start
-	}
-
+	published := 0
 	go func() {
-		err := (transcode.Runner{}).Run(control, plan, duration, transcode.Callbacks{
+		err := c.runStages(control, job.stages, transcode.Callbacks{
 			OnLog: func(line string) {
 				runLog.AppendLine(line)
 			},
 			OnProgress: func(p model.Progress) {
-				fyne.Do(func() {
+				c.dispatchUI(func() {
 					c.progress.SetValue(p.Percentage)
 					c.setTrayProgress(p.Percentage)
 					c.progressInfo.SetText(formatProgressInfo(p))
 				})
 			},
+			OnStageDone: func(_ int, _ int, stage transcode.Stage, err error) {
+				if err != nil {
+					// The failure is reported by the returned error and
+					// the status line; no per-stage line needed.
+					return
+				}
+				if stage.OutputPath != "" {
+					runLog.AppendLine(stage.Label + " published → " + stage.OutputPath)
+					published++
+					return
+				}
+				// Processing-only stage (join intermediates): staging is
+				// deliberately not described as published.
+				runLog.AppendLine(stage.Label + " encoded → " + stage.Plan.OutputPath)
+			},
 		})
 		close(stopLogUpdates)
+		job.cleanup()
+		for _, warning := range job.warnings.drain() {
+			runLog.AppendLine("Warning: " + warning)
+		}
 		_ = runLog.Close()
 		finalLog, _ := runLog.LiveSnapshot()
-		fyne.Do(func() {
+		c.dispatchUI(func() {
 			if c.runControl != control {
 				return
 			}
@@ -227,7 +257,7 @@ func (c *Controller) run(plan model.RunPlan, messages []string) {
 			c.cancel.SetText("Cancel")
 			c.cancel.Disable()
 			c.log.SetText(finalLog)
-			c.setRunResult(err)
+			c.setRunResult(err, published, len(job.outputs))
 			c.refresh()
 		})
 	}()
@@ -273,19 +303,31 @@ func formatProgressInfo(progress model.Progress) string {
 	return fmt.Sprintf("%s | %s", progress.OutTime.Round(time.Second), progress.Speed)
 }
 
-func (c *Controller) setRunResult(err error) {
+func (c *Controller) setRunResult(err error, published, total int) {
 	c.resetTrayProgress()
 	switch err {
 	case nil:
 		c.status.SetText("Completed")
 		c.progress.SetValue(1)
 	case context.Canceled: //nolint:errorlint // context.Canceled is a sentinel; == comparison is intentional
-		c.status.SetText("Canceled")
+		c.status.SetText(partialStatus("Canceled", published, total))
 	default:
-		c.status.SetText("Failed: " + err.Error())
+		c.status.SetText(partialStatus("Failed: "+err.Error(), published, total))
 		c.tabs.Select(c.runTab)
 	}
 	c.setProgressVisible(false)
+}
+
+// partialStatus augments a canceled/failed status with the number of
+// published user outputs. A zero tally keeps today's plain texts — in
+// join mode the intermediates were temporary processing and must not be
+// claimed as outputs; a partial tally can only arise in separate mode,
+// where every published part survives the failure.
+func partialStatus(base string, published, total int) string {
+	if published == 0 || published >= total {
+		return base
+	}
+	return fmt.Sprintf("%s (%d of %d parts written)", base, published, total)
 }
 
 // setProgressVisible shows or hides the progress bar and its paired
