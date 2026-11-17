@@ -27,6 +27,11 @@ type Controller struct {
 	inputPath  string
 	outputPath string
 	runControl conversionControl
+	// runDone closes when the run goroutine has fully unwound —
+	// including staging-directory cleanup — so quitting mid-export can
+	// await it instead of leaking yave-export-* intermediates: the
+	// process dies when main returns, and goroutines cannot outlive it.
+	runDone chan struct{}
 	// runStages executes a staged conversion sequence. A seam so tests
 	// can intercept the runner; New defaults it to
 	// (transcode.Runner{}).RunSequence.
@@ -335,6 +340,10 @@ func (c *Controller) requestQuit() {
 	prompt.Show()
 }
 
+// quitCleanupTimeout bounds the quit-time wait for the run goroutine
+// (see quitApplication). A var so tests can shorten it.
+var quitCleanupTimeout = 10 * time.Second
+
 func (c *Controller) quitApplication() {
 	control := c.runControl
 	if control != nil {
@@ -354,5 +363,21 @@ func (c *Controller) quitApplication() {
 		prompt.Close()
 	}
 	c.window.SetCloseIntercept(nil)
+	// Terminate killed FFmpeg, so the run goroutine unwinds quickly; the
+	// staging directory is removed at the end of that unwind, after
+	// RunSequence returns. The app process dies the moment ShowAndRun
+	// returns to main, so quitting mid-export must wait for the unwind
+	// or completed intermediates leak in yave-export-* directories
+	// indefinitely. The UI thread blocks only for the kill window, and
+	// the goroutine's final dispatch is a non-blocking fyne.Do, so there
+	// is no deadlock. Bounded: a wedged stage delays exit by
+	// quitCleanupTimeout at most, and then leaks exactly as before the
+	// wait existed.
+	if c.runDone != nil {
+		select {
+		case <-c.runDone:
+		case <-time.After(quitCleanupTimeout):
+		}
+	}
 	c.app.Quit()
 }

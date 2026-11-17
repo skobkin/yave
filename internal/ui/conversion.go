@@ -218,7 +218,12 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 	stopLogUpdates := c.startRunLogUpdates(runLog, control)
 
 	published := 0
+	runDone := make(chan struct{})
+	c.runDone = runDone
 	go func() {
+		// quitApplication waits on this after Terminate: cleanup below
+		// must run before the process exits (see quitApplication).
+		defer close(runDone)
 		err := c.runStages(control, job.stages, transcode.Callbacks{
 			OnLog: func(line string) {
 				runLog.AppendLine(line)

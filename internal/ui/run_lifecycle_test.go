@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -244,5 +246,66 @@ func waitForUIUpdate(t *testing.T, updates <-chan func()) func() {
 	case <-time.After(2 * time.Second):
 		t.Fatal("UI update was not dispatched")
 		return nil
+	}
+}
+
+// Regression (Codex review round 2): quitting mid-export let the app
+// process die while the run goroutine was still unwinding, so the
+// staging directory never got removed — a Go process exits when main
+// returns and goroutines cannot outlive it. quitApplication must await
+// the run goroutine (after Terminate) before quitting.
+func TestQuitAwaitsRunGoroutineCleanup(t *testing.T) {
+	app := fynetest.NewApp()
+	c := &Controller{
+		app:    app,
+		window: app.NewWindow("YAVE"),
+	}
+
+	staging := filepath.Join(t.TempDir(), "yave-export-X")
+	if err := os.Mkdir(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runDone := make(chan struct{})
+	c.runDone = runDone
+	go func() {
+		defer close(runDone)
+		// Stand-in for the run goroutine's tail: cleanup happens before
+		// the channel closes, exactly as in runJob.
+		time.Sleep(20 * time.Millisecond)
+		if err := os.Remove(staging); err != nil {
+			t.Errorf("cleanup failed: %v", err)
+		}
+	}()
+
+	c.quitApplication()
+
+	if _, err := os.Stat(staging); !os.IsNotExist(err) {
+		t.Fatal("quitApplication returned before the run goroutine removed the staging directory")
+	}
+}
+
+// The cleanup wait is bounded: a wedged run goroutine must delay exit,
+// never hang it.
+func TestQuitProceedsAfterCleanupWaitTimeout(t *testing.T) {
+	old := quitCleanupTimeout
+	quitCleanupTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { quitCleanupTimeout = old })
+
+	app := fynetest.NewApp()
+	c := &Controller{
+		app:    app,
+		window: app.NewWindow("YAVE"),
+	}
+	c.runDone = make(chan struct{}) // never closes
+
+	done := make(chan struct{})
+	go func() {
+		c.quitApplication()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("quitApplication hung past the cleanup wait timeout")
 	}
 }
