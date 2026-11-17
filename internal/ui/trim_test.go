@@ -1606,3 +1606,34 @@ func TestTrimTabLayout(t *testing.T) {
 		t.Fatal("preview timestamps must be drawn on a translucent (alpha < 255) chip over the preview image")
 	}
 }
+
+// Regression: a successful preview cleared the indexing-failure status —
+// after a Shift+arrow seek the "Frame-accurate stepping unavailable"
+// diagnostic vanished while the failure state stayed set, so frame-step
+// presses silently did nothing with no explanation anywhere. The
+// failure persists for the input; its message must too. A new input
+// replaces the index, and the message retires with it.
+func TestPreviewStatusKeepsIndexingFailure(t *testing.T) {
+	c := testTrimController(t)
+	c.trimEnabled = true
+	c.previews.index.applyError(errors.New("probe failed"))
+	c.setPreviewStatus("Frame-accurate stepping unavailable: probe failed")
+	if got := c.previewStatus.Text; !strings.Contains(got, "Frame-accurate stepping unavailable") {
+		t.Fatalf("status = %q, want the failure message", got)
+	}
+
+	// A successful preview after a time-based seek clears the transient
+	// status; the persistent failure must re-surface, not vanish.
+	c.setPreviewStatus("")
+	if got := c.previewStatus.Text; !strings.Contains(got, "probe failed") || c.previewStatus.Hidden {
+		t.Fatalf("status = %q hidden=%v, want the preserved failure", c.previewStatus.Text, c.previewStatus.Hidden)
+	}
+
+	// A fresh input replaces the index: the failure is gone and the
+	// status clears normally.
+	c.previews.index = newFrameIndex()
+	c.setPreviewStatus("")
+	if !c.previewStatus.Hidden {
+		t.Fatalf("status = %q, want hidden after the index reset", c.previewStatus.Text)
+	}
+}

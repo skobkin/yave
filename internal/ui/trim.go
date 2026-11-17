@@ -525,7 +525,17 @@ func (c *Controller) setTrimMessage(text string) {
 	setStatusLabel(c.trimMessage, text)
 }
 
+// setPreviewStatus shows the transient extraction/indexing line; empty
+// text clears it. Exception: while frame indexing has failed, clearing
+// re-surfaces the failure instead — it persists for the input (stepping
+// stays off, arrow presses no-op), and a successful preview after a
+// Shift+arrow seek must not erase the only explanation of why. A new
+// input replaces the index, so the failure and its message retire
+// together.
 func (c *Controller) setPreviewStatus(text string) {
+	if index := c.previews.index; text == "" && index != nil && index.failed && index.fetchErr != nil {
+		text = "Frame-accurate stepping unavailable: " + index.fetchErr.Error()
+	}
 	setStatusLabel(c.previewStatus, text)
 }
 
@@ -914,7 +924,10 @@ func (c *Controller) applyFrameStep(at time.Duration, state frameStepState) {
 	case frameStepIdle:
 		// Nothing queued; keep whatever status the latest action set.
 	case frameStepUnavailable:
-		// status already set by applyError
+		// The failure message is already shown (set by applyError and
+		// preserved by setPreviewStatus); pressing an unavailable step
+		// re-asserts it so the no-op is never silent.
+		c.setPreviewStatus("")
 	}
 }
 
