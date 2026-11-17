@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	fynetest "fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 
+	"git.skobk.in/skobkin/yave/internal/frames"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
@@ -1671,6 +1673,9 @@ func TestLazyNoPreviewWorkWithoutMedia(t *testing.T) {
 	if c.previews.stripRunning {
 		t.Fatal("thumbnail strip must not run without a known duration")
 	}
+	if c.previews.pendingPreview || c.previewSpinner.Visible() || !c.previewVeil.Hidden {
+		t.Fatal("no pending indication may arm without a known duration")
+	}
 }
 
 // TestTrimTabLayout pins the space-saving tab composition: no heading
@@ -1884,6 +1889,71 @@ func TestTrimTabLayout(t *testing.T) {
 	// The chip lives inside the preview cell, over the image's top edge.
 	if chip == nil {
 		t.Fatal("preview timestamps must be drawn on a translucent (alpha < 255) chip over the preview image")
+	}
+}
+
+// The extraction-in-flight spinner is an overlay floating over the
+// preview image's center at its natural square size, and its rotation
+// animation runs only while it is visible.
+func TestPreviewSpinnerOverlay(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// The spinner must stay wired into the preview section's stack, or
+	// it would never be laid out or shown.
+	var walk func(box *fyne.Container)
+	found := false
+	walk = func(box *fyne.Container) {
+		for _, obj := range box.Objects {
+			if obj == c.previewSpinner {
+				found = true
+			}
+			if inner, ok := obj.(*fyne.Container); ok {
+				walk(inner)
+			}
+		}
+	}
+	if section, ok := trimPreviewSection(c).(*fyne.Container); ok {
+		walk(section)
+	}
+	if !found {
+		t.Fatal("the spinner must live inside the preview section's stack")
+	}
+
+	// Hidden from birth: no rotation before first Show.
+	if c.previewSpinner.anim != nil {
+		t.Fatal("a hidden-from-birth spinner must not animate")
+	}
+	c.previewSpinner.Show()
+	if c.previewSpinner.anim == nil {
+		t.Fatal("Show must start the rotation")
+	}
+
+	// Centered on both axes at its natural square size.
+	cell, ok := trimPreviewSection(c).(*fyne.Container)
+	if !ok {
+		t.Fatalf("preview section is %T, want a container", trimPreviewSection(c))
+	}
+	cell.Resize(fyne.NewSize(800, 450))
+	want := c.previewSpinner.MinSize()
+	if want.Width <= 0 || want.Width != want.Height {
+		t.Fatalf("spinner min size = %v, want a nonzero square", want)
+	}
+	if got := c.previewSpinner.Size(); got != want {
+		t.Errorf("spinner size = %v, want its natural %v", got, want)
+	}
+	wantPos := fyne.NewPos((800-want.Width)/2, (450-want.Height)/2)
+	if got := c.previewSpinner.Position(); got != wantPos {
+		t.Errorf("spinner position = %v, want centered at %v", got, wantPos)
+	}
+
+	// Hiding stops the rotation.
+	c.previewSpinner.Hide()
+	if c.previewSpinner.anim != nil {
+		t.Error("Hide must stop the rotation")
 	}
 }
 
@@ -2186,5 +2256,520 @@ func TestTimelineFocusLossClearsDragSeg(t *testing.T) {
 	tl.Disable()
 	if tl.drag != tlNone || tl.dragSeg != -1 {
 		t.Fatalf("disable must clear drag state: drag=%v dragSeg=%d", tl.drag, tl.dragSeg)
+	}
+}
+
+// --- pending frame-preview indication ---
+
+// previewTestController returns a controller with trimming force-enabled
+// (bypassing setTrimEnabled, which would launch the thumbnail strip and
+// the frame index — neither is under test here) and a fresh dispatch
+// channel so tests can pump preview callbacks deterministically.
+func previewTestController(t *testing.T) (*Controller, chan func()) {
+	t.Helper()
+	c := testTrimController(t)
+	updates := make(chan func(), 64)
+	c.uiDispatch = func(f func()) { updates <- f }
+	c.trimEnabled = true
+	return c, updates
+}
+
+// runDispatch pumps one queued preview callback, failing when none
+// arrives.
+func runDispatch(t *testing.T, updates chan func()) {
+	t.Helper()
+	select {
+	case f := <-updates:
+		f()
+	case <-time.After(2 * time.Second):
+		t.Fatal("no preview dispatch arrived")
+	}
+}
+
+// spyFetch parks every extraction on its release channel; the release
+// value is the error to return (nil = a small opaque frame). entered
+// synchronizes the fetch's arrival at the park point. The parked select
+// also honors ctx cancellation, so a canceled extraction returns
+// without a release.
+type spyFetch struct {
+	mu      sync.Mutex
+	ats     []time.Duration
+	exts    []*frames.Extractor
+	entered chan struct{}
+	release chan error
+}
+
+func (s *spyFetch) fetch(ctx context.Context, ext *frames.Extractor, _ string, at time.Duration, _ int) (frames.Frame, error) {
+	s.mu.Lock()
+	s.ats = append(s.ats, at)
+	s.exts = append(s.exts, ext)
+	s.mu.Unlock()
+	if s.entered != nil {
+		s.entered <- struct{}{}
+	}
+	var err error
+	select {
+	case err = <-s.release:
+	case <-ctx.Done():
+		return frames.Frame{}, ctx.Err()
+	}
+	if err != nil {
+		return frames.Frame{}, err
+	}
+	return frames.Frame{Image: image.NewRGBA(image.Rect(0, 0, 4, 4))}, nil
+}
+
+func (s *spyFetch) snapshot() ([]time.Duration, []*frames.Extractor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Duration{}, s.ats...), append([]*frames.Extractor{}, s.exts...)
+}
+
+func (s *spyFetch) lastExt() *frames.Extractor {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.exts) == 0 {
+		return nil
+	}
+	return s.exts[len(s.exts)-1]
+}
+
+func TestPreviewPendingIndication(t *testing.T) {
+	c, _ := previewTestController(t)
+
+	// Cache miss: a hover request arms the cue on every surface.
+	c.requestHover(3*time.Second + 120*time.Millisecond)
+	if !c.previews.pendingPreview || c.previews.pendingAt == nil || *c.previews.pendingAt != 3*time.Second {
+		t.Fatalf("hover miss must arm pending: pending=%v at=%v", c.previews.pendingPreview, c.previews.pendingAt)
+	}
+	if c.previewVeil.Hidden {
+		t.Fatal("the stale frame must be tinted while pending")
+	}
+	if veil, ok := color.NRGBAModel.Convert(c.previewVeil.FillColor).(color.NRGBA); !ok || veil.A != previewVeilAlpha {
+		t.Fatalf("veil alpha = %v, want %d", c.previewVeil.FillColor, previewVeilAlpha)
+	}
+	if !c.previewSpinner.Visible() {
+		t.Fatal("busy bar must be visible while pending")
+	}
+	if !c.trimTimeline.hoverPending {
+		t.Fatal("timeline marker must report pending")
+	}
+
+	// A committed request resolving from cache clears the cue and the
+	// target instantly, and records the displayed position.
+	c.previews.cache.Put(time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	c.requestPreview(time.Second)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("a cache hit must resolve the pending state")
+	}
+	if !c.previewVeil.Hidden || c.previewSpinner.Visible() || c.trimTimeline.hoverPending {
+		t.Fatal("a cache hit must clear the visual cue")
+	}
+	if c.previews.displayedAt == nil || *c.previews.displayedAt != time.Second {
+		t.Fatalf("displayedAt = %v, want 1s", c.previews.displayedAt)
+	}
+
+	// Arming again after a hit: the visual toggle is not one-way.
+	c.requestHover(5 * time.Second)
+	if !c.previews.pendingPreview || !c.previewSpinner.Visible() {
+		t.Fatal("a new miss must re-arm the cue")
+	}
+	c.previews.hoverTimer.Stop()
+}
+
+// Regression guard for the launch/dispatch path: pending survives a
+// parked extraction, resolves on success and on error, and a retired
+// result never disturbs a newer pending state.
+func TestPreviewPendingAsyncLifecycle(t *testing.T) {
+	c, updates := previewTestController(t)
+	spy := &spyFetch{entered: make(chan struct{}), release: make(chan error)}
+	c.previews.previewFetch = spy.fetch
+
+	// Park an extraction.
+	c.requestHover(time.Second)
+	c.previews.hoverTimer.Stop()
+	c.launchPreview(time.Second, c.previews.seq)
+	<-spy.entered
+	if !c.previews.pendingPreview {
+		t.Fatal("pending must stay armed while the extraction runs")
+	}
+
+	// Error: the cue clears, the status explains, and the same bucket
+	// may re-request instead of coalescing the failure.
+	spy.release <- errors.New("boom")
+	runDispatch(t, updates)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("an error must clear the pending state")
+	}
+	if !strings.Contains(c.previewStatus.Text, "boom") {
+		t.Fatalf("status = %q, want the extraction error", c.previewStatus.Text)
+	}
+	c.requestHover(time.Second + 100*time.Millisecond)
+	if !c.previews.pendingPreview || c.previews.hoverTimer == nil {
+		t.Fatal("a same-bucket request after an error must re-request")
+	}
+
+	// Success: the frame lands, is cached, and resolves the cue.
+	c.previews.hoverTimer.Stop()
+	c.launchPreview(time.Second, c.previews.seq)
+	<-spy.entered
+	spy.release <- nil
+	runDispatch(t, updates)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("success must clear the pending state")
+	}
+	if c.previewImage.Image == nil {
+		t.Fatal("the extracted frame must be displayed")
+	}
+	if _, ok := c.previews.cache.Get(time.Second); !ok {
+		t.Fatal("the landed frame must be cached")
+	}
+
+	// launchPreview's entry cache-hit branch resolves through the same
+	// central path.
+	c.requestHover(7 * time.Second)
+	c.previews.hoverTimer.Stop()
+	c.previews.cache.Put(7*time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	c.launchPreview(7*time.Second, c.previews.seq)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("a launch-time cache hit must resolve the pending state")
+	}
+
+	// A late result for a retired request leaves a newer pending state
+	// (and its display) alone.
+	c.requestHover(5 * time.Second)
+	c.previews.hoverTimer.Stop()
+	c.launchPreview(5*time.Second, c.previews.seq)
+	<-spy.entered
+	c.previews.cache.Put(2*time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	c.requestPreview(2 * time.Second) // committed hit resolves pending
+	if c.previews.pendingPreview {
+		t.Fatal("the committed hit must resolve pending")
+	}
+	spy.release <- nil
+	runDispatch(t, updates) // the stale 5s result arrives
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("a retired result must not re-arm pending")
+	}
+	if c.previews.displayedAt == nil || *c.previews.displayedAt != 2*time.Second {
+		t.Fatalf("displayedAt = %v, want the newer 2s frame", c.previews.displayedAt)
+	}
+}
+
+func TestTrimDisableDuringDebounce(t *testing.T) {
+	c, updates := previewTestController(t)
+	c.previews.cache.Put(time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+
+	c.requestHover(3 * time.Second)
+	if !c.previews.pendingPreview || c.previews.hoverTimer == nil {
+		t.Fatal("the hover miss must arm the pending state")
+	}
+
+	c.setTrimEnabled(false)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("disable must clear the pending state")
+	}
+	if c.previews.previewTimer != nil || c.previews.hoverTimer != nil {
+		t.Fatal("disable must stop the preview timers")
+	}
+	if !c.previewVeil.Hidden || c.previewSpinner.Visible() || c.trimTimeline.hoverPending {
+		t.Fatal("disable must clear the visual cue")
+	}
+	if _, ok := c.previews.cache.Get(time.Second); !ok {
+		t.Fatal("disable must keep the frame cache")
+	}
+	select {
+	case f := <-updates:
+		f()
+		t.Fatal("disable must not leave deferred preview work")
+	case <-time.After(250 * time.Millisecond):
+		// The stopped hover debounce (200ms) would have fired by now.
+	}
+}
+
+func TestTrimDisableDuringExtraction(t *testing.T) {
+	c, updates := previewTestController(t)
+	spy := &spyFetch{entered: make(chan struct{}), release: make(chan error)}
+	c.previews.previewFetch = spy.fetch
+
+	c.requestHover(time.Second)
+	c.previews.hoverTimer.Stop()
+	c.launchPreview(time.Second, c.previews.seq)
+	<-spy.entered
+
+	c.setTrimEnabled(false)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("disable must clear the pending state")
+	}
+	if c.previews.previewCancel != nil {
+		t.Fatal("disable must drop the extraction cancel func")
+	}
+	// The parked fetch returns through cancellation; its dispatch is
+	// retired by the trimEnabled guard.
+	runDispatch(t, updates)
+	if c.previews.pendingPreview || c.previewImage.Image != nil {
+		t.Fatal("a canceled extraction must not display anything")
+	}
+}
+
+func TestFFmpegChangeDuringDebounce(t *testing.T) {
+	c, updates := previewTestController(t)
+	spy := &spyFetch{entered: make(chan struct{}), release: make(chan error)}
+	c.previews.previewFetch = spy.fetch
+
+	c.requestHover(time.Second)
+	if c.previews.hoverTimer == nil {
+		t.Fatal("the hover miss must arm the debounce")
+	}
+
+	c.config.FFmpeg.FFmpegPath = "/opt/new/ffmpeg"
+	c.onFFmpegExecutableChanged()
+
+	if c.previews.hoverTimer != nil {
+		t.Fatal("the old hover debounce must be dropped")
+	}
+	if c.previews.previewTimer == nil {
+		t.Fatal("the invalidation must schedule a fresh preview request")
+	}
+	if !c.previews.pendingPreview || c.previews.pendingAt == nil || *c.previews.pendingAt != time.Second {
+		t.Fatal("pending must carry over at the requested position")
+	}
+	if _, ok := c.previews.cache.Get(time.Second); ok {
+		t.Fatal("the old extractor's cache must be cleared")
+	}
+	if c.previews.extractorPath != "/opt/new/ffmpeg" {
+		t.Fatalf("extractor path = %q, want the new executable", c.previews.extractorPath)
+	}
+
+	// The re-request extracts under the rebuilt extractor.
+	c.previews.previewTimer.Stop()
+	c.launchPreview(time.Second, c.previews.seq)
+	<-spy.entered
+	if ext := spy.lastExt(); ext != c.ensureExtractor() {
+		t.Fatal("the extraction must run under the rebuilt extractor")
+	}
+	spy.release <- nil
+	runDispatch(t, updates)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("the frame must land under the new extractor")
+	}
+}
+
+func TestFFmpegChangeDuringBlockedExtraction(t *testing.T) {
+	c, updates := previewTestController(t)
+	spy := &spyFetch{entered: make(chan struct{}), release: make(chan error)}
+	c.previews.previewFetch = spy.fetch
+
+	c.requestHover(time.Second)
+	c.previews.hoverTimer.Stop()
+	c.launchPreview(time.Second, c.previews.seq)
+	<-spy.entered
+	oldExt := c.previews.extractor
+
+	c.config.FFmpeg.FFmpegPath = "/opt/new/ffmpeg"
+	c.onFFmpegExecutableChanged()
+	if c.previews.extractor == oldExt {
+		t.Fatal("the extractor must be rebuilt")
+	}
+	if !c.previews.pendingPreview || c.previews.pendingAt == nil || *c.previews.pendingAt != time.Second {
+		t.Fatal("the fresh request must keep pending armed at the position")
+	}
+
+	// The old extraction's result arrives after the change: retired
+	// without touching the fresh pending state.
+	runDispatch(t, updates)
+	if !c.previews.pendingPreview || c.previews.pendingAt == nil {
+		t.Fatal("a retired old-extractor result must not disturb pending")
+	}
+
+	// The fresh request extracts under the new extractor and lands.
+	c.previews.previewTimer.Stop()
+	c.launchPreview(time.Second, c.previews.seq)
+	<-spy.entered
+	if ext := spy.lastExt(); ext != c.ensureExtractor() {
+		t.Fatal("the second extraction must use the rebuilt extractor")
+	}
+	spy.release <- nil
+	runDispatch(t, updates)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("pending must resolve under the new extractor")
+	}
+}
+
+func TestFFmpegChangeWhileHoveringOtherFrame(t *testing.T) {
+	c, updates := previewTestController(t)
+	spy := &spyFetch{entered: make(chan struct{}), release: make(chan error)}
+	c.previews.previewFetch = spy.fetch
+
+	// A committed frame at 1s is displayed.
+	c.previews.cache.Put(time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	c.requestPreview(time.Second)
+	if c.previews.displayedAt == nil || *c.previews.displayedAt != time.Second {
+		t.Fatalf("displayedAt = %v, want 1s", c.previews.displayedAt)
+	}
+
+	// A hover at 3.4s parks an extraction for its bucket (3.25s).
+	c.requestHover(3400 * time.Millisecond)
+	c.previews.hoverTimer.Stop()
+	c.launchPreview(3250*time.Millisecond, c.previews.seq)
+	<-spy.entered
+
+	// The executable changes mid-hover: the refresh must target the
+	// hovered frame, not the displayed one.
+	c.config.FFmpeg.FFmpegPath = "/opt/new/ffmpeg"
+	c.onFFmpegExecutableChanged()
+	if c.previews.pendingAt == nil || *c.previews.pendingAt != 3250*time.Millisecond {
+		t.Fatalf("pendingAt = %v, want the hovered 3.25s", c.previews.pendingAt)
+	}
+	// The parked old extraction unblocks through cancellation; consume
+	// its retired dispatch before launching the fresh request, so the
+	// queue order stays deterministic.
+	runDispatch(t, updates)
+	if !c.previews.pendingPreview || c.previews.pendingAt == nil {
+		t.Fatal("a retired old-extractor result must not disturb pending")
+	}
+	c.previews.previewTimer.Stop()
+	c.launchPreview(3250*time.Millisecond, c.previews.seq)
+	<-spy.entered
+	ats, _ := spy.snapshot()
+	if ats[len(ats)-1] != 3250*time.Millisecond {
+		t.Fatalf("re-request target = %s, want the hovered 3.25s", ats[len(ats)-1])
+	}
+	spy.release <- nil
+	runDispatch(t, updates)
+	if c.previews.displayedAt == nil || *c.previews.displayedAt != 3250*time.Millisecond {
+		t.Fatal("the hovered frame must land under the new extractor")
+	}
+
+	// A pending target beyond the media duration folds to the end.
+	huge := c.media.Duration + time.Hour
+	c.previews.pendingAt = &huge
+	c.config.FFmpeg.FFmpegPath = "/opt/third/ffmpeg"
+	c.onFFmpegExecutableChanged()
+	if c.previews.pendingAt == nil || *c.previews.pendingAt != c.media.Duration {
+		t.Fatalf("pendingAt = %v, want clamped to the duration", c.previews.pendingAt)
+	}
+	c.previews.previewTimer.Stop()
+}
+
+func TestHoverCoalescingWithinBucket(t *testing.T) {
+	c, updates := previewTestController(t)
+	spy := &spyFetch{entered: make(chan struct{}), release: make(chan error)}
+	c.previews.previewFetch = spy.fetch
+
+	c.requestHover(3*time.Second + 10*time.Millisecond)
+	firstSeq := c.previews.seq
+	timer := c.previews.hoverTimer
+
+	// Repeated hover events inside one bucket keep the same request.
+	for _, off := range []time.Duration{50, 120, 200, 240} {
+		c.requestHover(3*time.Second + off*time.Millisecond)
+	}
+	if c.previews.seq != firstSeq {
+		t.Fatalf("seq = %d after same-bucket hovers, want %d", c.previews.seq, firstSeq)
+	}
+	if c.previews.hoverTimer != timer {
+		t.Fatal("same-bucket hovers must not restart the debounce timer")
+	}
+
+	// While the bucket's extraction is parked, same-bucket hovers still
+	// coalesce onto it.
+	c.previews.hoverTimer.Stop()
+	c.launchPreview(3*time.Second, firstSeq)
+	<-spy.entered
+	before := c.previews.seq
+	c.requestHover(3*time.Second + 200*time.Millisecond)
+	if c.previews.seq != before {
+		t.Fatal("a same-bucket hover during extraction must coalesce")
+	}
+
+	// Release: exactly one extraction serves the whole bucket.
+	spy.release <- nil
+	runDispatch(t, updates)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("landing must resolve pending")
+	}
+
+	// A different bucket restarts on newest-request-wins.
+	c.requestHover(4 * time.Second)
+	if c.previews.seq != before+1 {
+		t.Fatal("a different bucket must bump the request sequence")
+	}
+	if c.previews.hoverTimer == nil {
+		t.Fatal("a different bucket must re-arm the debounce")
+	}
+	c.previews.hoverTimer.Stop()
+}
+
+func TestHoverAfterCacheInvalidation(t *testing.T) {
+	c, updates := previewTestController(t)
+	spy := &spyFetch{entered: make(chan struct{}), release: make(chan error)}
+	c.previews.previewFetch = spy.fetch
+
+	// Extract bucket 2s once.
+	c.requestHover(2 * time.Second)
+	c.previews.hoverTimer.Stop()
+	c.launchPreview(2*time.Second, c.previews.seq)
+	<-spy.entered
+	spy.release <- nil
+	runDispatch(t, updates)
+	if c.previews.pendingAt != nil {
+		t.Fatal("landing must clear the pending target")
+	}
+
+	// The same bucket now hits the cache instantly.
+	c.requestHover(2*time.Second + 100*time.Millisecond)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("a cache hit must not arm pending")
+	}
+
+	// Invalidating the extractor clears the cache and re-requests the
+	// shown position; the hover coalesces onto that fresh request.
+	c.config.FFmpeg.FFmpegPath = "/opt/other/ffmpeg"
+	c.onFFmpegExecutableChanged()
+	if !c.previews.pendingPreview || c.previews.pendingAt == nil || *c.previews.pendingAt != 2*time.Second {
+		t.Fatal("invalidation must re-request the shown position")
+	}
+	seqAfter := c.previews.seq
+	c.requestHover(2*time.Second + 100*time.Millisecond)
+	if c.previews.seq != seqAfter {
+		t.Fatal("a same-bucket hover must coalesce with the pending re-request")
+	}
+
+	// The extraction runs under the rebuilt extractor — the cache was
+	// cleared, so the entry cannot serve the frame from the old build.
+	c.previews.previewTimer.Stop()
+	c.launchPreview(2*time.Second, c.previews.seq)
+	<-spy.entered
+	if ext := spy.lastExt(); ext != c.ensureExtractor() {
+		t.Fatal("the frame must be extracted under the rebuilt extractor")
+	}
+	spy.release <- nil
+	runDispatch(t, updates)
+	if c.previews.pendingPreview || c.previews.pendingAt != nil {
+		t.Fatal("landing must resolve pending")
+	}
+}
+
+func TestTimelinePreviewPendingMarker(t *testing.T) {
+	tl := newSizedTimeline(t)
+	tl.SetDuration(10 * time.Second)
+
+	tl.SetPreviewPending(true)
+	if !tl.hoverPending {
+		t.Fatal("SetPreviewPending(true) must arm the marker state")
+	}
+	tl.SetPreviewPending(false)
+	if tl.hoverPending {
+		t.Fatal("SetPreviewPending(false) must disarm the marker state")
+	}
+
+	// The marker only exists while the pointer hovers: MouseOut hides
+	// it regardless of pending state.
+	tl.SetPreviewPending(true)
+	tl.MouseIn(&desktop.MouseEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(100, 0)}})
+	tl.MouseOut()
+	if tl.hoverX >= 0 {
+		t.Fatal("MouseOut must clear the hover position")
 	}
 }

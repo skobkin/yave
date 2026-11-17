@@ -11,6 +11,8 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
+	"image/color"
+
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/profiles"
@@ -188,6 +190,13 @@ func (c *Controller) createWidgets() {
 	c.hoverTimeLabel = widget.NewLabel("")
 	c.previewImage = canvas.NewImageFromImage(nil)
 	c.previewImage.FillMode = canvas.ImageFillContain
+	c.previewVeil = canvas.NewRectangle(color.Transparent)
+	// Hidden until a pending extraction tints the stale frame.
+	c.previewVeil.Hide()
+	c.previewSpinner = newSpinner()
+	// Hidden from birth: Show and Hide start and stop the rotation
+	// animation together with the widget's visibility.
+	c.previewSpinner.Hide()
 	c.trimControls = []fyne.CanvasObject{
 		c.trimTimeline, c.trimIn, c.trimOut, c.trimSetIn, c.trimSetOut, c.trimReset,
 		c.trimExport, c.trimAdd, c.trimDelete,

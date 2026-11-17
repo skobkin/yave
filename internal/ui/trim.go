@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/ffprobe"
@@ -29,6 +30,7 @@ const (
 	previewCacheBytes    = 64 << 20               // 64 MiB of decoded frames
 	previewMaxEntryBytes = 4 << 20                // a single decoded preview frame (640-wide portrait ≈ 2.9 MiB)
 	previewImageWidth    = 640                    // the preview cell expands with the window; 320 would upscale
+	previewVeilAlpha     = 0x40                   // foreground veil tinting the stale frame while a fresh one extracts
 	thumbStripCount      = 10
 	thumbStripHeight     = 72 // matches the raised timelineMinHeight so cells do not upscale
 	thumbMaxWorkers      = 2
@@ -75,6 +77,13 @@ func (c *Controller) setTrimEnabled(enabled bool) {
 		return
 	}
 	c.trimEnabled = enabled
+	if !enabled {
+		// Disabling retires all pending preview work immediately: the
+		// launch guards would otherwise silently drop a pending request
+		// and leave the stale-frame indication stuck on. The frame cache
+		// and the thumbnail strip are untouched.
+		c.cancelPreviewWork()
+	}
 	c.setTrimControlsEnabled(enabled)
 	if enabled && c.media.Duration > 0 {
 		if !c.trimSelection.Active() {
@@ -147,6 +156,7 @@ func (c *Controller) resetTrimForNewInput() {
 	c.previewImage.Refresh()
 	c.previewTimeLabel.SetText("")
 	c.hoverTimeLabel.SetText("")
+	c.previews.displayedAt = nil
 	// The index is replaced before the status is cleared: the clear must
 	// not re-surface the old input's indexing failure through the
 	// setPreviewStatus guard, which would leave input A's diagnostic
@@ -575,6 +585,37 @@ func (c *Controller) ensureExtractor() *frames.Extractor {
 	return c.previews.extractor
 }
 
+// onFFmpegExecutableChanged reacts to a configured FFmpeg path change
+// (settings save and detection): it eagerly drops the old extractor and
+// its cached frames — results from the previous build must never
+// satisfy a cache hit — cancels pending preview work, and refreshes the
+// preview under the new executable while trimming stays enabled.
+// Recovery does not depend on the old extraction returning: a hung old
+// process cannot strand the pending indication. The re-request prefers
+// the position the user is actually waiting for (the newest pending
+// request) over the one currently displayed.
+func (c *Controller) onFFmpegExecutableChanged() {
+	if ext := c.previews.extractor; ext != nil && c.previews.extractorPath == c.config.FFmpeg.FFmpegPath {
+		return // already bound to the configured executable
+	}
+	pending := c.previews.pendingAt // captured before cancel clears it
+	shown := c.previews.displayedAt
+	c.cancelPreviewWork()
+	c.ensureExtractor() // path differs → rebuild + cache clear
+	if !c.trimEnabled || c.inputPath == "" || c.media.Duration <= 0 {
+		return
+	}
+	pos := c.trimTimeline.Playhead()
+	if shown != nil {
+		pos = *shown
+	}
+	if pending != nil {
+		pos = *pending // the awaited frame wins over the shown one
+	}
+	pos = min(max(pos, 0), c.media.Duration)
+	c.requestPreview(pos)
+}
+
 // requestPreview asks for the frame at an exact committed position
 // (keyboard steps, entries, Set In/Out, drag commits). Explicit
 // positions are never quantized.
@@ -587,22 +628,32 @@ func (c *Controller) requestPreview(at time.Duration) {
 		c.displayPreview(img, at)
 		return
 	}
+	c.previews.pendingAt = &at
+	c.setPreviewPending(true)
 	c.startPreviewTimer(&c.previews.previewTimer, previewDebounce, at)
 }
 
 // requestHover asks for the frame at a hovered position, quantized:
 // transient hover previews may approximate, committed positions never
-// do.
+// do. Requests for the frame that is already pending or in flight
+// coalesce — re-bumping the sequence per mouse-move would restart the
+// debounce and retire the in-flight extraction for that very frame,
+// postponing it indefinitely while the pointer stays in one bucket.
 func (c *Controller) requestHover(at time.Duration) {
 	if !c.trimEnabled || c.inputPath == "" || c.media.Duration <= 0 {
 		return
 	}
 	q := at / hoverQuantum * hoverQuantum
+	if c.previews.pendingAt != nil && *c.previews.pendingAt == q {
+		return
+	}
 	c.previews.seq++
 	if img, ok := c.previews.cache.Get(q); ok {
 		c.displayPreview(img, q)
 		return
 	}
+	c.previews.pendingAt = &q
+	c.setPreviewPending(true)
 	c.startPreviewTimer(&c.previews.hoverTimer, hoverDebounce, q)
 }
 
@@ -618,6 +669,8 @@ func (c *Controller) restoreCommittedPreview() {
 		c.displayPreview(img, at)
 		return
 	}
+	c.previews.pendingAt = &at
+	c.setPreviewPending(true)
 	c.startPreviewTimer(&c.previews.previewTimer, previewDebounce, at)
 }
 
@@ -652,16 +705,34 @@ func (c *Controller) launchPreview(at time.Duration, seq uint64) {
 	gen := c.inputGeneration
 	ext := c.ensureExtractor()
 	path := c.inputPath
+	fetch := c.previews.previewFetch
 	go func() {
-		frame, err := ext.Preview(ctx, path, at, previewImageWidth)
+		frame, err := fetch(ctx, ext, path, at, previewImageWidth)
 		c.dispatchUI(func() {
-			if c.inputGeneration != gen || c.ensureExtractor() != ext {
+			if c.inputGeneration != gen {
+				return // the new input's reset owns the display
+			}
+			if c.ensureExtractor() != ext {
+				// The configured executable changed after this request
+				// launched. onFFmpegExecutableChanged already handles
+				// that proactively; this re-request only covers a change
+				// that raced the old extraction's return — and only
+				// while this request is still the newest one.
+				if !c.trimEnabled || c.previews.seq != seq {
+					return
+				}
+				c.requestPreview(at)
 				return
 			}
 			if c.previews.seq != seq || !c.trimEnabled {
 				return
 			}
 			if err != nil {
+				// Nothing more is coming for this request; clearing the
+				// pending target also lets the same bucket re-request
+				// instead of coalescing a failure.
+				c.previews.pendingAt = nil
+				c.setPreviewPending(false)
 				c.setPreviewStatus("Preview unavailable: " + err.Error())
 				return
 			}
@@ -672,10 +743,47 @@ func (c *Controller) launchPreview(at time.Duration, seq uint64) {
 	}()
 }
 
+// displayPreview shows a frame and resolves the pending request state.
+// Every caller corresponds to the newest request (all call sites are
+// seq-current), so this is the single place that clears the pending
+// indication and target — covering cache hits in the request paths,
+// launchPreview's own cache branch, and asynchronous success alike.
 func (c *Controller) displayPreview(img image.Image, at time.Duration) {
+	c.setPreviewPending(false)
+	c.previews.pendingAt = nil
 	c.previewImage.Image = img
 	c.previewImage.Refresh()
 	c.previewTimeLabel.SetText(formatTimestamp(at))
+	c.previews.displayedAt = &at
+}
+
+// setPreviewPending toggles the frame-extraction cue: the stale frame
+// tints under a translucent veil, a spinner starts spinning over the
+// preview image's center, and the timeline's ghost hover marker turns
+// accent-colored.
+func (c *Controller) setPreviewPending(on bool) {
+	if c.previews.pendingPreview == on {
+		return
+	}
+	c.previews.pendingPreview = on
+	if on {
+		// Tint the stale frame with a translucent foreground veil.
+		// Fading the image itself (Translucency) blends it into the
+		// black letterbox behind it — invisible over dark footage —
+		// while a foreground veil reads on any content and theme.
+		c.previewVeil.FillColor = translucent(theme.Color(theme.ColorNameForeground), previewVeilAlpha)
+		c.previewVeil.Hidden = false
+		c.previewVeil.Refresh()
+		// Show starts the rotation; the animation only ever runs while
+		// the spinner is visible.
+		c.previewSpinner.Show()
+	} else {
+		c.previewVeil.Hidden = true
+		// Hide stops the rotation together with the widget.
+		c.previewSpinner.Hide()
+	}
+	c.previewImage.Refresh()
+	c.trimTimeline.SetPreviewPending(on)
 }
 
 // setTrimMessage updates the validation/entry-problem line. Empty text
@@ -1169,10 +1277,12 @@ func absInt(v int) int {
 
 // --- lifecycle ---
 
-// cancelTrimWork stops every trim-related timer and subprocess context.
-// Called on input change and before the application quits so no
-// extraction outlives the UI.
-func (c *Controller) cancelTrimWork() {
+// cancelPreviewWork stops the preview-specific async work: the debounce
+// timers and the in-flight extraction, clearing the pending indication.
+// It deliberately keeps the frame cache (disabling trimming or switching
+// executables must not discard already-extracted frames) and leaves the
+// thumbnail strip and frame index alone.
+func (c *Controller) cancelPreviewWork() {
 	if c.previews.previewTimer != nil {
 		c.previews.previewTimer.Stop()
 		c.previews.previewTimer = nil
@@ -1185,6 +1295,15 @@ func (c *Controller) cancelTrimWork() {
 		c.previews.previewCancel()
 		c.previews.previewCancel = nil
 	}
+	c.previews.pendingAt = nil
+	c.setPreviewPending(false)
+}
+
+// cancelTrimWork stops every trim-related timer and subprocess context.
+// Called on input change and before the application quits so no
+// extraction outlives the UI.
+func (c *Controller) cancelTrimWork() {
+	c.cancelPreviewWork()
 	if c.previews.stripCancel != nil {
 		c.previews.stripCancel()
 		c.previews.stripCancel = nil
@@ -1215,8 +1334,23 @@ type trimPreviews struct {
 	// ffprobe.FrameTimes so tests can intercept the fetch. The second
 	// value is the video stream's end (0 unknown) the walk stops at.
 	indexFetch func(ctx context.Context, executable, inputPath string, from, to time.Duration) ([]time.Duration, time.Duration, error)
+	// previewFetch extracts one preview frame; seam over
+	// Extractor.Preview so tests can intercept (and block on) the fetch.
+	previewFetch func(ctx context.Context, ext *frames.Extractor, path string, at time.Duration, maxWidth int) (frames.Frame, error)
 
-	seq          uint64 // newest request wins the display
+	seq uint64 // newest request wins the display
+
+	// pendingPreview mirrors the visual pending cue (dimmed stale frame,
+	// busy bar, accent ghost marker); pendingAt is the target of the
+	// newest request while it is pending or in flight — quantized for
+	// hover requests, exact for committed ones — doubling as the
+	// hover-coalescing key and as the position restored across FFmpeg
+	// changes. displayedAt is the timestamp currently shown. All three
+	// are nil/false once the newest request resolved.
+	pendingPreview bool
+	pendingAt      *time.Duration
+	displayedAt    *time.Duration
+
 	stripRunning bool
 }
 
@@ -1225,6 +1359,9 @@ func newTrimPreviews() trimPreviews {
 		cache:      frames.NewCache(previewCacheBytes, previewMaxEntryBytes),
 		index:      newFrameIndex(),
 		indexFetch: ffprobe.FrameTimes,
+		previewFetch: func(ctx context.Context, ext *frames.Extractor, path string, at time.Duration, maxWidth int) (frames.Frame, error) {
+			return ext.Preview(ctx, path, at, maxWidth)
+		},
 	}
 }
 

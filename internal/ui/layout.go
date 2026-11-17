@@ -90,9 +90,14 @@ func trimPreviewSection(c *Controller) fyne.CanvasObject {
 	// The VBox pins the chip to the top edge: box layouts stack from
 	// the top, so the chip keeps its own (label-sized) height at the
 	// top of the cell while the Stack stretches the image underneath.
+	// The tint veil sits directly over the image (under the chip), and
+	// the spinner floats over the image's center as further layers, so
+	// showing them never reflows the image.
 	return container.NewStack(
 		c.previewImage,
+		c.previewVeil,
 		container.NewVBox(chip),
+		container.NewCenter(c.previewSpinner),
 	)
 }
 

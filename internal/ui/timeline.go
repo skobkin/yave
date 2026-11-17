@@ -34,6 +34,7 @@ const (
 	handleHitHalfWidth = 6  // handle hit zones are full-height and 12px wide
 	handleBarWidth     = 4  // visible bars are narrower than their hit zones
 	playheadBarWidth   = 2
+	hoverMarkWidth     = 2 // ghost marker following the pointer while it previews
 )
 
 // timeline is the trim tab's scrubber: a thumbnail strip with a playhead
@@ -70,12 +71,13 @@ type timeline struct {
 	thumbs   []image.Image
 	dragSeg  int // segment index for tlIn/tlOut drags; -1 otherwise
 
-	focused   bool
-	enabled   bool
-	shiftHeld bool
-	ctrlHeld  bool
-	drag      tlDrag
-	hoverX    float32 // -1 when the pointer is outside the widget
+	focused      bool
+	enabled      bool
+	shiftHeld    bool
+	ctrlHeld     bool
+	drag         tlDrag
+	hoverX       float32 // -1 when the pointer is outside the widget
+	hoverPending bool    // the hovered frame's preview is still being extracted
 
 	// stepFrame resolves one frame-accurate step; it returns the new
 	// position and false while the frame index is loading or stepping
@@ -211,6 +213,17 @@ func (t *timeline) SetPlayhead(at time.Duration) {
 
 // Playhead returns the committed playhead position.
 func (t *timeline) Playhead() time.Duration { return t.playhead }
+
+// SetPreviewPending recolors the ghost hover marker: accent while the
+// hovered frame's preview is still being extracted, neutral once it
+// landed. Controller-driven; fires nothing.
+func (t *timeline) SetPreviewPending(pending bool) {
+	if t.hoverPending == pending {
+		return
+	}
+	t.hoverPending = pending
+	t.Refresh()
+}
 
 // SetThumbnails installs the strip's placeholder slots.
 func (t *timeline) SetThumbnails(thumbs []image.Image) {
@@ -709,6 +722,7 @@ type timelineRenderer struct {
 	dim        *canvas.Rectangle
 	fills      []*canvas.Rectangle
 	bars       []*canvas.Rectangle
+	hoverMark  *canvas.Rectangle
 	playhead   *canvas.Rectangle
 	focusRing  *canvas.Rectangle
 }
@@ -718,6 +732,7 @@ func (t *timeline) CreateRenderer() fyne.WidgetRenderer {
 		t:          t,
 		background: canvas.NewRectangle(color.NRGBA{R: 32, G: 32, B: 32, A: 255}),
 		dim:        canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 110}),
+		hoverMark:  canvas.NewRectangle(color.Transparent),
 		playhead:   canvas.NewRectangle(color.NRGBA{R: 255, G: 255, B: 255, A: 255}),
 		focusRing: &canvas.Rectangle{
 			StrokeColor: theme.Color(theme.ColorNamePrimary),
@@ -783,7 +798,7 @@ func (r *timelineRenderer) Objects() []fyne.CanvasObject {
 	for _, bar := range r.bars {
 		objects = append(objects, bar)
 	}
-	return append(objects, r.playhead, r.focusRing)
+	return append(objects, r.hoverMark, r.playhead, r.focusRing)
 }
 
 func (r *timelineRenderer) MinSize() fyne.Size {
@@ -837,6 +852,24 @@ func (r *timelineRenderer) Layout(size fyne.Size) {
 	playX := t.xAt(t.playhead)
 	r.playhead.Move(fyne.NewPos(playX-playheadBarWidth/2, 0))
 	r.playhead.Resize(fyne.NewSize(playheadBarWidth, size.Height))
+	// Ghost hover marker: follows the pointer while it is over the
+	// widget, accent-colored while the hovered frame's preview is still
+	// being extracted and neutral once it landed. It teaches that the
+	// preview tracks the pointer and marks the displayed frame as stale
+	// until the marker's color settles.
+	if t.hoverX >= 0 {
+		x := min(max(t.hoverX, 0), size.Width-hoverMarkWidth)
+		r.hoverMark.Move(fyne.NewPos(x, 0))
+		r.hoverMark.Resize(fyne.NewSize(hoverMarkWidth, size.Height))
+		if t.hoverPending {
+			r.hoverMark.FillColor = translucent(primary, 0x60)
+		} else {
+			r.hoverMark.FillColor = translucent(foreground, 0x60)
+		}
+		r.hoverMark.Hidden = false
+	} else {
+		r.hoverMark.Hidden = true
+	}
 	r.focusRing.Move(fyne.NewPos(0, 0))
 	r.focusRing.Resize(size)
 }

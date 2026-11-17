@@ -25,9 +25,16 @@ func (c *Controller) showSettings() {
 		if !ok {
 			return
 		}
+		prevFFmpeg := c.config.FFmpeg.FFmpegPath
 		c.config.FFmpeg.FFmpegPath = strings.TrimSpace(ffmpegPath.Text)
 		c.config.FFmpeg.FFprobePath = strings.TrimSpace(ffprobePath.Text)
 		c.config.Updates.CheckAutomatically = checkUpdates.Checked
+		if c.config.FFmpeg.FFmpegPath != prevFFmpeg {
+			// Invalidate previews immediately — do not wait for detect()
+			// to resolve the new path, or a hung old extraction could
+			// keep the pending indication stuck until it returns.
+			c.onFFmpegExecutableChanged()
+		}
 		c.saveConfig()
 		c.applyUpdateCheckSetting(checkUpdates.Checked)
 		c.detect()

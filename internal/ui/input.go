@@ -106,8 +106,15 @@ func (c *Controller) detect() {
 // for it to trip over (the A3 silent-revert bug).
 func (c *Controller) applyDetection(caps model.Capabilities) {
 	c.caps = caps
+	prevFFmpeg := c.config.FFmpeg.FFmpegPath
 	c.config.FFmpeg.FFmpegPath = caps.FFmpegPath
 	c.config.FFmpeg.FFprobePath = caps.FFprobePath
+	if c.config.FFmpeg.FFmpegPath != prevFFmpeg {
+		// detect() resolves the configured path (a bare "ffmpeg" becomes
+		// absolute) after the settings hook already ran; if resolution
+		// moved the path again, rebind the preview extractor under it.
+		c.onFFmpegExecutableChanged()
+	}
 	summary := fmt.Sprintf("%s\n%s\nHardware acceleration: %s\nHardware devices: %s",
 		caps.FFmpegVersion, caps.FFprobeVersion, strings.Join(caps.HWAccels, ", "), hardwareDevicesSummary(caps))
 	if devices := vaapiDevicesSummary(caps); devices != "" {

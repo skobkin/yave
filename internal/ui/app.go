@@ -103,6 +103,8 @@ type Controller struct {
 	previewTimeLabel *widget.Label // timestamp of the displayed preview frame
 	hoverTimeLabel   *widget.Label // hovered timestamp, shown while hovering
 	previewImage     *canvas.Image
+	previewVeil      *canvas.Rectangle   // foreground tint over the stale frame while extracting
+	previewSpinner   *spinner            // extraction-in-flight cue spinning over the preview's center
 	trimControls     []fyne.CanvasObject // disabled while trimming is off
 	// rateControlHint explains the selected rate-control mode (Auto
 	// and VBR semantics are not obvious). It is a plain label so mode
