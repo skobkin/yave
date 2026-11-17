@@ -77,6 +77,40 @@ func TestParseToleratesMissingAndMalformedOptionalFields(t *testing.T) {
 	}
 }
 
+// Regression: format.duration counts from the container's absolute
+// zero, so with a positive start_time it overshoots the playable span
+// (an 8s recording with start_time 10 reported 18.023s) — trim
+// validation accepted cuts past the video's actual end, which ffmpeg
+// cannot seek into and which produce an empty, unreadable output.
+// Duration is reported input-relative: a positive origin is
+// subtracted; zero and negative origins are already last-minus-first
+// and stay untouched.
+func TestParseNormalizesPositiveOriginDuration(t *testing.T) {
+	cases := []struct {
+		name            string
+		duration, start string
+		want            time.Duration
+	}{
+		{"positive origin shifted", "18.023000", "10.000000", 8*time.Second + 23*time.Millisecond},
+		{"zero origin unchanged", "61.250000", "0.000000", 61*time.Second + 250*time.Millisecond},
+		{"missing origin unchanged", "12.500000", "", 12*time.Second + 500*time.Millisecond},
+		{"negative origin unchanged", "8.000000", "-1.500000", 8 * time.Second},
+		{"duration not past origin", "5.000000", "10.000000", 5 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := []byte(`{"format": {"duration": "` + tc.duration + `", "start_time": "` + tc.start + `"}}`)
+			got, err := Parse(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Duration != tc.want {
+				t.Errorf("duration = %s, want %s", got.Duration, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseRejectsInvalidJSON(t *testing.T) {
 	_, err := Parse([]byte(`{"streams":`))
 	if err == nil || !strings.Contains(err.Error(), "decode ffprobe JSON") {

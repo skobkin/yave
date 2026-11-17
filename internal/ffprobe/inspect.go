@@ -21,6 +21,7 @@ type probeDocument struct {
 type probeFormat struct {
 	FormatName string            `json:"format_name"`
 	Duration   string            `json:"duration"`
+	StartTime  string            `json:"start_time"`
 	BitRate    string            `json:"bit_rate"`
 	Tags       map[string]string `json:"tags"`
 }
@@ -99,9 +100,22 @@ func Parse(data []byte) (model.MediaInfo, error) {
 		return model.MediaInfo{}, fmt.Errorf("decode ffprobe JSON: %w", err)
 	}
 
+	// ffprobe's format.duration sits on the container's absolute
+	// timestamp line: with a positive start_time (broadcast recordings
+	// with a PCR offset, -output_ts_offset sources) it counts from
+	// zero, while ffmpeg's input-side -ss and the normalized frame
+	// index measure from the first packet — an 8s file with start_time
+	// 10 reported 18.023s. Report the input-relative playable end so
+	// the timeline, trim validation, and the progress denominator all
+	// measure the same span. Zero and negative origins need no shift:
+	// the muxer duration is already last-minus-first there.
+	duration := parseDuration(document.Format.Duration)
+	if start := parseDuration(document.Format.StartTime); start > 0 && duration > start {
+		duration -= start
+	}
 	info := model.MediaInfo{
 		Format:       document.Format.FormatName,
-		Duration:     parseDuration(document.Format.Duration),
+		Duration:     duration,
 		Bitrate:      parseInt64(document.Format.BitRate),
 		ChapterCount: len(document.Chapters),
 	}
