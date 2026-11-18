@@ -406,6 +406,29 @@ func TestUnpublishableTargetRejectsNonRegularFiles(t *testing.T) {
 	}
 }
 
+// Regression (Codex review round 6): a dangling symlink target read as
+// absent through os.Stat — no overwrite prompt, the whole segment
+// encoded, publication failed with EEXIST. The link exists as a link:
+// it belongs in the overwrite prompt and the publication rename can
+// replace it, so the preflight must Lstat and treat symlinks as
+// publishable.
+func TestDanglingSymlinkTargetIsListedAndPublishable(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "movie_part01.mkv")
+	if err := os.Symlink(filepath.Join(dir, "gone-target"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	missing := filepath.Join(dir, "movie_part02.mkv")
+
+	if got := unpublishableTarget([]string{link, missing}); got != "" {
+		t.Fatalf("symlink target rejected: %q", got)
+	}
+	got := existingPaths([]string{link, missing})
+	if len(got) != 1 || got[0] != link {
+		t.Fatalf("existingPaths = %v, want the dangling link [%s]", got, link)
+	}
+}
+
 // --- plan/job shapes ---
 
 func TestPlanExportShapes(t *testing.T) {

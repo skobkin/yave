@@ -428,11 +428,15 @@ func exportTargetPaths(mode model.TrimExportMode, trim model.TrimSelection, base
 
 // existingPaths filters paths to those that currently exist, preserving
 // order — the set the overwrite dialog names and the only paths that
-// may later be published with replace semantics.
+// may later be published with replace semantics. Lstat, not Stat: a
+// dangling symlink exists as a link, belongs in the prompt, and is
+// replaceable by the publication rename; Stat would follow the missing
+// referent, hide the collision, and only fail at publication — after
+// the whole segment encoded.
 func existingPaths(paths []string) []string {
 	var existing []string
 	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
+		if _, err := os.Lstat(p); err == nil {
 			existing = append(existing, p)
 		}
 	}
@@ -444,10 +448,16 @@ func existingPaths(paths []string) []string {
 // os.Rename and os.Link both fail on such a path, so a separate-file
 // export would encode every part and then fail halfway through
 // publishing. Checked before the overwrite dialog and before any encode
-// starts. "" means every target is publishable.
+// starts. "" means every target is publishable. Symlinks count as
+// publishable — the publication rename replaces the link itself — so
+// Lstat is used: Stat would treat a dangling symlink as absent.
 func unpublishableTarget(paths []string) string {
 	for _, p := range paths {
-		if info, err := os.Stat(p); err == nil && !info.Mode().IsRegular() {
+		info, err := os.Lstat(p)
+		if err != nil {
+			continue // missing is fine: overwrite checks own the collision case
+		}
+		if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
 			return fmt.Sprintf(
 				"output path %s exists and is not a regular file; remove it or change the output template",
 				p)
