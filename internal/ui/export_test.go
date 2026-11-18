@@ -393,7 +393,7 @@ func TestUnpublishableTargetRejectsNonRegularFiles(t *testing.T) {
 	writeFile(t, regular, "x")
 	missing := filepath.Join(dir, "movie_part03.mkv")
 	directory := filepath.Join(dir, "movie_part02.mkv")
-	if err := os.Mkdir(directory, 0o755); err != nil {
+	if err := os.Mkdir(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
 

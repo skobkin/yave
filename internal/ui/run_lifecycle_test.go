@@ -262,7 +262,7 @@ func TestQuitAwaitsRunGoroutineCleanup(t *testing.T) {
 	}
 
 	staging := filepath.Join(t.TempDir(), "yave-export-X")
-	if err := os.Mkdir(staging, 0o755); err != nil {
+	if err := os.Mkdir(staging, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	runDone := make(chan struct{})
