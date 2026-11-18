@@ -125,6 +125,22 @@ type Capabilities struct {
 	// could not be probed appear with Err set — the node inventory
 	// stays complete either way.
 	VAAPIDevices []vaapi.DeviceInfo
+	// GPUAdapters lists the display adapters from a complete system
+	// enumeration (DXGI on Windows), in enumeration order. Index is the
+	// adapter ordinal ffmpeg accepts as a device string on Windows —
+	// both the VAAPI win32 display and the QSV d3d11va child device
+	// take atoi(device) against this order. Nil means no authoritative
+	// inventory exists on this platform or the enumeration did not
+	// complete: a partial list is never published, because consumers
+	// use it to decide that a saved device has vanished.
+	GPUAdapters []GPUAdapter
+}
+
+// GPUAdapter is one entry of Capabilities.GPUAdapters.
+type GPUAdapter struct {
+	Index    int
+	Name     string
+	VendorID uint32 // PCI vendor ID: 0x10DE NVIDIA, 0x8086 Intel, 0x1002/0x1022 AMD
 }
 
 type MediaInfo struct {

@@ -459,6 +459,15 @@ func validateVAAPIDevice(result *Result, video model.VideoSettings, capabilities
 			"no detected VAAPI device can encode %s profile %s: %s. Pick a VAAPI device that offers encoding, switch to a software encoder, or install a driver with VA-API encoding support",
 			encoderName, DisplayProfile(video.Profile), strings.Join(descriptions, "; "))
 	case vaapi.DeviceNoNodes:
+		if len(capabilities.GPUAdapters) > 0 {
+			// Windows: no render nodes are probed, but a complete DXGI
+			// adapter enumeration exists. Auto resolves there to the
+			// first adapter ordinal (mirroring the UI's resolution) and
+			// no libva probe exists to consult, so validation fails
+			// open — the runtime error is loud if the adapter cannot
+			// serve the encode.
+			return
+		}
 		result.error("profile.video.vaapi_device",
 			"no VAAPI render device was detected; set a VAAPI device explicitly or use another video encoder")
 	}

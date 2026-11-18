@@ -405,3 +405,33 @@ func TestQSVValidateCBRMismatchedMaxrate(t *testing.T) {
 		t.Errorf("expected a maxrate issue, got %#v", issues)
 	}
 }
+
+// TestQSVDeviceInitSpecPerGoos pins the -init_hw_device specification
+// per platform: Linux passes the DRM render node as the d3d11-style
+// child, Windows pins child_device_type=d3d11va explicitly because
+// old libmfx builds default the child to DXVA2, whose device string
+// is not a DXGI adapter ordinal. An empty device emits no child at
+// all.
+func TestQSVDeviceInitSpecPerGoos(t *testing.T) {
+	tests := []struct {
+		name   string
+		goos   string
+		device string
+		want   string
+	}{
+		{name: "empty device", goos: "linux", device: "", want: "qsv=qsv"},
+		{name: "linux node", goos: "linux", device: "/dev/dri/renderD129",
+			want: "qsv=qsv:hw,child_device=/dev/dri/renderD129"},
+		{name: "windows adapter ordinal", goos: "windows", device: "1",
+			want: "qsv=qsv:hw,child_device=1,child_device_type=d3d11va"},
+		{name: "windows trims whitespace", goos: "windows", device: " 1 ",
+			want: "qsv=qsv:hw,child_device=1,child_device_type=d3d11va"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := qsvDeviceInitSpec(tt.goos, tt.device); got != tt.want {
+				t.Errorf("qsvDeviceInitSpec(%q, %q) = %q, want %q", tt.goos, tt.device, got, tt.want)
+			}
+		})
+	}
+}

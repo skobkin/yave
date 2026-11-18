@@ -2,6 +2,7 @@ package encoder
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -121,6 +122,31 @@ func (e *qsvEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (
 // -qp / -b:v / -maxrate flags. CBR forces -maxrate = -b:v when the
 // user did not specify a maxrate, matching the ffmpeg requirement
 // that CBR targets must equal the maximum rate.
+// qsvDeviceInitSpec builds the -init_hw_device specification for the
+// configured QSV device. goos is runtime.GOOS at the call site and a
+// parameter so Linux tests can pin the Windows form.
+//
+// An explicit device string is passed as a d3d11va child on Windows
+// with the child type pinned: ffmpeg's hwcontext_qsv defaults the
+// child to D3D11VA only for oneVPL builds — old libmfx builds default
+// to DXVA2, whose device string is not a DXGI adapter ordinal. On
+// Linux the child is the DRM render node path; on Windows it is the
+// DXGI adapter ordinal (d3d11va parses it with atoi against
+// IDXGIFactory::EnumAdapters order — the same ordinal space the
+// Capabilities.GPUAdapters inventory reports).
+func qsvDeviceInitSpec(goos, device string) string {
+	const deviceName = "qsv"
+	device = strings.TrimSpace(device)
+	if device == "" {
+		return "qsv=" + deviceName
+	}
+	spec := "qsv=" + deviceName + ":hw,child_device=" + device
+	if goos == "windows" {
+		spec += ",child_device_type=d3d11va"
+	}
+	return spec
+}
+
 func (e *qsvEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) {
 	if v.Encoder == "" {
 		return BuildResult{}, fmt.Errorf("video encoder is empty")
@@ -133,12 +159,7 @@ func (e *qsvEncoder) BuildVideoArgs(v model.VideoSettings) (BuildResult, error) 
 	// the device label, while the ":device,key=val" part picks the
 	// underlying child (render node here).
 	const deviceName = "qsv"
-	var initSpec string
-	if strings.TrimSpace(v.QSVDevice) == "" {
-		initSpec = "qsv=" + deviceName
-	} else {
-		initSpec = "qsv=" + deviceName + ":hw,child_device=" + v.QSVDevice
-	}
+	initSpec := qsvDeviceInitSpec(runtime.GOOS, v.QSVDevice)
 	res.PreInputArgs = []string{"-init_hw_device", initSpec, "-filter_hw_device", deviceName}
 	args := []string{"-c:v", e.name}
 	// Preset and profile are emitted in the canonical curated spelling

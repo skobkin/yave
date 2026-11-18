@@ -74,9 +74,20 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe, probeD
 	if runtime.GOOS == "linux" && len(hw.renderNodes) > 0 {
 		vaapiDevices = probeDevices(ctx, hw.renderNodes)
 	}
+	// Platform adapter enumeration (DXGI on Windows) feeds the Windows
+	// device dropdowns and, when the node probe found no /dev entries,
+	// the NVIDIA GPU count there. Only a complete enumeration is
+	// published — see model.Capabilities.GPUAdapters.
+	adapters, adaptersComplete := osGPUAdapterProbe()
+	nvencGPUs := hw.nvencGPUs
+	if nvencGPUs == 0 && adaptersComplete {
+		if n := countVendorAdapters(adapters, VendorNVIDIA); n > 0 {
+			nvencGPUs = n
+		}
+	}
 	encoders := filterUnavailableHWEncoders(ParseEncoders(encodersOutput), hw)
 	narrowProfilesToBuild(ctx, ffmpegPath, encoders)
-	return model.Capabilities{
+	caps := model.Capabilities{
 		FFmpegPath:     ffmpegPath,
 		FFprobePath:    ffprobePath,
 		FFmpegVersion:  ParseVersion(ffmpegVersion),
@@ -87,10 +98,14 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe, probeD
 		HWVAAPIAvailable: hw.vaapi,
 		HWQSVAvailable:   hw.qsv,
 		HWNVENCAvailable: hw.nvenc,
-		NVENCGPUCount:    hw.nvencGPUs,
+		NVENCGPUCount:    nvencGPUs,
 		RenderNodes:      hw.renderNodes,
 		VAAPIDevices:     vaapiDevices,
-	}, nil
+	}
+	if adaptersComplete {
+		caps.GPUAdapters = adapters
+	}
+	return caps, nil
 }
 
 // narrowProfilesToBuild filters each discovered video encoder's
