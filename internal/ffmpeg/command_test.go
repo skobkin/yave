@@ -745,7 +745,7 @@ func TestJoinAudioArgs(t *testing.T) {
 			name:     "copied first-stream flac re-encodes with defaults",
 			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy},
 			media:    media("flac"),
-			wantArgs: []string{"-c:a", "flac"},
+			wantArgs: []string{"-c:a:0", "flac"},
 		},
 		{
 			name:     "copied aac keeps copy",
@@ -754,10 +754,22 @@ func TestJoinAudioArgs(t *testing.T) {
 			wantArgs: nil,
 		},
 		{
-			name:     "copy all streams checks every stream for flac",
+			name:     "copy all streams targets only the flac stream",
 			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy, CopyAllStreams: true},
 			media:    media("aac", "flac"),
-			wantArgs: []string{"-c:a", "flac"},
+			wantArgs: []string{"-c:a:1", "flac"},
+		},
+		{
+			name:     "copy all streams with flac first leaves aac copied",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy, CopyAllStreams: true},
+			media:    media("flac", "aac"),
+			wantArgs: []string{"-c:a:0", "flac"},
+		},
+		{
+			name:     "copy all streams with two flac streams targets both",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy, CopyAllStreams: true},
+			media:    media("flac", "aac", "flac"),
+			wantArgs: []string{"-c:a:0", "flac", "-c:a:2", "flac"},
 		},
 		{
 			name:     "single-stream copy ignores a second flac stream",

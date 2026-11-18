@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -403,17 +404,21 @@ func JoinAudioArgs(p model.Profile, media model.MediaInfo) ([]string, error) {
 	// Copy mode: the intermediates carry the source's codec. Mirror the
 	// stream selection the profile maps (validation's selectedAudioCodecs
 	// applies the same CopyAllStreams split), so the decision covers
-	// exactly the streams the join publishes.
+	// exactly the streams the join publishes. Only the FLAC streams
+	// re-encode, via per-stream specifiers: an unqualified -c:a flac
+	// would override the blanket copy for every audio track and
+	// silently change an unaffected AAC track's codec.
 	streams := media.AudioStreams
 	if !p.Audio.CopyAllStreams && len(streams) > 1 {
 		streams = streams[:1]
 	}
-	for _, stream := range streams {
+	var args []string
+	for i, stream := range streams {
 		if strings.EqualFold(strings.TrimSpace(stream.Codec), "flac") {
-			return []string{"-c:a", "flac"}, nil
+			args = append(args, "-c:a:"+strconv.Itoa(i), "flac")
 		}
 	}
-	return nil, nil
+	return args, nil
 }
 
 // WriteConcatList writes the concat demuxer's list file: one

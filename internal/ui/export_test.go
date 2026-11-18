@@ -560,7 +560,7 @@ func TestPlanExportShapes(t *testing.T) {
 			Duration:     30 * time.Second,
 			AudioStreams: []model.AudioStream{{Codec: "flac"}},
 		}
-		if joined := concatArgs(copied, flacMedia); !strings.Contains(joined, "-c copy -c:a flac") || strings.Contains(joined, "-compression_level") {
+		if joined := concatArgs(copied, flacMedia); !strings.Contains(joined, "-c copy -c:a:0 flac") || strings.Contains(joined, "-compression_level") {
 			t.Errorf("copied FLAC source must re-encode with encoder defaults: %s", joined)
 		}
 
