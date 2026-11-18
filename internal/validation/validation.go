@@ -108,9 +108,10 @@ func validateProfile(profile model.Profile, capabilities model.Capabilities, med
 	}
 
 	validateVideo(&result, profile.Video, videoEncoder)
-	validateVAAPIDevice(&result, profile.Video, capabilities, videoEncoder)
+	validateVAAPIDevice(&result, profile.Video, capabilities, videoEncoder, media)
 	validateBuildProfile(&result, profile.Video, videoEncoder, capabilities)
 	validateProfileBitDepth(&result, profile.Video, videoEncoder, media)
+	validateChainBitDepth(&result, profile.Video, videoEncoder, media)
 	validateAudio(&result, profile.Audio, capabilities)
 	validateSubtitles(&result, profile.Subtitles)
 
@@ -240,9 +241,9 @@ func validateBuildProfile(result *Result, video model.VideoSettings, encoderName
 // turns a working conversion into a hard x264/x265 failure ("main
 // profile doesn't support a bit depth of 10") that an empty profile —
 // which lets the encoder auto-select — would not have. Only
-// libx264/libx265 curate depth-constrained profiles: the hardware
-// chains convert to nv12 and offer only chain-compatible values, and
-// the AV1/VP9 Main profiles cover every depth. A warning, not an
+// libx264/libx265 curate depth-constrained profiles; the hardware
+// families never reach this check — their chains force a pixel format
+// and are covered by validateChainBitDepth instead. A warning, not an
 // error: the pixel-format name heuristic can mis-parse exotic names,
 // and the encoder's own error is loud.
 func validateProfileBitDepth(result *Result, video model.VideoSettings, encoderName string, media *model.MediaInfo) {
@@ -254,11 +255,80 @@ func validateProfileBitDepth(result *Result, video model.VideoSettings, encoderN
 	if !ok {
 		return
 	}
-	if depth := pixelFormatBitDepth(stream.PixelFormat); depth > maxDepth {
+	if depth := encoder.PixelFormatBitDepth(stream.PixelFormat); depth > maxDepth {
 		result.warning("profile.video.profile",
 			"%s profile %q does not support %d-bit sources; clear the profile to let %s auto-select a compatible one",
 			encoderName, video.Profile, depth, encoderName)
 	}
+}
+
+// tenBitProfileValue reports the curated -profile:v value that switches
+// the encoder to the 10-bit chain (encoder.TenBitChain), ok false when
+// the family has no such value (h264 everywhere; av1's single Main
+// value covers both depths through the same VAProfile, but its chain
+// still follows the profile — an explicit "main" rides the 8-bit chain
+// the same as the hardware families).
+func tenBitProfileValue(encoderName string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(encoderName)) {
+	case "hevc_vaapi", "hevc_qsv", "hevc_nvenc":
+		return "main10", true
+	case "vp9_vaapi":
+		return "2", true
+	case "vp9_qsv":
+		return "profile2", true
+	}
+	return "", false
+}
+
+// validateChainBitDepth warns when a hardware encode would downconvert
+// a deeper source. The hardware chains force a pixel format — the
+// family's 8-bit format unless encoder.TenBitChain selects the p010
+// upload — so the output depth is the chain's, not the source's. The
+// chain depth comes from that same shared decision (10 when the chain
+// is 10-bit, else 8); a 12-bit source through even the p010 chain
+// warns, because 10-bit is the deepest surface the chains serve.
+//
+// Software encoders are untouched: their filters preserve source
+// depth, and their pinned-profile limits are validateProfileBitDepth's
+// scope. Stream copy is exempt (no re-encode, no chain). A warning,
+// not an error — unlike the software case the conversion still
+// succeeds; it just loses depth.
+func validateChainBitDepth(result *Result, video model.VideoSettings, encoderName string, media *model.MediaInfo) {
+	if media == nil || encoderName == "copy" {
+		return
+	}
+	raw, ok := encoder.DefaultRegistry().Get(strings.ToLower(strings.TrimSpace(encoderName)))
+	if !ok || raw.Kind() != encoder.KindHardware {
+		return
+	}
+	stream, ok := media.PrimaryVideo()
+	if !ok {
+		return
+	}
+	depth := encoder.PixelFormatBitDepth(stream.PixelFormat)
+	var m = *media
+	chainDepth := 8
+	if encoder.TenBitChain(encoderName, video.Profile, m) {
+		chainDepth = 10
+	}
+	if depth <= chainDepth {
+		return
+	}
+	if value, has := tenBitProfileValue(encoderName); has && chainDepth == 8 {
+		result.warning("profile.video.profile",
+			"the %s chain encodes 8-bit output for this profile; the %d-bit source will be downconverted — pick the 10-bit profile value (%q) to keep 10-bit output",
+			encoderName, depth, value)
+		return
+	}
+	if chainDepth == 10 {
+		result.warning("profile.video.profile",
+			"the %s chain encodes at most 10-bit output; the %d-bit source will be downconverted",
+			encoderName, depth)
+		return
+	}
+	result.warning("profile.video.profile",
+		"the %s chain offers no 10-bit profile; the %d-bit source will be downconverted to 8-bit output",
+		encoderName, depth)
 }
 
 // profileMaxBitDepth reports the highest source bit depth the given
@@ -287,25 +357,9 @@ func profileMaxBitDepth(encoderName, profile string) int {
 	return 0
 }
 
-// pixelFormatBitDepth reads the bit depth out of an ffprobe pixel
-// format name (yuv420p10le → 10, yuv420p → 8). Unrecognized names
-// return 8, which disables the warning rather than fabricating one.
-func pixelFormatBitDepth(format string) int {
-	f := strings.ToLower(strings.TrimSpace(format))
-	switch {
-	case strings.Contains(f, "16le"), strings.Contains(f, "16be"):
-		return 16
-	case strings.Contains(f, "14le"), strings.Contains(f, "14be"):
-		return 14
-	case strings.Contains(f, "12le"), strings.Contains(f, "12be"):
-		return 12
-	case strings.Contains(f, "10le"), strings.Contains(f, "10be"):
-		return 10
-	case strings.Contains(f, "9le"), strings.Contains(f, "9be"):
-		return 9
-	}
-	return 8
-}
+// pixelFormatBitDepth moved to encoder.PixelFormatBitDepth — the chain
+// decisions that consume it live there (validation imports encoder,
+// not the other way around).
 
 // validateVideoForEncoder dispatches per-encoder checks via the
 // encoder.VideoEncoder interface. It preserves the field names and
@@ -418,8 +472,14 @@ func foldEncoderIssues(result *Result, issues []encoder.Issue) {
 // manual device that the probe says cannot encode the selected codec
 // and profile is a warning, not an error: the pick is explicit and the
 // runtime error is loud, so blocking Start would be hostile.
-func validateVAAPIDevice(result *Result, video model.VideoSettings, capabilities model.Capabilities, encoderName string) {
-	required, ok := encoder.RequiredVAProfiles(encoderName, video.Profile)
+func validateVAAPIDevice(result *Result, video model.VideoSettings, capabilities model.Capabilities, encoderName string, media *model.MediaInfo) {
+	// A nil media pointer resolves through the 8-bit chain, matching
+	// the source-free behavior of every other depth consumer.
+	var m model.MediaInfo
+	if media != nil {
+		m = *media
+	}
+	required, ok := encoder.RequiredVAProfiles(encoderName, video.Profile, m)
 	if !ok || len(required) == 0 {
 		// Non-VAAPI encoders and unknown -profile:v values (already
 		// reported by the curated-membership check) have no device

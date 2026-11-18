@@ -102,11 +102,12 @@ func TestValidateRejectsProfilesOutsideDetectedBuild(t *testing.T) {
 }
 
 // TestValidateWarnsOnProfileBitDepthMismatch pins the source-aware
-// profile warning: the software chains pass the source pixel format
-// through, so an 8-bit-only profile on a 10-bit source guarantees a
-// conversion failure the "(default)" selection would not have.
-// Hardware chains are exempt — their lists are nv12-compatible — and
-// an empty profile never warns.
+// profile warning for the SOFTWARE chains: they pass the source pixel
+// format through, so an 8-bit-only profile on a 10-bit source
+// guarantees a conversion failure the "(default)" selection would not
+// have. The hardware families are covered separately by
+// TestValidateWarnsOnHardwareChainDepthLoss — their output depth is
+// the chain's, not the profile's.
 func TestValidateWarnsOnProfileBitDepthMismatch(t *testing.T) {
 	tenBit := validMedia()
 	tenBit.VideoStreams[0].PixelFormat = "yuv420p10le"
@@ -158,8 +159,111 @@ func TestValidateWarnsOnProfileBitDepthMismatch(t *testing.T) {
 	vaapi.Video.QP = 26
 	vaapi.Video.VAAPIDevice = "/dev/dri/renderD128"
 	vaapi.Video.Profile = "main"
-	if result := validation.ValidateProfile(vaapi, caps, &tenBit); len(result.Warnings) > 0 {
-		t.Errorf("hardware chain profiles must not trigger the depth warning: %#v", result.Warnings)
+	// Hardware chains do not hit the software check above — their
+	// output depth is the chain's, so a 10-bit source through an
+	// explicit 8-bit profile warns via the chain-depth check instead
+	// (the conversion succeeds; the depth loss is the point).
+	if result := validation.ValidateProfile(vaapi, caps, &tenBit); !result.Valid() {
+		t.Fatalf("profile must stay valid (warning, not error): %#v", result.Errors)
+	} else {
+		assertWarningContains(t, result, "profile.video.profile", "downconverted")
+	}
+}
+
+// TestValidateWarnsOnHardwareChainDepthLoss pins the chain-depth
+// warning: a hardware encode warns when the source is deeper than what
+// the selected chain serves (8-bit unless the 10-bit chain runs). The
+// message adapts — a 10-bit profile value is suggested where one
+// exists, the no-10-bit-profile wording is used for h264/av1, and the
+// 10-bit ceiling is named for >10-bit sources. Empty profiles on the
+// E3-enabled family stay silent; software and copy are untouched.
+func TestValidateWarnsOnHardwareChainDepthLoss(t *testing.T) {
+	tenBit := validMedia()
+	tenBit.VideoStreams[0].PixelFormat = "yuv420p10le"
+	twelveBit := validMedia()
+	twelveBit.VideoStreams[0].PixelFormat = "yuv420p12le"
+	eightBit := validMedia()
+	eightBit.VideoStreams[0].PixelFormat = "yuv420p"
+
+	caps := capabilities()
+	caps.Encoders["hevc_vaapi"] = model.Encoder{Name: "hevc_vaapi"}
+	caps.Encoders["hevc_qsv"] = model.Encoder{Name: "hevc_qsv"}
+	caps.Encoders["hevc_nvenc"] = model.Encoder{Name: "hevc_nvenc"}
+	caps.Encoders["h264_vaapi"] = model.Encoder{Name: "h264_vaapi"}
+	caps.Encoders["av1_vaapi"] = model.Encoder{Name: "av1_vaapi"}
+	caps.Encoders["vp9_vaapi"] = model.Encoder{Name: "vp9_vaapi"}
+	caps.Encoders["vp9_qsv"] = model.Encoder{Name: "vp9_qsv"}
+
+	hw := func(encoder, profile string) model.Profile {
+		p := validProfile()
+		p.Video.Encoder = encoder
+		p.Video.Profile = profile
+		switch {
+		case strings.HasSuffix(encoder, "_vaapi"):
+			p.Video.RateControl = "CQP"
+			p.Video.QP = 26
+			p.Video.VAAPIDevice = "/dev/dri/renderD128"
+		case strings.HasSuffix(encoder, "_nvenc"):
+			p.Video.RateControl = "CQP"
+			p.Video.QP = 26
+		case strings.HasSuffix(encoder, "_qsv"):
+			p.Video.RateControl = "CQP"
+			p.Video.QP = 26
+		}
+		return p
+	}
+
+	tests := []struct {
+		name      string
+		encoder   string
+		profile   string
+		media     *model.MediaInfo
+		wantWarn  string
+		wantQuiet bool
+	}{
+		{"nvenc main + 10-bit suggests main10", "hevc_nvenc", "main", &tenBit,
+			"pick the 10-bit profile value (\"main10\")", false},
+		{"vaapi main + 10-bit suggests main10", "hevc_vaapi", "main", &tenBit,
+			"pick the 10-bit profile value (\"main10\")", false},
+		{"qsv main + 10-bit suggests main10", "hevc_qsv", "main", &tenBit,
+			"pick the 10-bit profile value (\"main10\")", false},
+		{"nvenc main10 + 10-bit is silent", "hevc_nvenc", "main10", &tenBit, "", true},
+		{"vaapi main10 + 10-bit is silent", "hevc_vaapi", "main10", &tenBit, "", true},
+		{"vaapi auto + 10-bit is silent (chain follows the source)", "hevc_vaapi", "", &tenBit, "", true},
+		{"qsv auto + 10-bit warns (explicit-only chain)", "hevc_qsv", "", &tenBit,
+			"pick the 10-bit profile value (\"main10\")", false},
+		{"h264 has no 10-bit value to suggest", "h264_vaapi", "main", &tenBit,
+			"offers no 10-bit profile", false},
+		{"av1 main + 10-bit warns (explicit main is the 8-bit chain)", "av1_vaapi", "main", &tenBit,
+			"offers no 10-bit profile", false},
+		{"vp9_vaapi 0 + 10-bit suggests 2", "vp9_vaapi", "0", &tenBit,
+			"pick the 10-bit profile value (\"2\")", false},
+		{"vp9_vaapi 2 + 10-bit is silent", "vp9_vaapi", "2", &tenBit, "", true},
+		{"vp9_qsv profile0 + 10-bit suggests profile2", "vp9_qsv", "profile0", &tenBit,
+			"pick the 10-bit profile value (\"profile2\")", false},
+		{"12-bit through the p010 chain names the ceiling", "hevc_vaapi", "main10", &twelveBit,
+			"encodes at most 10-bit output", false},
+		{"12-bit through the 8-bit chain keeps the downconvert wording", "hevc_nvenc", "main", &twelveBit,
+			"pick the 10-bit profile value (\"main10\")", false},
+		{"8-bit source never warns", "hevc_nvenc", "main", &eightBit, "", true},
+		{"copy is exempt", "copy", "", &tenBit, "", true},
+		{"software auto stays silent", "libx265", "", &tenBit, "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := validation.ValidateProfile(hw(tt.encoder, tt.profile), caps, tt.media)
+			if !result.Valid() {
+				t.Fatalf("profile must stay valid (warning, not error): %#v", result.Errors)
+			}
+			if tt.wantQuiet {
+				if len(result.Warnings) > 0 {
+					t.Errorf("expected no warnings, got: %#v", result.Warnings)
+				}
+				return
+			}
+			assertWarningContains(t, result, "profile.video.profile", tt.wantWarn)
+		})
 	}
 }
 
@@ -898,8 +1002,18 @@ func TestValidateVAAPIDevice(t *testing.T) {
 			caps:       vaapiDeviceFixture,
 			encoder:    "hevc_vaapi",
 			device:     "",
-			profile:    "main10",
+			profile:    "main444",
 			wantNoFlag: true,
+		},
+		{
+			name: "main10 needs a Main10-capable device",
+			caps: vaapiDeviceFixture,
+			// The fixture's radeonsi device encodes 8-bit profiles only,
+			// so the 10-bit requirement finds nothing compatible.
+			encoder: "hevc_vaapi",
+			device:  "",
+			profile: "main10",
+			wantErr: "no detected VAAPI device can encode hevc_vaapi profile \"main10\"",
 		},
 	}
 
