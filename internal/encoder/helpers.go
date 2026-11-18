@@ -117,6 +117,91 @@ func canonicalCurated(list []string, value string) string {
 	return trimmed
 }
 
+// PixelFormatBitDepth reads the bit depth out of an ffprobe pixel
+// format name (yuv420p10le → 10, yuv420p → 8). Unrecognized names
+// return 8, which disables depth warnings rather than fabricating one.
+// Lives in encoder — next to the chain decisions that consume it —
+// because validation imports encoder, not the other way around.
+func PixelFormatBitDepth(format string) int {
+	f := strings.ToLower(strings.TrimSpace(format))
+	switch {
+	case strings.Contains(f, "16le"), strings.Contains(f, "16be"):
+		return 16
+	case strings.Contains(f, "14le"), strings.Contains(f, "14be"):
+		return 14
+	case strings.Contains(f, "12le"), strings.Contains(f, "12be"):
+		return 12
+	case strings.Contains(f, "10le"), strings.Contains(f, "10be"):
+		return 10
+	case strings.Contains(f, "9le"), strings.Contains(f, "9be"):
+		return 9
+	}
+	return 8
+}
+
+// sourceTenBit reports whether the source's primary video stream is
+// 10-bit or deeper — the depths the p010 upload chain serves. A source
+// without probe metadata resolves to 8-bit, failing open to the
+// historical 8-bit chains rather than guessing a 10-bit one.
+func sourceTenBit(media model.MediaInfo) bool {
+	stream, ok := media.PrimaryVideo()
+	if !ok {
+		return false
+	}
+	return PixelFormatBitDepth(stream.PixelFormat) >= 10
+}
+
+// TenBitChain is the ONE shared decision on whether the hardware chain
+// for the given encoder and -profile:v value uploads p010 (10-bit)
+// instead of the family's 8-bit format. Every depth consumer — the
+// VideoFilter chains, the VAAPI device requirements, the validation
+// warnings, the UI hints — resolves through it, so filters, device
+// picking, validation, and hints cannot disagree about the output
+// depth.
+//
+// Explicit values: hevc main10 (all three hardware families) and the
+// 10-bit VP9 profiles (vp9_vaapi "2", vp9_qsv "profile2"). Matching is
+// case- and whitespace-tolerant like inCuratedList, because validation
+// accepts the trimmed case-insensitive form while the builders emit
+// canonicalCurated's spelling — the chain must agree with the value
+// that will actually reach ffmpeg.
+//
+// The source-derived rule is deliberately narrow (empirically gated —
+// ffmpeg n9.0.2 on Renoir, encode + ffprobe verified): only hevc_vaapi
+// with an empty profile switches on a 10-bit source, because the VAAPI
+// encoder selects the profile from the surface format when -profile:v
+// is unset and picks Main 10 for a p010 surface. The other families
+// keep the 8-bit chain for an empty profile: NVENC/QSV 10-bit is
+// explicit-only by design, and nothing was verified for a
+// source-derived p010 there.
+//
+// h264 (8-bit only in every family), av1 (Main covers 8- and 10-bit
+// through the same VAProfile — there is no separate 10-bit value to
+// curate and the chain format follows the curated values), and copy
+// never take the 10-bit chain.
+func TenBitChain(encoderName, profile string, media model.MediaInfo) bool {
+	name := strings.ToLower(strings.TrimSpace(encoderName))
+	p := strings.ToLower(strings.TrimSpace(profile))
+	switch name {
+	case "hevc_vaapi", "hevc_qsv", "hevc_nvenc":
+		if p == "main10" {
+			return true
+		}
+		if p == "" && name == "hevc_vaapi" {
+			return sourceTenBit(media)
+		}
+	case "vp9_vaapi":
+		if p == "2" {
+			return true
+		}
+	case "vp9_qsv":
+		if p == "profile2" {
+			return true
+		}
+	}
+	return false
+}
+
 // profileIssues returns the shared -profile:v findings used by every
 // video encoder family: encoders that do not support the flag reject
 // any non-empty profile, and encoders with a curated list reject

@@ -74,18 +74,27 @@ func (e *nvencEncoder) RateControlModes() []RateControl {
 }
 func (e *nvencEncoder) DefaultRateControl() RateControl { return RCCQP }
 
-// VideoFilter emits the modern NVENC hw upload chain. The
-// format=yuv420p step ensures the source is in 8-bit 4:2:0 before
-// nv12 conversion; not all sources arrive as yuv420p.
+// VideoFilter emits the modern NVENC hw upload chain. For the 8-bit
+// chain the format=yuv420p step ensures the source is in 8-bit 4:2:0
+// before nv12 conversion; not all sources arrive as yuv420p. A
+// TenBitChain replaces both steps with a single p010le upload — NVENC
+// accepts P010 surfaces directly, and the scale_cuda step preserves
+// the surface format (verified on a GTX 1660 Ti: a p010 chain through
+// a real resize probes back as Main 10 / yuv420p10le).
 //
 //	format=yuv420p,format=nv12,hwupload_cuda[,scale_cuda=w=W:h=H[:opts]]
+//	format=p010le,hwupload_cuda[,...]  (10-bit chain)
 func (e *nvencEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (string, error) {
 	filters, err := appendFrameRateFilter(v)
 	if err != nil {
 		return "", err
 	}
 	width, height, scale := targetDimensions(v, media)
-	filters = append(filters, "format=yuv420p", "format=nv12", "hwupload_cuda")
+	if TenBitChain(e.name, v.Profile, media) {
+		filters = append(filters, "format=p010le", "hwupload_cuda")
+	} else {
+		filters = append(filters, "format=yuv420p", "format=nv12", "hwupload_cuda")
+	}
 	if scale {
 		// scale_cuda does not accept force_original_aspect_ratio or
 		// force_divisible_by (those are software-scale options).
@@ -241,16 +250,17 @@ func nvencVideoEncoders() []Encoder {
 			supportsProfile: true,
 			// "mv" (motion-estimation-only MV between two streams) is
 			// deliberately not curated: it is not useful for yave's
-			// single-output conversions. main10 is excluded for output
-			// correctness, not because it fails: NVENC has no
-			// profile↔surface-format table (that check is VAAPI-only,
-			// see vaapiVideoEncoders), so the value encodes — but it
-			// signals Main 10 over 8-bit content (verified on a
-			// GTX 1660 Ti: the output probes as profile "Main 10",
-			// pix_fmt yuv420p). Anyone picking main10 wants 10-bit
-			// output; a real 10-bit chain is tracked in the issue
-			// tracker.
-			profiles:   []string{"main"},
+			// single-output conversions. main10 rides the p010 chain
+			// (TenBitChain), which fixes the old mis-signaling: NVENC
+			// has no profile↔surface-format table (that check is
+			// VAAPI-only, see vaapiVideoEncoders), so the bare value
+			// over an 8-bit chain used to signal Main 10 while writing
+			// 8-bit samples. With the p010 upload the signal is honest
+			// — verified on a GTX 1660 Ti: output probes Main 10,
+			// yuv420p10le, through a real scale_cuda resize and from
+			// 8-bit input alike. Explicit-only — no source-derived
+			// rule.
+			profiles:   []string{"main", "main10"},
 			presetFlag: "-preset", presetName: "preset", presetDefault: "p4",
 		},
 		&nvencEncoder{

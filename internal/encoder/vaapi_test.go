@@ -334,52 +334,70 @@ func TestVAAPIBuildArgsParityWithCommandTests(t *testing.T) {
 }
 
 func TestRequiredVAProfiles(t *testing.T) {
+	tenBitSource := model.MediaInfo{
+		VideoStreams: []model.VideoStream{{Index: 0, Codec: "hevc", PixelFormat: "yuv420p10le"}},
+	}
 	tests := []struct {
 		name       string
 		encoder    string
 		profile    string
+		media      model.MediaInfo
 		wantOK     bool
 		wantValues []vaapi.Profile
 	}{
-		{"h264 constrained_baseline", "h264_vaapi", "constrained_baseline", true,
+		{"h264 constrained_baseline", "h264_vaapi", "constrained_baseline", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileH264ConstrainedBaseline}},
-		{"h264 main", "h264_vaapi", "main", true,
+		{"h264 main", "h264_vaapi", "main", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileH264Main}},
-		{"h264 high", "h264_vaapi", "high", true,
+		{"h264 high", "h264_vaapi", "high", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileH264High}},
-		{"h264 auto covers every curated candidate", "h264_vaapi", "", true,
+		{"h264 auto covers every curated candidate", "h264_vaapi", "", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileH264ConstrainedBaseline, vaapi.ProfileH264Main, vaapi.ProfileH264High}},
-		{"h264 unknown value", "h264_vaapi", "main10", true, nil},
-		{"hevc main", "hevc_vaapi", "main", true,
+		{"h264 unknown value", "h264_vaapi", "main444", model.MediaInfo{}, true, nil},
+		{"hevc main", "hevc_vaapi", "main", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
-		{"hevc rext maps to HEVCMain at 8-bit 4:2:0", "hevc_vaapi", "rext", true,
+		{"hevc rext maps to HEVCMain at 8-bit 4:2:0", "hevc_vaapi", "rext", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
-		{"hevc auto", "hevc_vaapi", "", true,
+		{"hevc auto", "hevc_vaapi", "", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
-		{"hevc unknown value", "hevc_vaapi", "main10", true, nil},
-		{"av1 main", "av1_vaapi", "main", true,
+		{"hevc unknown value", "hevc_vaapi", "main444", model.MediaInfo{}, true, nil},
+		{"hevc main10", "hevc_vaapi", "main10", model.MediaInfo{}, true,
+			[]vaapi.Profile{vaapi.ProfileHEVCMain10}},
+		{"hevc main10 with case and space variants", "hevc_vaapi", " MAIN10 ", model.MediaInfo{}, true,
+			[]vaapi.Profile{vaapi.ProfileHEVCMain10}},
+		{"hevc auto with a 10-bit source follows the chain", "hevc_vaapi", "", tenBitSource, true,
+			[]vaapi.Profile{vaapi.ProfileHEVCMain10}},
+		{"hevc main stays 8-bit on a 10-bit source", "hevc_vaapi", "main", tenBitSource, true,
+			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
+		{"av1 main", "av1_vaapi", "main", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileAV1Profile0}},
-		{"av1 auto", "av1_vaapi", "", true,
+		{"av1 auto", "av1_vaapi", "", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileAV1Profile0}},
-		{"vp9 profile 0", "vp9_vaapi", "0", true,
+		{"av1 high has no profile-table row", "av1_vaapi", "high", model.MediaInfo{}, true, nil},
+		{"vp9 profile 0", "vp9_vaapi", "0", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileVP9Profile0}},
-		{"vp9 auto", "vp9_vaapi", "", true,
+		{"vp9 auto", "vp9_vaapi", "", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileVP9Profile0}},
-		{"case and space insensitive", "hevc_vaapi", "  MAIN ", true,
+		{"vp9 profile 2 (10-bit)", "vp9_vaapi", "2", model.MediaInfo{}, true,
+			[]vaapi.Profile{vaapi.ProfileVP9Profile2}},
+		{"vp9 profile 2 with case and space variants", "vp9_vaapi", " 2 ", model.MediaInfo{}, true,
+			[]vaapi.Profile{vaapi.ProfileVP9Profile2}},
+		{"vp9 qsv spelling is not a vp9_vaapi value", "vp9_vaapi", "profile2", model.MediaInfo{}, true, nil},
+		{"case and space insensitive", "hevc_vaapi", "  MAIN ", model.MediaInfo{}, true,
 			[]vaapi.Profile{vaapi.ProfileHEVCMain}},
-		{"non-VAAPI encoder", "libx265", "main", false, nil},
-		{"unknown encoder", "mpeg2_vaapi", "main", false, nil},
-		{"empty encoder", "", "main", false, nil},
+		{"non-VAAPI encoder", "libx265", "main", model.MediaInfo{}, false, nil},
+		{"unknown encoder", "mpeg2_vaapi", "main", model.MediaInfo{}, false, nil},
+		{"empty encoder", "", "main", model.MediaInfo{}, false, nil},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := RequiredVAProfiles(tt.encoder, tt.profile)
+			got, ok := RequiredVAProfiles(tt.encoder, tt.profile, tt.media)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
 			if !slices.Equal(got, tt.wantValues) {
-				t.Errorf("RequiredVAProfiles(%q, %q) = %v, want %v", tt.encoder, tt.profile, got, tt.wantValues)
+				t.Errorf("RequiredVAProfiles(%q, %q, media) = %v, want %v", tt.encoder, tt.profile, got, tt.wantValues)
 			}
 		})
 	}
@@ -402,11 +420,11 @@ func TestCuratedProfilesHaveVAProfileRequirements(t *testing.T) {
 			t.Fatalf("%s is not a *vaapiEncoder", name)
 		}
 		for _, value := range e.Profiles() {
-			if got := e.RequiredVAProfiles(value); len(got) == 0 {
+			if got := e.RequiredVAProfiles(value, model.MediaInfo{}); len(got) == 0 {
 				t.Errorf("%s: curated profile %q has no RequiredVAProfiles mapping", name, value)
 			}
 		}
-		if got := e.RequiredVAProfiles(""); len(got) == 0 {
+		if got := e.RequiredVAProfiles("", model.MediaInfo{}); len(got) == 0 {
 			t.Errorf("%s: the empty (automatic) profile has no RequiredVAProfiles mapping", name)
 		}
 	}

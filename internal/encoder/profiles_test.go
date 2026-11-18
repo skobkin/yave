@@ -9,26 +9,27 @@ import (
 
 // TestVideoEncoderProfiles pins the curated -profile:v list per video
 // encoder. The lists are verified against reference ffmpeg builds and
-// restricted to values that can encode through each encoder's fixed
-// pixel-format chain (see the encoder constructors: hardware chains
-// upload nv12, so 10-bit / non-4:2:0 profiles are excluded even when
-// the build enumerates them); an accidental change here changes what
-// the UI offers and what validation accepts, so it must be deliberate.
+// restricted to values that can encode through the chain TenBitChain
+// selects (see the encoder constructors: the 8-bit chains upload
+// nv12/yuv420p+nv12, the 10-bit ones p010le, so a value is offered
+// only when its encoder serves it through one of the two); an
+// accidental change here changes what the UI offers and what
+// validation accepts, so it must be deliberate.
 func TestVideoEncoderProfiles(t *testing.T) {
 	tests := []struct {
 		name     string
 		profiles []string
 	}{
 		{"h264_vaapi", []string{"constrained_baseline", "main", "high"}},
-		{"hevc_vaapi", []string{"main", "rext"}},
+		{"hevc_vaapi", []string{"main", "main10", "rext"}},
 		{"av1_vaapi", []string{"main"}},
-		{"vp9_vaapi", []string{"0"}},
+		{"vp9_vaapi", []string{"0", "2"}},
 		{"h264_qsv", []string{"baseline", "main", "high"}},
-		{"hevc_qsv", []string{"main"}},
+		{"hevc_qsv", []string{"main", "main10"}},
 		{"av1_qsv", []string{"main"}},
-		{"vp9_qsv", []string{"profile0"}},
+		{"vp9_qsv", []string{"profile0", "profile2"}},
 		{"h264_nvenc", []string{"baseline", "main", "high"}},
-		{"hevc_nvenc", []string{"main"}},
+		{"hevc_nvenc", []string{"main", "main10"}},
 		{"av1_nvenc", nil},
 		{"libx264", []string{"baseline", "main", "high"}},
 		{"libx265", []string{"main", "main10", "main12"}},

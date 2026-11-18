@@ -29,7 +29,7 @@ import (
 // capability-aware selection cannot run; the pick is best-effort, and
 // validation fails open the same way for an empty device there.
 func (c *Controller) resolveAutoVAAPI(encoderName, profile string) (choice vaapi.DeviceChoice, ok bool) {
-	required, ok := encoder.RequiredVAProfiles(encoderName, profile)
+	required, ok := encoder.RequiredVAProfiles(encoderName, profile, c.media)
 	if !ok || len(required) == 0 {
 		return vaapi.DeviceChoice{}, false
 	}
@@ -494,7 +494,7 @@ func (c *Controller) describeVAAPIDevice(node string, ve encoder.VideoEncoder, p
 		return fmt.Sprintf("%s — capabilities unknown (%s)", d.Path, d.Err)
 	}
 	text := vaapi.DeviceDetail(d)
-	if required, ok := encoder.RequiredVAProfiles(ve.Name(), profile); ok && len(required) > 0 {
+	if required, ok := encoder.RequiredVAProfiles(ve.Name(), profile, c.media); ok && len(required) > 0 {
 		if d.FailsRequirement(required) {
 			text = warningPrefix + fmt.Sprintf("%s — does not encode %s profile %s", text, ve.Name(), validation.DisplayProfile(profile))
 		} else {

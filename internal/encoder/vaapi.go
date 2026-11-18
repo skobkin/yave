@@ -56,16 +56,26 @@ func (e *vaapiEncoder) DefaultRateControl() RateControl { return RCAuto }
 // prepended when requested, matching the prior ffmpeg.videoFilter
 // ordering.
 //
-// The output string is byte-identical to the prior implementation:
+// The upload format follows TenBitChain: the 8-bit chain is the
+// historical string
 //
-//	format=nv12,hwupload[,scale_vaapi=w=W:h=H[:force_original_aspect_ratio=decrease:force_divisible_by=2]]
+//	format=nv12,hwupload[,scale_vaapi=w=W:h=H[...]]
+//
+// while a 10-bit chain uploads p010le instead of nv12 — same shape,
+// deeper surface. scale_vaapi preserves the surface format (verified:
+// a p010 chain through a real resize probes back as 10-bit), so the
+// scaler needs no variant.
 func (e *vaapiEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (string, error) {
 	filters, err := appendFrameRateFilter(v)
 	if err != nil {
 		return "", err
 	}
 	width, height, scale := targetDimensions(v, media)
-	filters = append(filters, "format=nv12", "hwupload")
+	uploadFormat := "nv12"
+	if TenBitChain(e.name, v.Profile, media) {
+		uploadFormat = "p010le"
+	}
+	filters = append(filters, "format="+uploadFormat, "hwupload")
 	if scale {
 		part := fmt.Sprintf("scale_vaapi=w=%d:h=%d", width, height)
 		if v.KeepAspectRatio {
@@ -77,19 +87,22 @@ func (e *vaapiEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo)
 }
 
 // RequiredVAProfiles maps a curated -profile:v value to the VAProfile
-// or profiles ffmpeg's VAAPI encoder accepts for it through yave's
-// fixed 8-bit 4:2:0 upload chain. The table mirrors the per-codec
-// VAAPIEncodeProfile tables in libavcodec (vaapi_encode_h264.c,
-// vaapi_encode_h265.c, vaapi_encode_av1.c, vaapi_encode_vp9.c),
-// restricted to the same 8-bit 4:2:0 entries as the curated profile
-// lists above: hevc rext maps to VAProfileHEVCMain at 8-bit, and an
-// empty/auto profile maps to every candidate of the family as a set —
-// vaapi_encode auto-selects whichever candidate the driver supports,
-// so any one of them keeps the conversion runnable (the list order
-// carries no meaning for the any-match device check). Unknown values
-// return nil; curated membership is validated elsewhere.
-func (e *vaapiEncoder) RequiredVAProfiles(profile string) []vaapi.Profile {
+// or profiles ffmpeg's VAAPI encoder accepts for it through the chain
+// TenBitChain selects for the given media. The table mirrors the
+// per-codec VAAPIEncodeProfile tables in libavcodec
+// (vaapi_encode_h264.c, vaapi_encode_h265.c, vaapi_encode_av1.c,
+// vaapi_encode_vp9.c). The depth-aware rows resolve through the shared
+// TenBitChain decision — never a Main+Main10 union for the auto case:
+// the device picker accepts any listed profile, so a union would let a
+// Main-only device be selected for a p010 chain it cannot serve. The
+// empty/auto profile maps to the single profile the chain will use
+// (Main for an 8-bit chain, Main10 for a 10-bit one) — vaapi_encode
+// auto-selects from the surface format the same way, and any one
+// candidate keeps the conversion runnable. Unknown values return nil;
+// curated membership is validated elsewhere.
+func (e *vaapiEncoder) RequiredVAProfiles(profile string, media model.MediaInfo) []vaapi.Profile {
 	p := strings.ToLower(strings.TrimSpace(profile))
+	tenBit := TenBitChain(e.name, profile, media)
 	switch e.codecFamily {
 	case "h264":
 		switch p {
@@ -105,19 +118,33 @@ func (e *vaapiEncoder) RequiredVAProfiles(profile string) []vaapi.Profile {
 			}
 		}
 	case "hevc":
-		switch p {
-		case "main", "rext", "":
+		switch {
+		case tenBit:
+			// Explicit main10, or auto on a 10-bit source: the chain
+			// uploads p010le, and the profile table serves it with
+			// VAProfileHEVCMain10 (vaapi_encode_h265.c).
+			return []vaapi.Profile{vaapi.ProfileHEVCMain10}
+		case p == "main", p == "rext", p == "":
 			// 8-bit 4:2:0 rext is encoded as HEVCMain by ffmpeg.
 			return []vaapi.Profile{vaapi.ProfileHEVCMain}
 		}
 	case "av1":
 		switch p {
 		case "main", "":
+			// The AV1 table has only Main rows (8- and 10-bit both map
+			// to VAProfileAV1Profile0), so one profile covers both
+			// chains; high/professional have no table rows at all and
+			// fail with "No usable encoding profile found." regardless
+			// of surface — they stay out of the curated list.
 			return []vaapi.Profile{vaapi.ProfileAV1Profile0}
 		}
 	case "vp9":
-		switch p {
-		case "0", "":
+		switch {
+		case tenBit:
+			// vp9_vaapi "2" → VAProfileVP9Profile2 (10-bit 4:2:0;
+			// vaapi_encode_vp9.c).
+			return []vaapi.Profile{vaapi.ProfileVP9Profile2}
+		case p == "0", p == "":
 			return []vaapi.Profile{vaapi.ProfileVP9Profile0}
 		}
 	}
@@ -125,10 +152,10 @@ func (e *vaapiEncoder) RequiredVAProfiles(profile string) []vaapi.Profile {
 }
 
 // RequiredVAProfiles resolves the VAProfile requirement for an encoder
-// name and curated -profile:v value through the default registry. ok
-// is false for non-VAAPI encoders and unknown names, so callers can
-// skip the device-compatibility logic for everything else.
-func RequiredVAProfiles(encoderName, profile string) ([]vaapi.Profile, bool) {
+// name, curated -profile:v value, and source media through the default
+// registry. ok is false for non-VAAPI encoders and unknown names, so
+// callers can skip the device-compatibility logic for everything else.
+func RequiredVAProfiles(encoderName, profile string, media model.MediaInfo) ([]vaapi.Profile, bool) {
 	raw, ok := DefaultRegistry().Get(strings.ToLower(strings.TrimSpace(encoderName)))
 	if !ok {
 		return nil, false
@@ -137,7 +164,7 @@ func RequiredVAProfiles(encoderName, profile string) ([]vaapi.Profile, bool) {
 	if !ok {
 		return nil, false
 	}
-	return va.RequiredVAProfiles(profile), true
+	return va.RequiredVAProfiles(profile, media), true
 }
 
 // BuildVideoArgs emits the pre-input -vaapi_device flag plus the
@@ -206,44 +233,65 @@ func (e *vaapiEncoder) Validate(v model.VideoSettings) ([]Issue, error) {
 //
 // The profile lists start from `ffmpeg -h encoder=<name>` of the
 // reference build and are then restricted to the values that can
-// actually encode through yave's fixed 8-bit 4:2:0 upload chain
-// (format=nv12,hwupload): ffmpeg's VAAPI encoder matches -profile:v
-// against an internal profile↔surface-format table before the driver
-// is reached, so a 10-bit or non-4:2:0 profile (h264 high10, hevc
-// main10, av1 high/professional, vp9 profile 2) can never match an
-// nv12 surface and fails every conversion with "No usable encoding
-// profile found." regardless of hardware. hevc rext was
-// encode-verified to work through the nv12 chain. vp9_vaapi exposes
-// no -h enumeration, but the generic profile_idc integer 0 parses and
-// reaches the driver.
+// actually encode through the chain TenBitChain selects. ffmpeg's
+// VAAPI encoder matches -profile:v against an internal
+// profile↔surface-format table before the driver is reached, so a
+// value without a matching table row fails every conversion with "No
+// usable encoding profile found." regardless of hardware. Each chain
+// serves exactly one surface format — nv12 (8-bit 4:2:0) or p010le
+// (10-bit 4:2:0) — so a value is curatable when its table row accepts
+// that chain's surface:
 //
-// This table mechanism is VAAPI-specific — QSV validates via MFX and
-// NVENC via the driver (see their constructor comments) — but the
-// 8-bit-chain restriction holds for all three families.
+//   - h264: baseline/main/high are the 8-bit rows; high10 has a
+//     10-bit row but no p010-served one in vaapi_encode_h264.c's
+//     4:2:0 set — stays out.
+//   - hevc: main and rext (rext@8 4:2:0 encodes as Main) through the
+//     8-bit chain; main10 through the p010 chain
+//     (VAProfileHEVCMain10). 12-bit/422/444 rows have no chain — out.
+//   - av1: main only. The vaapi_encode_av1_profiles table has ONLY
+//     AV1 Main rows (8- and 10-bit both → VAProfileAV1Profile0), so
+//     "high"/"professional" fail profile lookup on ANY surface —
+//     verified on ffmpeg n9.0.2: -profile:v high over a p010 chain
+//     aborts with "No usable encoding profile found." Main 10-bit is
+//     reachable through the p010 chain with the same "main" value.
+//   - vp9: "0" through the 8-bit chain; "2" through the p010 chain
+//     (VAProfileVP9Profile2, the 10-bit 4:2:0 profile). 1/3 are 4:4:4
+//     — out. vp9_vaapi exposes no -h enumeration, but the generic
+//     profile_idc integers parse and reach the driver.
 //
-// Restoring the dropped profiles needs a 10-bit chain (p010 upload /
-// vpp format conversion) — tracked in the issue tracker.
+// The 10-bit values were verified end-to-end on ffmpeg n9.0.2
+// (hevc_vaapi main10 with and without scale_vaapi, 8-bit input
+// included; the no-profile auto case picks Main 10 from a p010
+// surface). This table mechanism is VAAPI-specific — QSV validates via
+// MFX and NVENC via the driver (see their constructor comments).
 func vaapiVideoEncoders() []Encoder {
 	return []Encoder{
 		&vaapiEncoder{
 			name: "h264_vaapi", label: "H.264 VA-API", codecFamily: "h264",
 			priority: 60, qpRange: IntegerRange{Min: 1, Max: 51},
-			profiles: []string{"constrained_baseline", "main", "high"}, // high10 needs a 10-bit surface
+			profiles: []string{"constrained_baseline", "main", "high"}, // high10 has no p010-served row
 		},
 		&vaapiEncoder{
 			name: "hevc_vaapi", label: "H.265 VA-API", codecFamily: "hevc",
 			priority: 50, qpRange: IntegerRange{Min: 1, Max: 51},
-			profiles: []string{"main", "rext"}, // main10 needs a 10-bit surface
+			// main10 rides the p010 chain (TenBitChain); main/rext the
+			// 8-bit one.
+			profiles: []string{"main", "main10", "rext"},
 		},
 		&vaapiEncoder{
 			name: "av1_vaapi", label: "AV1 VA-API", codecFamily: "av1",
 			priority: 40, qpRange: IntegerRange{Min: 0, Max: 255},
-			profiles: []string{"main"}, // high/professional need 4:4:4/4:2:2 surfaces
+			// Only Main has profile-table rows at all; 10-bit output
+			// needs no separate value — the p010 chain + "main" encodes
+			// Main 10-bit.
+			profiles: []string{"main"},
 		},
 		&vaapiEncoder{
 			name: "vp9_vaapi", label: "VP9 VA-API", codecFamily: "vp9",
 			priority: 30, qpRange: IntegerRange{Min: 0, Max: 255},
-			profiles: []string{"0"}, // profile 2 is 10-bit
+			// "2" is the 10-bit profile through the p010 chain; 1/3 are
+			// 4:4:4.
+			profiles: []string{"0", "2"},
 		},
 	}
 }

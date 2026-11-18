@@ -78,23 +78,29 @@ func (e *qsvEncoder) RateControlModes() []RateControl {
 func (e *qsvEncoder) DefaultRateControl() RateControl { return RCCQP }
 
 // VideoFilter emits the QSV hw upload chain. The frame first has to be
-// converted to a software YUV420 pixel format (nv12) — that is what
-// hwupload can ingest from CPU memory — then hwupload actually moves
-// the frame onto the QSV device, and finally the frame is retagged with
-// the QSV hardware pixfmt via format=qsv so scale_qsv and the QSV
-// encoder see it as a QSV hw frame. Retagging to the QSV hw pixfmt
-// *before* hwupload (format=nv12,format=qsv,hwupload) asks ffmpeg to
-// label a software-decoded CPU frame as QSV hardware, and filter
-// negotiation fails because no such conversion exists.
+// converted to a software YUV420 pixel format (nv12, or p010le for a
+// TenBitChain) — that is what hwupload can ingest from CPU memory
+// (hwcontext_qsv maps AV_PIX_FMT_P010 to MFX_FOURCC_P010) — then
+// hwupload actually moves the frame onto the QSV device, and finally
+// the frame is retagged with the QSV hardware pixfmt via format=qsv so
+// scale_qsv and the QSV encoder see it as a QSV hw frame. Retagging to
+// the QSV hw pixfmt *before* hwupload (format=nv12,format=qsv,hwupload)
+// asks ffmpeg to label a software-decoded CPU frame as QSV hardware,
+// and filter negotiation fails because no such conversion exists.
 //
 //	format=nv12,hwupload,format=qsv[,scale_qsv=w=W:h=H[:opts]]
+//	format=p010le,hwupload,format=qsv[,...]  (10-bit chain)
 func (e *qsvEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (string, error) {
 	filters, err := appendFrameRateFilter(v)
 	if err != nil {
 		return "", err
 	}
 	width, height, scale := targetDimensions(v, media)
-	filters = append(filters, "format=nv12", "hwupload", "format=qsv")
+	uploadFormat := "nv12"
+	if TenBitChain(e.name, v.Profile, media) {
+		uploadFormat = "p010le"
+	}
+	filters = append(filters, "format="+uploadFormat, "hwupload", "format=qsv")
 	if scale {
 		// scale_qsv does not accept force_original_aspect_ratio or
 		// force_divisible_by (those are software-scale options).
@@ -266,13 +272,12 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 1, Max: 51},
 			presets:         qsvPresets,
 			supportsProfile: true,
-			// main10 is dropped alongside the other hardware families:
-			// the chain uploads nv12 only, and MFX validates
-			// profile/depth consistency in its own init (source-derived
-			// — unverified on hardware here, no Intel GPU). The VAAPI
-			// table mechanism (vaapiVideoEncoders) does not apply to
-			// QSV. A real 10-bit chain is tracked in the issue tracker.
-			profiles:   []string{"main"},
+			// main10 rides the p010 chain (TenBitChain). QSV has no
+			// profile↔surface table (MFX validates profile/depth
+			// consistency in its own init); the chain is what makes the
+			// value honest. Explicit-only — no source-derived rule,
+			// unverified on hardware here (no Intel GPU).
+			profiles:   []string{"main", "main10"},
 			presetFlag: "-preset", presetName: "preset", presetDefault: "medium",
 		},
 		&qsvEncoder{
@@ -290,9 +295,10 @@ func qsvVideoEncoders() []Encoder {
 			qpRange:         IntegerRange{Min: 0, Max: 255},
 			presets:         qsvPresets,
 			supportsProfile: true,
-			// profile1/2/3 are the 10-/12-bit and non-4:2:0 VP9
-			// profiles; the fixed nv12 chain serves profile0 only.
-			profiles:   []string{"profile0"},
+			// profile0 through the 8-bit chain; profile2 (10-bit 4:2:0)
+			// through the p010 chain (TenBitChain). profile1/3 are
+			// 4:4:4 — out.
+			profiles:   []string{"profile0", "profile2"},
 			presetFlag: "-preset", presetName: "preset", presetDefault: "medium",
 		},
 	}

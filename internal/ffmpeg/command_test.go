@@ -48,6 +48,96 @@ func TestBuildCommandVAAPI(t *testing.T) {
 	}
 }
 
+// TestBuildCommandHW10BitFilterChains pins the exact 10-bit filter
+// strings the three hardware families emit: explicit main10 profiles
+// ride p010 upload chains with the profile value passed through, and
+// the VAAPI auto profile on a 10-bit source emits the same chain
+// without any -profile:v flag. These are the exact strings the
+// empirical E1–E4 runs executed through ffmpeg and probed back as
+// Main 10 / yuv420p10le.
+func TestBuildCommandHW10BitFilterChains(t *testing.T) {
+	t.Parallel()
+	tenBit := model.MediaInfo{
+		VideoStreams: []model.VideoStream{{Width: 1920, Height: 1080, PixelFormat: "yuv420p10le"}},
+	}
+	base := func(encoder string) model.Profile {
+		return model.Profile{
+			Name: "t", Container: model.ContainerMKV, OutputTemplate: "{dir}/{name}.{ext}",
+			Video: model.VideoSettings{
+				Encoder: encoder, RateControl: "CQP", QP: 30, Profile: "main10",
+			},
+			Audio:     model.AudioSettings{Mode: model.AudioCopy, Encoder: "copy"},
+			Subtitles: model.SubtitleSettings{Mode: model.SubtitleCopy},
+		}
+	}
+	assertFilter := func(t *testing.T, plan model.RunPlan, want string) {
+		t.Helper()
+		if !slices.Contains(plan.Args, want) {
+			t.Errorf("plan args %#v miss the 10-bit chain %q", plan.Args, want)
+		}
+	}
+
+	t.Run("hevc_vaapi main10", func(t *testing.T) {
+		p := base("hevc_vaapi")
+		p.Video.VAAPIDevice = "/dev/dri/renderD129"
+		plan, err := BuildCommand(BuildRequest{
+			FFmpegPath: "ffmpeg", InputPath: "in.mkv", OutputPath: "out.mkv", Profile: p, Media: tenBit,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFilter(t, plan, "format=p010le,hwupload")
+		if !containsPair(plan.Args, "-profile:v", "main10") {
+			t.Errorf("plan args %#v miss -profile:v main10", plan.Args)
+		}
+		if !containsPair(plan.Args, "-vaapi_device", "/dev/dri/renderD129") {
+			t.Errorf("plan args %#v miss -vaapi_device", plan.Args)
+		}
+	})
+
+	t.Run("hevc_vaapi auto on a 10-bit source emits no profile flag", func(t *testing.T) {
+		p := base("hevc_vaapi")
+		p.Video.Profile = ""
+		p.Video.VAAPIDevice = "/dev/dri/renderD129"
+		plan, err := BuildCommand(BuildRequest{
+			FFmpegPath: "ffmpeg", InputPath: "in.mkv", OutputPath: "out.mkv", Profile: p, Media: tenBit,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFilter(t, plan, "format=p010le,hwupload")
+		if slices.Contains(plan.Args, "-profile:v") {
+			t.Errorf("auto profile must not emit -profile:v: %#v", plan.Args)
+		}
+	})
+
+	t.Run("hevc_nvenc main10", func(t *testing.T) {
+		plan, err := BuildCommand(BuildRequest{
+			FFmpegPath: "ffmpeg", InputPath: "in.mkv", OutputPath: "out.mkv", Profile: base("hevc_nvenc"), Media: tenBit,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFilter(t, plan, "format=p010le,hwupload_cuda")
+		if !containsPair(plan.Args, "-profile:v", "main10") {
+			t.Errorf("plan args %#v miss -profile:v main10", plan.Args)
+		}
+	})
+
+	t.Run("hevc_qsv main10", func(t *testing.T) {
+		plan, err := BuildCommand(BuildRequest{
+			FFmpegPath: "ffmpeg", InputPath: "in.mkv", OutputPath: "out.mkv", Profile: base("hevc_qsv"), Media: tenBit,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFilter(t, plan, "format=p010le,hwupload,format=qsv")
+		if !containsPair(plan.Args, "-profile:v", "main10") {
+			t.Errorf("plan args %#v miss -profile:v main10", plan.Args)
+		}
+	})
+}
+
 func TestBuildCommandAllAudioAndMP4SubtitleWarning(t *testing.T) {
 	t.Parallel()
 	profile := model.BuiltinProfiles()[2]

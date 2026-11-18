@@ -19,9 +19,8 @@ type Profile int32
 // Entrypoint mirrors the C VAEntrypoint enum (va.h ABI values).
 type Entrypoint int32
 
-// The VAProfile values yave's curated encoder set can require. Only
-// profiles reachable through the fixed 8-bit 4:2:0 upload chain are
-// listed; see internal/encoder/vaapi.go for the curation rationale.
+// The VAProfile values yave's curated encoder set can require. See
+// internal/encoder/vaapi.go for the curation rationale.
 const (
 	ProfileH264ConstrainedBaseline Profile = 13
 	ProfileH264Main                Profile = 6
@@ -29,6 +28,7 @@ const (
 	ProfileHEVCMain                Profile = 17
 	ProfileHEVCMain10              Profile = 18
 	ProfileVP9Profile0             Profile = 19
+	ProfileVP9Profile2             Profile = 21 // va.h: Profile1=20, Profile2=21; the 10-bit 4:2:0 profile
 	ProfileAV1Profile0             Profile = 32
 )
 

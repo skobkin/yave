@@ -9,6 +9,7 @@ import (
 
 	"git.skobk.in/skobkin/yave/internal/ffmpeg"
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
@@ -282,5 +283,74 @@ func TestWindowsAutoVAAPIValidationPasses(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Auto profile without any device inventory must error on profile.video.vaapi_device, got %#v", result.Errors)
+	}
+}
+
+// TestVAAPIDeviceAutoPicksMain10CapableDevice pins the media-aware
+// auto selection: with two probed devices and only the second listing
+// HEVC Main10 encode, a 10-bit source resolves "(Auto)" to the second
+// device (the chain RequiredVAProfiles derives from the source depth
+// needs VAProfileHEVCMain10), an 8-bit source still picks the first —
+// and an explicit main10 on a Main-only host reports no compatible
+// device instead of silently picking a device that cannot serve it.
+func TestVAAPIDeviceAutoPicksMain10CapableDevice(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	mainOnly := vaapi.DeviceInfo{
+		Path:   "/dev/dri/renderD128",
+		Driver: "fake",
+		EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+			vaapi.ProfileHEVCMain: {vaapi.EntrypointEncSlice},
+		},
+	}
+	main10Too := vaapi.DeviceInfo{
+		Path:   "/dev/dri/renderD129",
+		Driver: "fake",
+		EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+			vaapi.ProfileHEVCMain:   {vaapi.EntrypointEncSlice},
+			vaapi.ProfileHEVCMain10: {vaapi.EntrypointEncSlice},
+		},
+	}
+	tenBit := model.MediaInfo{VideoStreams: []model.VideoStream{{PixelFormat: "yuv420p10le"}}}
+	eightBit := model.MediaInfo{VideoStreams: []model.VideoStream{{PixelFormat: "yuv420p"}}}
+
+	c := testController()
+	c.createWidgets()
+	c.caps = model.Capabilities{
+		RenderNodes:  []string{"/dev/dri/renderD128", "/dev/dri/renderD129"},
+		VAAPIDevices: []vaapi.DeviceInfo{mainOnly, main10Too},
+	}
+
+	c.media = tenBit
+	choice, ok := c.resolveAutoVAAPI("hevc_vaapi", "")
+	if !ok || choice.Status != vaapi.DeviceSelected || choice.Path != "/dev/dri/renderD129" {
+		t.Errorf("auto with a 10-bit source = %+v (ok %v), want renderD129", choice, ok)
+	}
+
+	c.media = eightBit
+	choice, ok = c.resolveAutoVAAPI("hevc_vaapi", "")
+	if !ok || choice.Status != vaapi.DeviceSelected || choice.Path != "/dev/dri/renderD128" {
+		t.Errorf("auto with an 8-bit source = %+v (ok %v), want renderD128", choice, ok)
+	}
+
+	c.media = model.MediaInfo{}
+	choice, ok = c.resolveAutoVAAPI("hevc_vaapi", "")
+	if !ok || choice.Status != vaapi.DeviceSelected || choice.Path != "/dev/dri/renderD128" {
+		t.Errorf("auto without media = %+v (ok %v), want the 8-bit fallback renderD128", choice, ok)
+	}
+
+	// Explicit main10 needs the Main10-capable device; a Main-only
+	// host must not be auto-served.
+	c.media = eightBit
+	choice, ok = c.resolveAutoVAAPI("hevc_vaapi", "main10")
+	if !ok || choice.Status != vaapi.DeviceSelected || choice.Path != "/dev/dri/renderD129" {
+		t.Errorf("explicit main10 = %+v (ok %v), want renderD129", choice, ok)
+	}
+	c.caps.VAAPIDevices = []vaapi.DeviceInfo{mainOnly, mainOnly}
+	c.caps.RenderNodes = []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}
+	choice, ok = c.resolveAutoVAAPI("hevc_vaapi", "main10")
+	if !ok || choice.Status != vaapi.DeviceNoneCompatible {
+		t.Errorf("explicit main10 on a Main-only host = %+v (ok %v), want DeviceNoneCompatible", choice, ok)
 	}
 }
