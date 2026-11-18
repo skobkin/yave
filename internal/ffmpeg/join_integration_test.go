@@ -673,7 +673,14 @@ func TestJoinFLACAudioIsReencodedContinuously(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			profile := joinTestProfile(model.ContainerMKV, tc.audio)
 			output := filepath.Join(t.TempDir(), "joined.mkv")
-			parts, staging := runJoinPipeline(t, ffmpegPath, ffprobePath, input, output, profile, joinSegments, true, media)
+			// Verify is off deliberately: the intermediate verification
+			// also enforces the FLAC block-size constraint
+			// (CompareStreamLayouts), and whether the fixed cuts happen
+			// to satisfy it depends on how the host encoder chunks the
+			// audio — a build-dependent lottery. The fidelity assertions
+			// below do not depend on it, and the constraint itself is
+			// pinned by TestJoinFLACBlockSizeConstraint.
+			parts, staging := runJoinPipeline(t, ffmpegPath, ffprobePath, input, output, profile, joinSegments, false, media)
 			t.Cleanup(func() { _ = os.RemoveAll(staging) })
 
 			// The join pass re-encodes the segments' audio as one
@@ -715,5 +722,143 @@ func TestJoinFLACAudioIsReencodedContinuously(t *testing.T) {
 				t.Fatalf("flac -t rejected the joined stream: %v: %s", err, out)
 			}
 		})
+	}
+}
+
+// TestJoinFLACBlockSizeConstraint pins the guard against silent audio
+// loss in FLAC joins. The join pass decodes every intermediate with
+// segment 1's STREAMINFO, and the FLAC decoder drops frames whose
+// block size exceeds that declared maximum: measured with
+// ffmpeg 9.0.2, joining segments with maxima 955 then 969 exited
+// successfully and published 44595 of the segments' 88200 samples.
+// CompareStreamLayouts must therefore reject a segment whose maximum
+// exceeds segment 1's, and accept equal or smaller ones — smaller
+// frames verified to decode completely. The block sizes depend on how
+// the source's audio chunks fall inside each cut (an encoder-side
+// lottery: 44.1 kHz cuts of one AAC source measured maxima from 191
+// to 969), so the test picks its pair dynamically from real
+// intermediates instead of pinning cut positions.
+func TestJoinFLACBlockSizeConstraint(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real FFmpeg)")
+	}
+	ffmpegPath, input, _ := joinIntegrationEnv(t)
+	ffprobePath := "ffprobe"
+
+	profile := joinTestProfile(model.ContainerMKV, model.AudioSettings{Mode: model.AudioEncode, Encoder: "flac", Compression: 5})
+	staging, err := os.MkdirTemp(t.TempDir(), "yave-bs-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(staging) })
+
+	// One-second cuts spread over the six-second AAC fixture: each
+	// cut's FLAC maximum block size is measured, not assumed.
+	cuts := []float64{0.2, 0.7, 1.3, 1.9, 2.6, 3.1, 3.7, 4.3, 4.9}
+	type measured struct {
+		cut  float64
+		path string
+		max  int
+	}
+	parts := make([]measured, 0, len(cuts))
+	for _, cut := range cuts {
+		path := filepath.Join(staging, fmt.Sprintf("seg_%.1f.mkv", cut))
+		plan, err := BuildCommand(BuildRequest{
+			FFmpegPath: ffmpegPath,
+			InputPath:  input,
+			OutputPath: path,
+			Profile:    profile,
+			Media:      model.MediaInfo{VideoStreams: []model.VideoStream{{Width: 320, Height: 240}}},
+			Trim: model.TrimSelection{Segments: []model.TimeRange{
+				{Start: time.Duration(cut * float64(time.Second)), End: time.Duration(cut*float64(time.Second)) + time.Second},
+			}},
+		})
+		if err != nil {
+			t.Fatalf("segment command for cut %.1f: %v", cut, err)
+		}
+		// Some cut alignments make the host's FLAC encoder refuse to
+		// open (ffmpeg 9.0.2: "invalid block size: 14" — it derives
+		// the block size from the AAC chunk pattern and occasionally
+		// derives an invalid one). Such candidates say nothing about
+		// the comparator; skip them and keep the measurable ones.
+		if out, err := exec.CommandContext(context.Background(), plan.Executable, plan.Args...).CombinedOutput(); err != nil { //nolint:gosec // G204: the command under test, generated from test fixtures
+			reason := err.Error()
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					reason = line // the last non-empty ffmpeg line carries the cause
+				}
+			}
+			t.Logf("cut %.1f did not encode on this build (%s: %s); skipping it", cut, err, reason)
+			continue
+		}
+		keys, err := ffprobe.StreamKeys(context.Background(), ffprobePath, path)
+		if err != nil {
+			t.Fatalf("probing cut %.1f: %v", cut, err)
+		}
+		max := 0
+		for _, key := range keys {
+			if key.CodecName == "flac" {
+				max = key.FLACMaxBlockSize
+			}
+		}
+		if max == 0 {
+			t.Fatalf("cut %.1f parsed no FLAC maximum block size", cut)
+		}
+		parts = append(parts, measured{cut: cut, path: path, max: max})
+	}
+	if len(parts) < 2 {
+		t.Skipf("only %d of %d cuts encoded measurably on this build", len(parts), len(cuts))
+	}
+
+	compare := func(a, b measured) error {
+		keysA, err := ffprobe.StreamKeys(context.Background(), ffprobePath, a.path)
+		if err != nil {
+			t.Fatalf("probing %s: %v", a.path, err)
+		}
+		keysB, err := ffprobe.StreamKeys(context.Background(), ffprobePath, b.path)
+		if err != nil {
+			t.Fatalf("probing %s: %v", b.path, err)
+		}
+		names := []string{filepath.Base(a.path), filepath.Base(b.path)}
+		return ffprobe.CompareStreamLayouts(names, [][]ffprobe.StreamKey{keysA, keysB})
+	}
+
+	var increasing, decreasing, equal *[2]measured
+	for i := range parts {
+		for j := i + 1; j < len(parts); j++ {
+			a, b := parts[i], parts[j]
+			switch {
+			case b.max > a.max && increasing == nil:
+				p := [2]measured{a, b}
+				increasing = &p
+			case b.max < a.max && decreasing == nil:
+				p := [2]measured{a, b}
+				decreasing = &p
+			case b.max == a.max && equal == nil:
+				p := [2]measured{a, b}
+				equal = &p
+			}
+		}
+	}
+	if increasing == nil {
+		t.Skipf("no increasing block-size pair among the cuts (%v) — the host encoder produced uniform or decreasing maxima", parts)
+	}
+	joined := fmt.Sprintf("%.1f→%.1f", increasing[0].cut, increasing[1].cut)
+	err = compare(increasing[0], increasing[1])
+	if err == nil || !strings.Contains(err.Error(), "block size") || !strings.Contains(err.Error(), "separate files") {
+		t.Fatalf("join of an increasing block-size pair (%s, %d → %d) must fail with the block-size report, got %v",
+			joined, increasing[0].max, increasing[1].max, err)
+	}
+	if decreasing != nil {
+		if err := compare(decreasing[0], decreasing[1]); err != nil {
+			t.Fatalf("join of a decreasing block-size pair (%.1f→%.1f, %d → %d) must pass: %v",
+				decreasing[0].cut, decreasing[1].cut, decreasing[0].max, decreasing[1].max, err)
+		}
+	}
+	if equal != nil {
+		if err := compare(equal[0], equal[1]); err != nil {
+			t.Fatalf("join of an equal block-size pair must pass: %v", err)
+		}
 	}
 }

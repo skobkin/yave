@@ -182,7 +182,7 @@ func TestCompareStreamLayouts(t *testing.T) {
 		}
 	})
 
-	t.Run("FLAC per-segment STREAMINFO data ignored", func(t *testing.T) {
+	t.Run("FLAC STREAMINFO: per-segment data ignored, block-size constraint enforced", func(t *testing.T) {
 		// Real FLAC STREAMINFO dumps ffprobe reported for two
 		// one-second libx264/FLAC cuts of one input (offsets 1s and
 		// 4s): identical decoder configuration, per-segment block and
@@ -216,8 +216,42 @@ func TestCompareStreamLayouts(t *testing.T) {
 		if seg1[0].Extradata == strings.Join(strings.Fields(flacSeg1Extradata), " ") {
 			t.Fatal("FLAC extradata must be reduced to the config signature, not the flattened dump")
 		}
+		if seg1[0].FLACMaxBlockSize == 0 || seg2[0].FLACMaxBlockSize == 0 {
+			t.Fatalf("FLAC streams must parse their maximum block size, got %d and %d",
+				seg1[0].FLACMaxBlockSize, seg2[0].FLACMaxBlockSize)
+		}
 		if err := CompareStreamLayouts(names[:2], [][]StreamKey{seg1, seg2}); err != nil {
 			t.Fatalf("valid FLAC segments must pass verification: %v", err)
+		}
+
+		// The join decodes every segment against segment 1's STREAMINFO,
+		// and the decoder silently drops frames larger than its declared
+		// maximum block size (measured with ffmpeg 9.0.2: maxima 955 then
+		// 969 published 44595 of 88200 samples, exit status 0). A segment
+		// whose maximum exceeds segment 1's must therefore fail
+		// verification with the dedicated message — equality and smaller
+		// maxima stay allowed, since only larger frames are dropped.
+		bigger := strings.Replace(flacSeg2Extradata, "02f0 02f0", "0400 0400", 1)
+		if bigger == flacSeg2Extradata {
+			t.Fatal("test setup: block-size replacement did not apply")
+		}
+		err := CompareStreamLayouts(names[:2], [][]StreamKey{seg1, parse(bigger)})
+		if err == nil || !strings.Contains(err.Error(), "block size") || !strings.Contains(err.Error(), "separate files") {
+			t.Fatalf("larger FLAC maximum block size must fail with the block-size report, got %v", err)
+		}
+		equal := strings.Replace(flacSeg2Extradata, "02f0 02f0", "03bc 03bc", 1)
+		if equal == flacSeg2Extradata {
+			t.Fatal("test setup: block-size replacement did not apply")
+		}
+		if err := CompareStreamLayouts(names[:2], [][]StreamKey{seg1, parse(equal)}); err != nil {
+			t.Fatalf("equal FLAC maximum block sizes must pass: %v", err)
+		}
+
+		// An unparsable dump parses no block size, and the constraint
+		// cannot be checked — graceful degradation, like the rest of
+		// the optional-metadata handling.
+		if got := parse("0xAAAA")[0].FLACMaxBlockSize; got != 0 {
+			t.Fatalf("unparsable FLAC dump must parse no block size, got %d", got)
 		}
 
 		// A genuinely different configuration (the segment re-encoded
@@ -226,7 +260,7 @@ func TestCompareStreamLayouts(t *testing.T) {
 		if other == flacSeg1Extradata {
 			t.Fatal("test setup: sample-rate replacement did not apply")
 		}
-		err := CompareStreamLayouts(names[:2], [][]StreamKey{seg1, parse(other)})
+		err = CompareStreamLayouts(names[:2], [][]StreamKey{seg1, parse(other)})
 		if err == nil || !strings.Contains(err.Error(), "extradata") {
 			t.Fatalf("FLAC config difference must fail with an extradata report, got %v", err)
 		}

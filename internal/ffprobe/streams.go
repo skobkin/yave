@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -17,6 +18,9 @@ import (
 // dimensions and sample aspect ratio, audio channel layout, and codec
 // initialization data. Bitrate, tags, durations, and timestamps are
 // deliberately NOT compared — they legitimately differ between segments.
+// FLAC streams additionally carry a relational constraint (not equality):
+// the join decodes every segment with segment 1's STREAMINFO, so no
+// segment may declare frames larger than segment 1's maximum block size.
 type StreamKey struct {
 	CodecType     string
 	CodecName     string
@@ -30,6 +34,11 @@ type StreamKey struct {
 	SampleRate    int
 	Channels      int
 	Extradata     string // hex dump from -show_data; "" when absent
+	// FLACMaxBlockSize is the STREAMINFO maximum block size of a FLAC
+	// stream, parsed at probe time; 0 when the stream is not FLAC or
+	// the dump is unparsable. The join requires it to not exceed the
+	// first segment's (see CompareStreamLayouts).
+	FLACMaxBlockSize int
 }
 
 // keyStream is the ffprobe stream projection StreamKeys parses. It
@@ -108,7 +117,7 @@ func parseStreamKeys(data []byte) ([]StreamKey, error) {
 	}
 	keys := make([]StreamKey, 0, len(document.Streams))
 	for _, stream := range document.Streams {
-		keys = append(keys, StreamKey{
+		key := StreamKey{
 			CodecType:     stream.CodecType,
 			CodecName:     stream.CodecName,
 			Profile:       stream.Profile,
@@ -121,7 +130,11 @@ func parseStreamKeys(data []byte) ([]StreamKey, error) {
 			SampleRate:    parseInt(stream.SampleRate),
 			Channels:      stream.Channels,
 			Extradata:     streamExtradataSignature(stream.CodecName, stream.Extradata),
-		})
+		}
+		if strings.EqualFold(stream.CodecName, "flac") {
+			key.FLACMaxBlockSize = flacMaxBlockSize(stream.Extradata)
+		}
+		keys = append(keys, key)
 	}
 	return keys, nil
 }
@@ -145,8 +158,11 @@ func parseStreamKeys(data []byte) ([]StreamKey, error) {
 // audio — is per-segment data the encoder finalizes per file and must
 // not reject joinable segments. The join pass re-encodes FLAC audio as
 // one continuous stream (ffmpeg.JoinAudioArgs), so per-segment
-// STREAMINFO never reaches the output. An unparsable dump falls back
-// to the whitespace-normalized raw text, keeping the comparison strict.
+// STREAMINFO never reaches the output. The one block-size exception is
+// the decoder constraint flacMaxBlockSize feeds CompareStreamLayouts:
+// frames larger than segment 1's declared maximum would be dropped
+// silently. An unparsable dump falls back to the whitespace-normalized
+// raw text, keeping the comparison strict.
 func streamExtradataSignature(codecName, extradata string) string {
 	if strings.EqualFold(codecName, "flac") {
 		if b, ok := parseHexDump(extradata); ok && len(b) >= 14 {
@@ -160,6 +176,23 @@ func streamExtradataSignature(codecName, extradata string) string {
 		}
 	}
 	return strings.Join(strings.Fields(extradata), " ")
+}
+
+// flacMaxBlockSize extracts a FLAC STREAMINFO's maximum block size —
+// bytes 2-3, big-endian — from a parsable hex dump. The join decodes
+// every segment against segment 1's STREAMINFO, and the decoder drops
+// frames whose block size exceeds that declared maximum (measured with
+// ffmpeg 9.0.2: segments with maxima 955 then 969 published 44595 of
+// 88200 samples, exit status 0), so the comparator must enforce the
+// bound even though the value is otherwise per-segment data. 0 when
+// the dump is unparsable: the constraint cannot be checked, and the
+// comparison degrades gracefully.
+func flacMaxBlockSize(extradata string) int {
+	b, ok := parseHexDump(extradata)
+	if !ok || len(b) < 4 {
+		return 0
+	}
+	return int(b[2])<<8 | int(b[3])
 }
 
 // CompareStreamLayouts verifies that every intermediate carries the same
@@ -186,6 +219,11 @@ func CompareStreamLayouts(names []string, parts [][]StreamKey) error {
 		}
 		for s := range reference {
 			if field, refVal, curVal := streamKeyMismatch(reference[s], current[s]); field != "" {
+				if field == flacMaxBlocksizeField {
+					return fmt.Errorf(
+						"segment %d of %d (%s): stream %d (%s): FLAC frames declare a maximum block size of %s samples vs %s in segment 1 (%s) — the join decodes every segment with segment 1's STREAMINFO and silently drops frames larger than it, losing that segment's audio; switch the export mode to separate files",
+						i+1, len(parts), names[i], s, current[s].CodecType, curVal, refVal, names[0])
+				}
 				return fmt.Errorf(
 					"segment %d of %d (%s): stream %d (%s): %s %q vs %q in segment 1 — joinable segments must share one stream layout; re-encode all segments with the same profile",
 					i+1, len(parts), names[i], s, current[s].CodecType, field, curVal, refVal)
@@ -194,6 +232,14 @@ func CompareStreamLayouts(names []string, parts [][]StreamKey) error {
 	}
 	return nil
 }
+
+// flacMaxBlocksizeField marks streamKeyMismatch's relational FLAC
+// block-size constraint; CompareStreamLayouts reports it with its own
+// message because the standard "re-encode with the same profile"
+// remedy does not apply — the maximum block size depends on how the
+// source's audio chunks fall inside each cut, so the same profile can
+// produce both directions.
+const flacMaxBlocksizeField = "flac max block size"
 
 // streamKeyMismatch returns the first differing field and both values,
 // compared in a stable order so reports are deterministic.
@@ -223,6 +269,13 @@ func streamKeyMismatch(reference, current StreamKey) (field, refVal, curVal stri
 		return "channel_layout", reference.ChannelLayout, current.ChannelLayout
 	case current.Extradata != reference.Extradata:
 		return "extradata", reference.Extradata, current.Extradata
+	case current.FLACMaxBlockSize != 0 && reference.FLACMaxBlockSize != 0 &&
+		current.FLACMaxBlockSize > reference.FLACMaxBlockSize:
+		// Not an equality: frames at or below segment 1's declared
+		// maximum decode fine (verified — maxima 955 then 327 decode
+		// completely), only frames above it are dropped.
+		return flacMaxBlocksizeField,
+			strconv.Itoa(reference.FLACMaxBlockSize), strconv.Itoa(current.FLACMaxBlockSize)
 	}
 	return "", "", ""
 }
