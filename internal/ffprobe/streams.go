@@ -149,7 +149,11 @@ func streamExtradataSignature(codecName, extradata string) string {
 	if strings.EqualFold(codecName, "flac") {
 		if b, ok := parseHexDump(extradata); ok && len(b) >= 14 {
 			config := append([]byte(nil), b[10:14]...)
-			config[3] &= 0xc0
+			// STREAMINFO bits 80-107 are the packed sample rate (20),
+			// channels (3), and bits-per-sample (5) fields: bytes 10-12
+			// plus byte 13's top nibble. Everything from bit 108 on is
+			// the per-segment total sample count and MD5.
+			config[3] &= 0xf0
 			return fmt.Sprintf("flac-streaminfo-config:%x", config)
 		}
 	}

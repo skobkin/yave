@@ -231,6 +231,15 @@ func TestCompareStreamLayouts(t *testing.T) {
 			t.Fatalf("FLAC config difference must fail with an extradata report, got %v", err)
 		}
 
+		// Bit depth lives in the byte-13 nibble the signature keeps:
+		// the captured dumps are 24-bit (bps field 10111), so an
+		// otherwise identical 16-bit segment (11111) must be rejected.
+		sixteenBit := strings.Replace(flacSeg1Extradata, "0ac4 4170", "0ac4 40f0", 1)
+		err = CompareStreamLayouts(names[:2], [][]StreamKey{seg1, parse(sixteenBit)})
+		if err == nil || !strings.Contains(err.Error(), "extradata") {
+			t.Fatalf("FLAC bit-depth difference must fail, got %v", err)
+		}
+
 		// Unparsable dumps cannot extract the config region and fall
 		// back to the raw comparison — strictly, never looser.
 		if err := CompareStreamLayouts(names[:2], [][]StreamKey{
