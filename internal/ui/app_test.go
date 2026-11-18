@@ -2058,13 +2058,39 @@ func TestOutputTemplateHelpText(t *testing.T) {
 		position = at
 	}
 
-	for _, want := range []string{"Template:", "{dir}/{name}_{profile}.{ext}", "Result:", "/home/user/Videos/movie_HEVC_720p.mkv"} {
+	for _, want := range []string{
+		"Template:",
+		"{dir}/{name}_{profile}.{ext}",
+		`Result (profile "HEVC VAAPI 720p CQ"):`,
+		"/home/user/Videos/movie_HEVC_VAAPI_720p_CQ.mkv",
+	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("help text misses %q:\n%s", want, help)
 		}
 	}
 	if strings.Contains(help, "\t") {
 		t.Errorf("help text must align with spaces, not tabs")
+	}
+	if strings.Contains(help, "movie_HEVC_720p") {
+		t.Errorf("help text still shows the fictional profile example:\n%s", help)
+	}
+}
+
+// TestTemplateHelpExampleResolves pins the help dialog's worked
+// example to actual Resolve behavior: the exact template and input the
+// example shows must produce the exact result it claims.
+func TestTemplateHelpExampleResolves(t *testing.T) {
+	got, err := templates.Resolve("{dir}/{name}_{profile}.{ext}", templates.Request{
+		InputPath: "/home/user/Videos/movie.mkv",
+		Extension: "mkv",
+		Profile:   "HEVC VAAPI 720p CQ",
+		Time:      time.Date(2026, 3, 12, 14, 30, 5, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Resolve of the help example failed: %v", err)
+	}
+	if want := "/home/user/Videos/movie_HEVC_VAAPI_720p_CQ.mkv"; got != want {
+		t.Errorf("help example resolves to %q, want %q", got, want)
 	}
 }
 

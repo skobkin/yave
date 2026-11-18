@@ -190,8 +190,8 @@ func outputTemplateHelpText() string {
 Template:
 {dir}/{name}_{profile}.{ext}
 
-Result:
-/home/user/Videos/movie_HEVC_720p.mkv`)
+Result (profile "HEVC VAAPI 720p CQ"):
+/home/user/Videos/movie_HEVC_VAAPI_720p_CQ.mkv`)
 	return b.String()
 }
 
