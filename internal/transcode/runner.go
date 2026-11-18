@@ -31,6 +31,13 @@ type Callbacks struct {
 
 type Runner struct{}
 
+// pipeCloseGrace bounds the post-cancellation pipe drain: past a cancel
+// or terminate request, a wrapper script's descendant can hold the
+// pipe write-ends long after the process died. The scanners get this
+// long before their read-ends are closed under them — the same bound
+// the frame extractor installs (internal/frames/extract.go).
+const pipeCloseGrace = 2 * time.Second
+
 // RunControl coordinates graceful and forced cancellation with a running
 // FFmpeg process. Requests made before the process starts are retained and
 // applied as soon as it is attached.
@@ -194,8 +201,44 @@ func (Runner) Run(control *RunControl, plan model.RunPlan, duration time.Duratio
 		scanProgress(stdout, duration, started, cb.OnProgress)
 	}()
 
+	// Drain both pipes to EOF before reaping. cmd.Wait closes the
+	// Stdout/Stderr descriptors as soon as it sees the process exit, and
+	// a scanner that has not consumed the buffered tail by then silently
+	// loses it — observed in CI, where the helper's one-line stderr
+	// output vanished between process exit and the scanner's final read,
+	// so its OnLog never fired. Reading to EOF first is the contract
+	// os/exec documents for StdoutPipe/StderrPipe; Wait afterwards only
+	// reaps. The frame extractor (internal/frames/extract.go) already
+	// follows this order.
+	drainDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(drainDone)
+	}()
+	// Cancellation watchdog: past a cancel or terminate request, a
+	// wrapper script's descendant can hold the pipe write-ends long
+	// after the process itself died, which would block the drains — and
+	// this function — until that descendant exits. After a grace period
+	// the read-ends close under the scanners, which fail immediately and
+	// let the remaining wait proceed. On the normal path the drains end
+	// at EOF and the watchdog exits untouched.
+	ctx := control.CancelContext()
+	go func() {
+		select {
+		case <-ctx.Done():
+			grace := time.NewTimer(pipeCloseGrace)
+			defer grace.Stop()
+			select {
+			case <-drainDone:
+			case <-grace.C:
+				_ = stdout.Close()
+				_ = stderr.Close()
+			}
+		case <-drainDone:
+		}
+	}()
+	<-drainDone
 	waitErr := cmd.Wait()
-	wg.Wait()
 	if cancel, terminate := control.requested(); cancel || terminate {
 		return context.Canceled
 	}
