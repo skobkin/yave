@@ -2659,3 +2659,119 @@ func TestShowSettingsDialogKeepsUsableEntryWidth(t *testing.T) {
 		t.Fatalf("settings dialog width = %.0f, want at least 560", width)
 	}
 }
+
+// TestGPUIndexOptionsAndRoundTrip pins the GPU index control rules:
+// dropdown when detection reported GPUs and the value fits, numeric
+// entry otherwise; profile loading authoritative; detection-time
+// refresh preserving edits from either widget.
+func TestGPUIndexOptionsAndRoundTrip(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// No detection yet: entry mode, seed fallback round-trips.
+	if !c.gpuIndexEntry.Visible() || c.gpuIndexSelect.Visible() {
+		t.Fatalf("pre-detection control: entry visible=%v select visible=%v, want entry only",
+			c.gpuIndexEntry.Visible(), c.gpuIndexSelect.Visible())
+	}
+	if got := c.profileFromWidgets().Video.GPUIndex; got != 0 {
+		t.Errorf("pre-detection GPUIndex = %d, want 0 (empty entry, zero seed)", got)
+	}
+
+	// Detection with zero GPUs keeps entry mode.
+	c.caps = model.Capabilities{}
+	c.updateGPUIndexOptions()
+	if !c.gpuIndexEntry.Visible() {
+		t.Fatalf("count 0: entry must stay visible")
+	}
+
+	// A single detected GPU gets a one-entry dropdown (ticket #25).
+	c.caps = model.Capabilities{NVENCGPUCount: 1}
+	c.updateGPUIndexOptions()
+	if !c.gpuIndexSelect.Visible() || c.gpuIndexEntry.Visible() {
+		t.Fatalf("count 1: select visible=%v entry visible=%v, want select only",
+			c.gpuIndexSelect.Visible(), c.gpuIndexEntry.Visible())
+	}
+	if want := []string{"0"}; !slices.Equal(c.gpuIndexSelect.Options, want) {
+		t.Errorf("count 1 options = %v, want %v", c.gpuIndexSelect.Options, want)
+	}
+	if got := c.gpuIndexSelect.Selected; got != "0" {
+		t.Errorf("count 1 selection = %q, want 0", got)
+	}
+
+	// Several GPUs: options 0..N-1.
+	c.caps = model.Capabilities{NVENCGPUCount: 3}
+	c.updateGPUIndexOptions()
+	if want := []string{"0", "1", "2"}; !slices.Equal(c.gpuIndexSelect.Options, want) {
+		t.Fatalf("count 3 options = %v, want %v", c.gpuIndexSelect.Options, want)
+	}
+
+	// A dropdown edit survives a detection refresh (count unchanged).
+	c.gpuIndexSelect.SetSelected("1")
+	c.updateGPUIndexOptions()
+	if got := c.gpuIndexSelect.Selected; got != "1" {
+		t.Errorf("dropdown edit after detection = %q, want 1", got)
+	}
+
+	// An entry edit typed before detection survives the switch to
+	// dropdown mode.
+	c.caps = model.Capabilities{}
+	c.updateGPUIndexOptions() // back to entry mode
+	c.gpuIndexEntry.SetText("2")
+	c.caps = model.Capabilities{NVENCGPUCount: 3}
+	c.updateGPUIndexOptions()
+	if got := c.gpuIndexSelect.Selected; got != "2" {
+		t.Errorf("entry edit carried into dropdown = %q, want 2", got)
+	}
+
+	// Detection is repeatable: another refresh keeps the value.
+	c.updateGPUIndexOptions()
+	if got := c.gpuIndexSelect.Selected; got != "2" {
+		t.Errorf("second detection refresh = %q, want 2 (idempotent)", got)
+	}
+
+	// Profile loading is authoritative: gpu 2 then gpu 0 must land on 0.
+	c.applyGPUIndexSeed(2)
+	if got := c.gpuIndexSelect.Selected; got != "2" {
+		t.Errorf("load gpu 2 selection = %q, want 2", got)
+	}
+	c.applyGPUIndexSeed(0)
+	if got := c.gpuIndexSelect.Selected; got != "0" {
+		t.Errorf("load gpu 0 selection = %q, want 0", got)
+	}
+
+	// Round-trip through the profile model.
+	if got := c.profileFromWidgets().Video.GPUIndex; got != 0 {
+		t.Errorf("profileFromWidgets after load 0 = %d, want 0", got)
+	}
+	c.gpuIndexSelect.SetSelected("1")
+	if got := c.profileFromWidgets().Video.GPUIndex; got != 1 {
+		t.Errorf("profileFromWidgets after picking 1 = %d, want 1", got)
+	}
+
+	// A loaded index outside the detected range stays in entry mode
+	// verbatim — the count is approximate, so no silent clamping.
+	c.applyGPUIndexSeed(5)
+	if !c.gpuIndexEntry.Visible() || c.gpuIndexSelect.Visible() {
+		t.Fatalf("out-of-range seed: want entry mode, entry visible=%v select visible=%v",
+			c.gpuIndexEntry.Visible(), c.gpuIndexSelect.Visible())
+	}
+	if got := c.gpuIndexEntry.Text; got != "5" {
+		t.Errorf("out-of-range seed entry text = %q, want 5", got)
+	}
+	if got := c.profileFromWidgets().Video.GPUIndex; got != 5 {
+		t.Errorf("out-of-range seed round-trip = %d, want 5", got)
+	}
+
+	// The NVENC form still carries the GPU index row.
+	c.caps = model.Capabilities{Encoders: map[string]model.Encoder{
+		"hevc_nvenc": {Name: "hevc_nvenc", Media: ffmpeg.MediaVideo},
+	}}
+	c.videoEncoder.SetSelected("hevc_nvenc")
+	c.updateControlState()
+	if !slices.Contains(videoFormLabels(c), "GPU index") {
+		t.Errorf("hevc_nvenc form rows %v miss GPU index", videoFormLabels(c))
+	}
+}

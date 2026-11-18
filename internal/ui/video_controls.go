@@ -215,7 +215,10 @@ func (c *Controller) updateControlState() {
 	if len(c.qsvDevice.Options) > 0 {
 		c.qsvDevice.Enable()
 	}
-	c.gpuIndex.Enable()
+	c.gpuIndexEntry.Enable()
+	if len(c.gpuIndexSelect.Options) > 0 {
+		c.gpuIndexSelect.Enable()
+	}
 
 	// Audio rows: visibility instead of grey-out. updateAudioControls
 	// first settles the encoder selection and bitrate options, then the
@@ -343,7 +346,7 @@ func (c *Controller) videoFormItems() []*widget.FormItem {
 			widget.NewFormItem("", c.qsvDeviceHint),
 		)
 	case encoder.HWNVENC:
-		gpuItem := widget.NewFormItem("GPU index", c.gpuIndex)
+		gpuItem := widget.NewFormItem("GPU index", c.gpuIndexControl)
 		gpuItem.HintText = "NVIDIA GPU to use when several are present"
 		items = append(items, gpuItem)
 	}

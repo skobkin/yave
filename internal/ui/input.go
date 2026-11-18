@@ -123,6 +123,7 @@ func (c *Controller) applyDetection(caps model.Capabilities) {
 	c.detection.SetText(summary)
 	c.updateEncoderOptions()
 	c.updateDeviceOptions()
+	c.updateGPUIndexOptions()
 	c.reconcileDevices(false)
 	c.updateControlState()
 	c.selectRunnableProfile()

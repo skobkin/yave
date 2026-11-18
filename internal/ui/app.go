@@ -172,10 +172,20 @@ type Controller struct {
 	// qsvDeviceHint explains which GPU a manual QSV device pick is and
 	// warns when it cannot drive Quick Sync at all.
 	qsvDeviceHint *widget.Label
-	gpuIndex      *widget.Entry
-	audioMode     *widget.Select
-	audioEncoder  *widget.Select
-	audioBitrate  *widget.Select
+	// gpuIndexEntry is the free numeric fallback; gpuIndexSelect lists
+	// the detected NVIDIA GPU indices (0..N-1) once detection reported
+	// any. gpuIndexControl stacks the two so the NVENC form row can
+	// swap widgets without rebuilding the form. gpuIndexSeed records
+	// the loaded profile's index while the entry shows empty text so a
+	// Save before detection round-trips the loaded value. gpu.go owns
+	// the mode switching and the load-vs-detection rules.
+	gpuIndexEntry   *widget.Entry
+	gpuIndexSelect  *widget.Select
+	gpuIndexControl *fyne.Container
+	gpuIndexSeed    int
+	audioMode       *widget.Select
+	audioEncoder    *widget.Select
+	audioBitrate    *widget.Select
 	// audioBitrateSeed keeps the loaded profile's bitrate while the
 	// bitrate dropdown is not shown (copy mode): the hidden widget's
 	// selection is empty, and profileFromWidgets falls back to the

@@ -104,7 +104,7 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.vaapiDeviceSeed = p.Video.VAAPIDevice
 	c.qsvDeviceSeed = p.Video.QSVDevice
 	c.updateDeviceOptions()
-	c.gpuIndex.SetText(intText(p.Video.GPUIndex))
+	c.applyGPUIndexSeed(p.Video.GPUIndex)
 	c.audioMode.SetSelected(p.Audio.Mode)
 	// Copy-mode profiles carry Encoder: "copy" in YAML for validation
 	// compatibility; the dropdown only lists real encoders, so the
@@ -199,7 +199,7 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			// the dropdown shows "(Auto)".
 			VAAPIDevice: vaapiDeviceFromWidgets(c),
 			QSVDevice:   qsvDeviceFromWidgets(c),
-			GPUIndex:    atoi(c.gpuIndex.Text),
+			GPUIndex:    c.gpuIndexValue(),
 		},
 		Audio: model.AudioSettings{
 			Mode: audioMode, Encoder: audioEncoder,

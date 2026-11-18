@@ -82,7 +82,10 @@ func (c *Controller) createWidgets() {
 	c.vaapiDeviceHint.Wrapping = fyne.TextWrapWord
 	c.qsvDeviceHint = widget.NewLabel("")
 	c.qsvDeviceHint.Wrapping = fyne.TextWrapWord
-	c.gpuIndex = numericEntry(c.changed)
+	c.gpuIndexEntry = numericEntry(c.changed)
+	c.gpuIndexSelect = widget.NewSelect([]string{}, c.changed)
+	c.gpuIndexSelect.Hide()
+	c.gpuIndexControl = container.NewStack(c.gpuIndexEntry, c.gpuIndexSelect)
 
 	c.audioMode = widget.NewSelect([]string{model.AudioCopy, model.AudioEncode}, c.changed)
 	// "copy" is deliberately absent: copy mode has no encoder settings
