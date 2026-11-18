@@ -203,6 +203,7 @@ func (c *Controller) showOutputTemplateHelp() {
 	text.Disable()
 
 	helpDialog := dialog.NewCustom("Output template placeholders", "Close", text, c.window)
+	text.Wrapping = fyne.TextWrapWord
 	helpDialog.Resize(fyne.NewSize(760, 600))
 	helpDialog.Show()
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"git.skobk.in/skobkin/yave/internal/model"
 )
 
 func TestResolveAllPlaceholders(t *testing.T) {
@@ -164,5 +166,31 @@ func TestSegmentPath(t *testing.T) {
 				t.Fatalf("SegmentPath(%q, %d, %d) = %q, want %q", tt.path, tt.index, tt.count, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestPlaceholderDescriptionsUseRealExamples pins that every
+// placeholder description carries a concrete example and that the
+// {profile} description names a real built-in profile together with
+// its sanitized form, so the help text cannot drift from the
+// sanitizer's actual behavior.
+func TestPlaceholderDescriptionsUseRealExamples(t *testing.T) {
+	for key, desc := range Placeholders {
+		if !strings.Contains(desc, "for example") {
+			t.Errorf("placeholder %q description %q lacks an example", key, desc)
+		}
+	}
+
+	builtin := model.BuiltinProfiles()[0].Name
+	profile := Placeholders["profile"]
+	if !strings.Contains(profile, builtin) {
+		t.Errorf("profile description %q does not mention built-in profile %q", profile, builtin)
+	}
+	sanitized := sanitize(builtin)
+	if sanitized == builtin {
+		t.Fatalf("sanitize(%q) = %q, expected a sanitized form", builtin, sanitized)
+	}
+	if !strings.Contains(profile, sanitized) {
+		t.Errorf("profile description %q does not show sanitized form %q", profile, sanitized)
 	}
 }
