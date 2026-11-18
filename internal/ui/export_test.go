@@ -1181,6 +1181,13 @@ func TestMultiPartExportResolvesBaseEqualInput(t *testing.T) {
 		t.Fatalf("targets rejected: %s", problem)
 	}
 
+	// refresh renders the preview with the part-aware resolver: the
+	// colliding base must not mark the whole template invalid.
+	c.refresh()
+	if strings.HasPrefix(c.outputPreview.Text, "Invalid template") {
+		t.Fatalf("refresh marked the multi-part template invalid: %q", c.outputPreview.Text)
+	}
+
 	job, err := c.buildTrimExportJob(p, base, nil)
 	if err != nil {
 		t.Fatalf("multi-part planning failed with the colliding base: %v", err)

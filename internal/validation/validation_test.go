@@ -584,6 +584,45 @@ func TestOutputMustDifferFromInput(t *testing.T) {
 	assertErrorContains(t, result, "output_path", "must differ")
 }
 
+// A multi-part separate export writes exactly its _partNN targets; the
+// resolved base is only a naming seed. A base equal to the input must
+// not fail the run (nothing writes it), every target's output-path
+// checks must apply, and a problem shared by all parts — the parent
+// directory — is reported once, not once per part.
+func TestValidateTargetsIgnoresUnusedBase(t *testing.T) {
+	input := createInput(t)
+	profile := validProfile()
+	media := validMedia()
+
+	dir := t.TempDir()
+	targets := []string{
+		filepath.Join(dir, "movie_part01.mkv"),
+		filepath.Join(dir, "movie_part02.mkv"),
+	}
+	result := validation.ValidateTargets(profile, &media, capabilities(), input, targets)
+	if !result.Valid() {
+		t.Fatalf("part targets must validate: %#v", result.Errors)
+	}
+
+	result = validation.ValidateTargets(profile, &media, capabilities(), input, []string{input})
+	assertErrorContains(t, result, "output_path", "must differ")
+
+	shared := []string{
+		filepath.Join(dir, "missing-parent", "a_part01.mkv"),
+		filepath.Join(dir, "missing-parent", "a_part02.mkv"),
+	}
+	result = validation.ValidateTargets(profile, &media, capabilities(), input, shared)
+	reports := 0
+	for _, issue := range result.Errors {
+		if strings.Contains(issue.Message, "directory does not exist") {
+			reports++
+		}
+	}
+	if reports != 1 {
+		t.Fatalf("shared-parent error reported %d times, want once: %#v", reports, result.Errors)
+	}
+}
+
 func TestOutputDirectoryMustExist(t *testing.T) {
 	input := createInput(t)
 	profile := validProfile()

@@ -42,7 +42,7 @@ func (c *Controller) refresh() {
 	c.command.SetText("")
 	if c.inputPath != "" {
 		width, height := dimensions(p, c.media)
-		resolved, err := templates.Resolve(p.OutputTemplate, templates.Request{
+		req := templates.Request{
 			InputPath: c.inputPath,
 			Extension: p.Container,
 			Profile:   p.Name,
@@ -50,7 +50,19 @@ func (c *Controller) refresh() {
 			Width:     width,
 			Height:    height,
 			Time:      time.Now(),
-		})
+		}
+		// A multi-part separate export only seeds its part names from
+		// the base and never writes it: resolving with the
+		// input-collision check would mark a template like
+		// {dir}/{name}.{ext} invalid whenever the base equals the
+		// input, even though every actual target is safe.
+		var resolved string
+		var err error
+		if c.trimEnabled && c.trimExportMode == model.TrimExportSeparate && len(c.trimSelection.Segments) > 1 {
+			resolved, err = templates.ResolveParts(p.OutputTemplate, req)
+		} else {
+			resolved, err = templates.Resolve(p.OutputTemplate, req)
+		}
 		if err != nil {
 			c.outputPreview.SetText("Invalid template: " + err.Error())
 		} else {
@@ -84,15 +96,27 @@ func (c *Controller) startConversion() {
 	p := c.profileFromWidgets()
 	// A multi-part separate export never writes the resolved base —
 	// every target carries a _partNN suffix — so its base resolves
-	// without the input-collision check and the per-part targets are
-	// validated instead. Every other mode writes the base itself.
+	// without the input-collision check and validation sees the
+	// per-part targets (the base equaling the input is not a defect:
+	// nothing writes it). Every other mode writes the base itself.
 	resolve := c.resolveOutput
 	trim := c.trimRequest()
-	if trim.Active() && c.trimExportMode == model.TrimExportSeparate && len(trim.Segments) > 1 {
+	multiPart := trim.Active() && c.trimExportMode == model.TrimExportSeparate && len(trim.Segments) > 1
+	if multiPart {
 		resolve = c.resolveOutputParts
 	}
 	resolved, resolveErr := resolve(p, time.Now())
-	result := validation.Validate(p, &c.media, c.caps, c.inputPath, resolved)
+	var result validation.Result
+	switch {
+	case resolveErr != nil:
+		// The resolution error alone is reported below; deriving
+		// targets from an unresolved base would only add noise.
+	case multiPart:
+		result = validation.ValidateTargets(p, &c.media, c.caps, c.inputPath,
+			exportTargetPaths(model.TrimExportSeparate, trim, resolved))
+	default:
+		result = validation.Validate(p, &c.media, c.caps, c.inputPath, resolved)
+	}
 	if c.trimEnabled {
 		result.Merge(validation.ValidateTrim(c.trimSelection, &c.media, p.Video.Encoder))
 		// Join-export checks (video-copy rejection, audio-copy warning)

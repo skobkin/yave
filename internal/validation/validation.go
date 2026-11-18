@@ -49,6 +49,37 @@ func Validate(
 	return result
 }
 
+// ValidateTargets validates a run whose written outputs are exactly
+// targets — a multi-part separate export, where the resolved base is
+// only a naming seed and every part carries a _partNN suffix. It
+// applies the profile-level checks, the input-path checks, and the
+// output-path checks to each target; identical messages are reported
+// once, so the parts' shared parent directory is not complained about
+// once per part. A base equal to the input is not consulted, because
+// nothing writes it.
+func ValidateTargets(
+	profile model.Profile,
+	media *model.MediaInfo,
+	capabilities model.Capabilities,
+	inputPath string,
+	targets []string,
+) Result {
+	result := validateProfile(profile, capabilities, media, true)
+	validateInputPath(&result, inputPath)
+	seen := map[string]bool{}
+	for _, target := range targets {
+		var one Result
+		validateOutputPath(&one, inputPath, target)
+		for _, issue := range one.Errors {
+			if !seen[issue.Message] {
+				seen[issue.Message] = true
+				result.Errors = append(result.Errors, issue)
+			}
+		}
+	}
+	return result
+}
+
 // ValidateProfile checks whether a profile is complete and runnable with the
 // current FFmpeg capabilities. Media may be nil when no input has been loaded.
 func ValidateProfile(profile model.Profile, capabilities model.Capabilities, media *model.MediaInfo) Result {
@@ -91,9 +122,12 @@ func validateProfile(profile model.Profile, capabilities model.Capabilities, med
 }
 
 func validatePaths(result *Result, inputPath, outputPath string) {
-	inputPath = strings.TrimSpace(inputPath)
-	outputPath = strings.TrimSpace(outputPath)
+	validateInputPath(result, inputPath)
+	validateOutputPath(result, inputPath, outputPath)
+}
 
+func validateInputPath(result *Result, inputPath string) {
+	inputPath = strings.TrimSpace(inputPath)
 	if inputPath == "" {
 		result.error("input_path", "input path is required")
 	} else if info, err := os.Stat(inputPath); err != nil {
@@ -105,6 +139,10 @@ func validatePaths(result *Result, inputPath, outputPath string) {
 	} else if !info.Mode().IsRegular() {
 		result.error("input_path", "input path is not a regular file: %s", inputPath)
 	}
+}
+
+func validateOutputPath(result *Result, inputPath, outputPath string) {
+	outputPath = strings.TrimSpace(outputPath)
 
 	if outputPath == "" {
 		result.error("output_path", "output path is required")
