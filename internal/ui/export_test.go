@@ -1281,3 +1281,28 @@ func TestMultiPartExportResolvesBaseEqualInput(t *testing.T) {
 		t.Fatalf("stages = %d, want one encode per part", len(job.stages))
 	}
 }
+
+// TestSettingsPlaceholdersPreviewMatchesResolve is the drift guard for
+// {video_settings}/{audio_settings}: the live preview (refresh) and
+// the executed conversion's resolveOutput must serialize the profile
+// settings identically, so the name the user sees is the name the run
+// writes.
+func TestSettingsPlaceholdersPreviewMatchesResolve(t *testing.T) {
+	c, _, _ := exportTestController(t)
+	c.output.Text = "{dir}/{name}__{video_settings}__{audio_settings}.{ext}"
+	c.videoEncoder.SetSelected("hevc_nvenc")
+	p := c.profileFromWidgets()
+
+	c.refresh()
+	if got := c.outputPreview.Text; !strings.Contains(got, "__hevc_nvenc_") || !strings.HasSuffix(got, "__copy.mkv") {
+		t.Fatalf("preview = %q, want the serialized settings suffix", got)
+	}
+
+	resolved, err := c.resolveOutput(p, time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != c.outputPreview.Text {
+		t.Fatalf("resolveOutput = %q, preview = %q — drift between preview and conversion", resolved, c.outputPreview.Text)
+	}
+}

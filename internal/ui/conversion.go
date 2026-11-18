@@ -8,6 +8,7 @@ import (
 
 	"fyne.io/fyne/v2/dialog"
 
+	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/templates"
 	"git.skobk.in/skobkin/yave/internal/transcode"
@@ -42,6 +43,7 @@ func (c *Controller) refresh() {
 	c.command.SetText("")
 	if c.inputPath != "" {
 		width, height := dimensions(p, c.media)
+		videoSettings, audioSettings := encoder.SettingsSummary(p.Video.Encoder, p.Video, p.Audio)
 		req := templates.Request{
 			InputPath: c.inputPath,
 			Extension: p.Container,
@@ -50,6 +52,9 @@ func (c *Controller) refresh() {
 			Width:     width,
 			Height:    height,
 			Time:      time.Now(),
+
+			VideoSettings: videoSettings,
+			AudioSettings: audioSettings,
 		}
 		// A multi-part separate export only seeds its part names from
 		// the base and never writes it: resolving with the
@@ -451,9 +456,11 @@ func (c *Controller) stopCancelTimer() {
 
 func (c *Controller) resolveOutput(p model.Profile, at time.Time) (string, error) {
 	width, height := dimensions(p, c.media)
+	videoSettings, audioSettings := encoder.SettingsSummary(p.Video.Encoder, p.Video, p.Audio)
 	return templates.Resolve(p.OutputTemplate, templates.Request{
 		InputPath: c.inputPath, Extension: p.Container, Profile: p.Name,
 		Codec: p.Video.Encoder, Width: width, Height: height, Time: at,
+		VideoSettings: videoSettings, AudioSettings: audioSettings,
 	})
 }
 
@@ -465,9 +472,11 @@ func (c *Controller) resolveOutput(p model.Profile, at time.Time) (string, error
 // targets are validated when the export is planned.
 func (c *Controller) resolveOutputParts(p model.Profile, at time.Time) (string, error) {
 	width, height := dimensions(p, c.media)
+	videoSettings, audioSettings := encoder.SettingsSummary(p.Video.Encoder, p.Video, p.Audio)
 	return templates.ResolveParts(p.OutputTemplate, templates.Request{
 		InputPath: c.inputPath, Extension: p.Container, Profile: p.Name,
 		Codec: p.Video.Encoder, Width: width, Height: height, Time: at,
+		VideoSettings: videoSettings, AudioSettings: audioSettings,
 	})
 }
 

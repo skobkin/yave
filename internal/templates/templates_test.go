@@ -33,6 +33,53 @@ func TestResolveAllPlaceholders(t *testing.T) {
 	}
 }
 
+// TestResolveSettingsPlaceholders pins the {video_settings} /
+// {audio_settings} expansion: the pre-serialized summaries pass
+// through the same sanitizer (unsafe characters collapse to
+// underscores), and empty values fall back to "unknown".
+func TestResolveSettingsPlaceholders(t *testing.T) {
+	now := time.Date(2026, 6, 14, 12, 34, 56, 0, time.FixedZone("test", 3*60*60))
+	base := Values{
+		InputPath: "/videos/movie.mkv",
+		Extension: "mkv",
+		Time:      now,
+
+		VideoSettings: "hevc_nvenc_main10_vbr6m_p4",
+		AudioSettings: "libopus_96k",
+	}
+
+	got, err := Resolve("{dir}/{name}__{video_settings}__{audio_settings}.{ext}", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/videos/movie__hevc_nvenc_main10_vbr6m_p4__libopus_96k.mkv"
+	if got != want {
+		t.Fatalf("Resolve() = %q, want %q", got, want)
+	}
+
+	// Sanitization: spaces and unsafe characters collapse.
+	sanitized := base
+	sanitized.VideoSettings = `libx265 "crf 40" slow`
+	got, err = Resolve("{dir}/{name}__{video_settings}.{ext}", sanitized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/videos/movie__libx265_crf_40_slow.mkv"; got != want {
+		t.Fatalf("sanitized Resolve() = %q, want %q", got, want)
+	}
+
+	// Empty summaries sanitize to "unknown" — the empty-profile
+	// fallback never yields a bare "__".
+	empty := Values{InputPath: "/videos/movie.mkv", Extension: "mkv", Time: now}
+	got, err = Resolve("{dir}/{name}__{video_settings}__{audio_settings}.{ext}", empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/videos/movie__unknown__unknown.mkv"; got != want {
+		t.Fatalf("empty Resolve() = %q, want %q", got, want)
+	}
+}
+
 func TestResolveRequiresSuppliedTime(t *testing.T) {
 	_, err := Resolve("{dir}/{name}_{date}.{ext}", Values{
 		InputPath: "/videos/input.mkv",

@@ -18,17 +18,19 @@ var placeholderPattern = regexp.MustCompile(`\{([^{}]+)\}`)
 // descriptions double as the template-help dialog text, so each one
 // carries a concrete example.
 var Placeholders = map[string]string{
-	"dir":       "original input directory, for example /home/user/Videos",
-	"name":      "original filename without extension, for example movie",
-	"ext":       "selected output extension without dot, for example mkv",
-	"input_ext": "original extension without dot, for example mkv",
-	"datetime":  "local date and time in YYYYMMDD-HHMMSS format, for example 20260312-143005",
-	"date":      "local date in YYYYMMDD format, for example 20260312",
-	"time":      "local time in HHMMSS format, for example 143005",
-	"profile":   "selected profile name; spaces and unsafe characters become underscores, for example HEVC VAAPI 720p CQ becomes HEVC_VAAPI_720p_CQ",
-	"codec":     "selected video encoder name, for example hevc_vaapi",
-	"width":     "configured maximum width or source width, for example 1280",
-	"height":    "configured maximum height or source height, for example 720",
+	"dir":            "original input directory, for example /home/user/Videos",
+	"name":           "original filename without extension, for example movie",
+	"ext":            "selected output extension without dot, for example mkv",
+	"input_ext":      "original extension without dot, for example mkv",
+	"datetime":       "local date and time in YYYYMMDD-HHMMSS format, for example 20260312-143005",
+	"date":           "local date in YYYYMMDD format, for example 20260312",
+	"time":           "local time in HHMMSS format, for example 143005",
+	"profile":        "selected profile name; spaces and unsafe characters become underscores, for example HEVC VAAPI 720p CQ becomes HEVC_VAAPI_720p_CQ",
+	"codec":          "selected video encoder name, for example hevc_vaapi",
+	"width":          "configured maximum width or source width, for example 1280",
+	"height":         "configured maximum height or source height, for example 720",
+	"video_settings": "short summary of the video encoder settings, for example libx265_main10_crf40_medium_1280x720",
+	"audio_settings": "short summary of the audio encoder settings, for example libopus_96k",
 }
 
 type Request struct {
@@ -39,6 +41,13 @@ type Request struct {
 	Width     int
 	Height    int
 	Time      time.Time
+	// VideoSettings and AudioSettings carry the pre-serialized setting
+	// summaries for the {video_settings} / {audio_settings} placeholders
+	// (encoder.SettingsSummary builds them). They arrive as plain
+	// strings so this package stays dependency-free; empty values
+	// sanitize to "unknown".
+	VideoSettings string
+	AudioSettings string
 }
 
 // Values is a compatibility alias for Request.
@@ -92,6 +101,9 @@ func resolveTemplate(template string, values Request, checkInputCollision bool) 
 		"codec":     sanitize(values.Codec),
 		"width":     sanitizeDimension(values.Width),
 		"height":    sanitizeDimension(values.Height),
+
+		"video_settings": sanitize(values.VideoSettings),
+		"audio_settings": sanitize(values.AudioSettings),
 	}
 
 	var resolveErr error

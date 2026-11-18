@@ -86,10 +86,15 @@ The built-in profiles use these templates: HEVC VAAPI 720p CQ →
 and x265 Software Archive → `{dir}/{name}_x265.{ext}`.
 
 Supported placeholders are `{dir}`, `{name}`, `{ext}`, `{input_ext}`,
-`{datetime}`, `{date}`, `{time}`, `{profile}`, `{codec}`, `{width}`, and
-`{height}`. Placeholder values are sanitized and templates containing unknown
-placeholders or path traversal are rejected — the in-app help dialog (?
-next to the template field) shows each placeholder with a worked example.
+`{datetime}`, `{date}`, `{time}`, `{profile}`, `{codec}`, `{width}`,
+`{height}`, `{video_settings}`, and `{audio_settings}`. The settings
+placeholders serialize the encoder configuration into the filename (for
+example `{name}__{video_settings}.{ext}` →
+`movie__hevc_nvenc_main10_vbr2m_p4.mkv`), so experiments with quality,
+preset, or codec profile produce distinguishable outputs. Placeholder
+values are sanitized and templates containing unknown placeholders or
+path traversal are rejected — the in-app help dialog (? next to the
+template field) shows each placeholder with a worked example.
 
 ## Thanks
 
