@@ -77,13 +77,19 @@ action stays available.
 The default template is:
 
 ```text
-{dir}/{name}_{profile}.{ext}
+{dir}/{name}_comp.{ext}
 ```
+
+The built-in profiles use these templates: HEVC VAAPI 720p CQ →
+`{dir}/{name}_comp.{ext}`, HEVC VAAPI Original Size CQ →
+`{dir}/{name}_hevc.{ext}`, H.264 VAAPI 1080p → `{dir}/{name}_h264.{ext}`,
+and x265 Software Archive → `{dir}/{name}_x265.{ext}`.
 
 Supported placeholders are `{dir}`, `{name}`, `{ext}`, `{input_ext}`,
 `{datetime}`, `{date}`, `{time}`, `{profile}`, `{codec}`, `{width}`, and
 `{height}`. Placeholder values are sanitized and templates containing unknown
-placeholders or path traversal are rejected.
+placeholders or path traversal are rejected — the in-app help dialog (?
+next to the template field) shows each placeholder with a worked example.
 
 ## Thanks
 
