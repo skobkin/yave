@@ -1836,6 +1836,64 @@ func TestEncodeModeWithoutAudioEncodersReverts(t *testing.T) {
 	}
 }
 
+// TestUpdateEncoderOptionsFollowsRegistryPriority pins the
+// post-detection dropdown ordering: registry priority (priority
+// descending, name ascending) rather than alphabetical, "copy" first
+// for video, and detected names the registry does not know appended
+// alphabetically at the end.
+func TestUpdateEncoderOptionsFollowsRegistryPriority(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	c := testController()
+	c.createWidgets()
+
+	// The fixture is a map, so iteration order is random: the
+	// resulting option lists must come out registry-ordered anyway.
+	c.caps = model.Capabilities{Encoders: map[string]model.Encoder{
+		"copy":       {Name: "copy", Media: "video,audio"},
+		"mp3":        {Name: "mp3", Media: ffmpeg.MediaAudio},
+		"libmp3lame": {Name: "libmp3lame", Media: ffmpeg.MediaAudio},
+		"flac":       {Name: "flac", Media: ffmpeg.MediaAudio},
+		"opus":       {Name: "opus", Media: ffmpeg.MediaAudio},
+		"aac":        {Name: "aac", Media: ffmpeg.MediaAudio},
+		"libopus":    {Name: "libopus", Media: ffmpeg.MediaAudio},
+		"libx264":    {Name: "libx264", Media: ffmpeg.MediaVideo},
+		"libx265":    {Name: "libx265", Media: ffmpeg.MediaVideo},
+		"h264_vaapi": {Name: "h264_vaapi", Media: ffmpeg.MediaVideo},
+		"hevc_amf":   {Name: "hevc_amf", Media: ffmpeg.MediaVideo}, // not in the registry
+	}}
+	c.updateEncoderOptions()
+
+	// Priorities: aac/libopus 100 (name asc), opus 90,
+	// flac/libmp3lame 70 (name asc), mp3 60.
+	wantAudio := []string{"aac", "libopus", "opus", "flac", "libmp3lame", "mp3"}
+	if !slices.Equal(c.audioEncoder.Options, wantAudio) {
+		t.Errorf("audio options = %v, want %v", c.audioEncoder.Options, wantAudio)
+	}
+
+	// Priorities: libx264 100, libx265 90, h264_vaapi 60 — not
+	// alphabetical (h264_vaapi would sort first); the unknown
+	// hevc_amf lands last.
+	wantVideo := []string{"copy", "libx264", "libx265", "h264_vaapi", "hevc_amf"}
+	if !slices.Equal(c.videoEncoder.Options, wantVideo) {
+		t.Errorf("video options = %v, want %v", c.videoEncoder.Options, wantVideo)
+	}
+
+	// A narrow detected build keeps registry order among its names.
+	c.caps = model.Capabilities{Encoders: map[string]model.Encoder{
+		"copy":    {Name: "copy", Media: "video,audio"},
+		"libx265": {Name: "libx265", Media: ffmpeg.MediaVideo},
+	}}
+	c.updateEncoderOptions()
+	if want := []string{"copy", "libx265"}; !slices.Equal(c.videoEncoder.Options, want) {
+		t.Errorf("narrow video options = %v, want %v", c.videoEncoder.Options, want)
+	}
+	if len(c.audioEncoder.Options) != 0 {
+		t.Errorf("narrow audio options = %v, want empty", c.audioEncoder.Options)
+	}
+}
+
 // TestVideoFormRateControlMatrix pins the hide-not-grey rate-control
 // rows per family and mode: only the controls the encoder's
 // BuildVideoArgs consumes for the selected mode are present, and

@@ -9,6 +9,7 @@ import (
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/ffmpeg"
+	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
@@ -452,23 +453,47 @@ func (c *Controller) updateEncoderOptions() {
 	// but is never an audio encoder option: audio copy mode is
 	// expressed by Mode alone.
 	video, audio := []string{"copy"}, []string{}
+	detected := make(map[string]model.Encoder, len(c.caps.Encoders))
 	for name, enc := range c.caps.Encoders {
 		if name == "copy" {
 			continue
 		}
-		if enc.Media == ffmpeg.MediaVideo {
-			video = append(video, name)
-		}
-		if enc.Media == ffmpeg.MediaAudio {
-			audio = append(audio, name)
-		}
+		detected[name] = enc
 	}
-	sort.Strings(video[1:])
-	sort.Strings(audio)
+	registry := encoder.DefaultRegistry()
+	video = append(video, orderedEncoders(detected, registry.VideoNames(), ffmpeg.MediaVideo)...)
+	audio = append(audio, orderedEncoders(detected, registry.AudioNames(), ffmpeg.MediaAudio)...)
 	c.videoEncoder.Options = video
 	c.videoEncoder.Refresh()
 	c.audioEncoder.Options = audio
 	c.audioEncoder.Refresh()
+}
+
+// orderedEncoders orders one media kind's detected encoder names in
+// DefaultRegistry order (priority descending, name ascending) so the
+// post-detection dropdowns keep the same ordering the pre-detection
+// seeding uses. Detected names the registry does not know about are
+// appended alphabetically at the end so nothing disappears when the
+// registry and the detected build disagree.
+func orderedEncoders(detected map[string]model.Encoder, registryNames []string, media string) []string {
+	seen := make(map[string]bool, len(registryNames))
+	ordered := make([]string, 0, len(detected))
+	for _, name := range registryNames {
+		enc, ok := detected[name]
+		if !ok || enc.Media != media {
+			continue
+		}
+		ordered = append(ordered, name)
+		seen[name] = true
+	}
+	var extras []string
+	for name, enc := range detected {
+		if !seen[name] && enc.Media == media {
+			extras = append(extras, name)
+		}
+	}
+	sort.Strings(extras)
+	return append(ordered, extras...)
 }
 
 func mustQPRange(encoder string) validation.IntegerRange {
