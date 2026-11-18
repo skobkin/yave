@@ -22,7 +22,7 @@ func TestParseCompleteDocument(t *testing.T) {
 	    },
 	    {
 	      "index": 1, "codec_name": "opus", "codec_type": "audio",
-	      "sample_rate": "48000", "channels": 6
+	      "sample_rate": "48000", "channels": 6, "bits_per_raw_sample": "24"
 	    },
 	    {"index": 2, "codec_name": "subrip", "codec_type": "subtitle"},
 	    {"index": 3, "codec_name": "mjpeg", "codec_type": "attachment"}
@@ -52,6 +52,9 @@ func TestParseCompleteDocument(t *testing.T) {
 	if len(got.AudioStreams) != 1 || got.AudioStreams[0].SampleRate != 48000 || got.AudioStreams[0].Channels != 6 {
 		t.Fatalf("unexpected audio streams: %#v", got.AudioStreams)
 	}
+	if got.AudioStreams[0].BitsPerSample != 24 {
+		t.Fatalf("bits_per_raw_sample not parsed: %#v", got.AudioStreams[0])
+	}
 	if len(got.SubtitleStreams) != 1 || got.ChapterCount != 1 {
 		t.Fatalf("unexpected subtitle/chapter counts: %#v", got)
 	}
@@ -61,7 +64,8 @@ func TestParseToleratesMissingAndMalformedOptionalFields(t *testing.T) {
 	data := []byte(`{
 	  "streams": [
 	    {"index": 4, "codec_type": "video", "avg_frame_rate": "0/0", "r_frame_rate": "24000/1001"},
-	    {"index": 5, "codec_type": "audio", "sample_rate": "N/A"}
+	    {"index": 5, "codec_type": "audio", "sample_rate": "N/A", "bits_per_raw_sample": "N/A", "bits_per_sample": 16},
+	    {"index": 6, "codec_type": "audio"}
 	  ],
 	  "format": {"duration": "N/A", "bit_rate": ""}
 	}`)
@@ -72,6 +76,11 @@ func TestParseToleratesMissingAndMalformedOptionalFields(t *testing.T) {
 	}
 	if got.Duration != 0 || got.Bitrate != 0 || got.AudioStreams[0].SampleRate != 0 {
 		t.Fatalf("malformed optional values were not ignored: %#v", got)
+	}
+	// bits_per_raw_sample "N/A" is ignored; the container-level
+	// bits_per_sample is the fallback. A stream with neither parses 0.
+	if got.AudioStreams[0].BitsPerSample != 16 || got.AudioStreams[1].BitsPerSample != 0 {
+		t.Fatalf("bit depth fallback wrong: %#v", got.AudioStreams)
 	}
 	if got.VideoStreams[0].FrameRate != "24000/1001" {
 		t.Fatalf("frame rate fallback = %q", got.VideoStreams[0].FrameRate)

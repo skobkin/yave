@@ -754,6 +754,35 @@ func TestJoinAudioArgs(t *testing.T) {
 			wantArgs: nil,
 		},
 		{
+			// A source deeper than 24 bits would be truncated by the
+			// encoder's s32 default, so the join adds -strict experimental.
+			name:     "copied 32-bit flac adds strict experimental",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy},
+			media:    model.MediaInfo{AudioStreams: []model.AudioStream{{Index: 0, Codec: "flac", BitsPerSample: 32}}},
+			wantArgs: []string{"-c:a:0", "flac", "-strict", "experimental"},
+		},
+		{
+			name:     "copied 24-bit flac keeps the default depth",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy},
+			media:    model.MediaInfo{AudioStreams: []model.AudioStream{{Index: 0, Codec: "flac", BitsPerSample: 24}}},
+			wantArgs: []string{"-c:a:0", "flac"},
+		},
+		{
+			// -strict is output-global: any mapped deep stream enables it.
+			name:     "copy all streams adds strict when the flac stream is deep",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy, CopyAllStreams: true},
+			media:    model.MediaInfo{AudioStreams: []model.AudioStream{{Index: 0, Codec: "aac"}, {Index: 1, Codec: "flac", BitsPerSample: 32}}},
+			wantArgs: []string{"-c:a:1", "flac", "-strict", "experimental"},
+		},
+		{
+			// Encode mode segments already define the output depth via the
+			// profile; the source's depth must not leak strict in there.
+			name:     "encode mode ignores the source depth",
+			audio:    model.AudioSettings{Mode: model.AudioEncode, Encoder: "flac", Compression: 8},
+			media:    model.MediaInfo{AudioStreams: []model.AudioStream{{Index: 0, Codec: "flac", BitsPerSample: 32}}},
+			wantArgs: []string{"-c:a", "flac", "-compression_level", "8"},
+		},
+		{
 			name:     "copy all streams targets only the flac stream",
 			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy, CopyAllStreams: true},
 			media:    media("aac", "flac"),

@@ -385,7 +385,15 @@ func BuildConcatCommand(req ConcatRequest) (model.RunPlan, error) {
 // its encoder settings describe a passthrough, and letting an AAC
 // choice leak in would turn a lossless source into a lossy re-encode —
 // so copied FLAC audio is re-encoded with the native FLAC encoder's
-// defaults, which the MKV-only FLAC container matrix accepts.
+// defaults, which the MKV-only FLAC container matrix accepts. One
+// depth exception: the encoder stores s32-decoded input at 24 bits
+// unless the build permits experimental features, so a source deeper
+// than 24 bits would be silently truncated by the re-encode (measured
+// with ffmpeg 9.0.2: 32-bit FLAC joined without the flag re-emerged
+// 24-bit with different PCM; with the flag the PCM was bit-identical).
+// Sources deeper than flacEncoderDefaultDepth therefore add
+// -strict experimental; shallower or unknown depths keep the default,
+// which preserves them without the size increase strict implies.
 func JoinAudioArgs(p model.Profile, media model.MediaInfo) ([]string, error) {
 	if !p.Audio.IsStreamCopy() {
 		raw, ok := encoder.DefaultRegistry().Get(p.Audio.Encoder)
@@ -413,13 +421,29 @@ func JoinAudioArgs(p model.Profile, media model.MediaInfo) ([]string, error) {
 		streams = streams[:1]
 	}
 	var args []string
+	deep := false
 	for i, stream := range streams {
 		if strings.EqualFold(strings.TrimSpace(stream.Codec), "flac") {
 			args = append(args, "-c:a:"+strconv.Itoa(i), "flac")
+			if stream.BitsPerSample > flacEncoderDefaultDepth {
+				deep = true
+			}
 		}
+	}
+	if deep {
+		// -strict is an output-global option, so one occurrence covers
+		// every re-encoded stream; mixed-depth sources store the shallower
+		// ones at 32 bits (preserved, slightly larger) rather than losing
+		// the deeper one.
+		args = append(args, "-strict", "experimental")
 	}
 	return args, nil
 }
+
+// flacEncoderDefaultDepth is the sample depth the FLAC encoder stores
+// for s32-decoded input without -strict experimental; deeper sources
+// need the flag to survive the join's re-encode (see JoinAudioArgs).
+const flacEncoderDefaultDepth = 24
 
 // WriteConcatList writes the concat demuxer's list file: one
 // "file '<escaped path>'" line per part, with a mode that keeps the

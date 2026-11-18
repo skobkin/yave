@@ -564,6 +564,17 @@ func TestPlanExportShapes(t *testing.T) {
 			t.Errorf("copied FLAC source must re-encode with encoder defaults: %s", joined)
 		}
 
+		// A source deeper than the encoder's 24-bit default must survive
+		// the re-encode: the depth decision adds -strict experimental at
+		// plan time, from the depth ffprobe reported for the source.
+		deepMedia := model.MediaInfo{
+			Duration:     30 * time.Second,
+			AudioStreams: []model.AudioStream{{Codec: "flac", BitsPerSample: 32}},
+		}
+		if joined := concatArgs(copied, deepMedia); !strings.Contains(joined, "-c:a:0 flac -strict experimental") {
+			t.Errorf("copied 32-bit FLAC source must keep its depth: %s", joined)
+		}
+
 		aacMedia := model.MediaInfo{
 			Duration:     30 * time.Second,
 			AudioStreams: []model.AudioStream{{Codec: "aac"}},

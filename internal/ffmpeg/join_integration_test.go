@@ -2,6 +2,8 @@ package ffmpeg
 
 import (
 	"context"
+	crand "crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"os"
@@ -860,5 +862,123 @@ func TestJoinFLACBlockSizeConstraint(t *testing.T) {
 		if err := compare(equal[0], equal[1]); err != nil {
 			t.Fatalf("join of an equal block-size pair must pass: %v", err)
 		}
+	}
+}
+
+// write32BitFLACFixture generates a six-second source whose audio is
+// true 32-bit FLAC: random full-range s32 samples (crypto/rand, so no
+// platform random device is needed) encoded with -strict experimental.
+// Filter-derived audio (sine, noise sources) is float-based with only
+// ~24 significant bits, whose 32-bit storage survives the encoder's
+// 24-bit default losslessly — it cannot demonstrate depth loss.
+func write32BitFLACFixture(t *testing.T, ffmpegPath, path string) {
+	t.Helper()
+	const seconds = 6
+	raw := make([]byte, seconds*44100*2*4) // stereo s32
+	if _, err := crand.Read(raw); err != nil {
+		t.Fatalf("seeding random audio: %v", err)
+	}
+	rawPath := filepath.Join(t.TempDir(), "noise.s32")
+	if err := os.WriteFile(rawPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.CommandContext(context.Background(), ffmpegPath, []string{ //nolint:gosec // G204: integration test drives the locally discovered FFmpeg with t.TempDir paths
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=6:size=320x240:rate=30",
+		"-f", "s32le", "-ar", "44100", "-ac", "2", "-i", rawPath,
+		"-map", "0:v:0", "-map", "1:a:0",
+		"-c:v", "libx264", "-preset", "ultrafast", "-g", "90",
+		"-c:a", "flac", "-strict", "experimental",
+		"-y", path,
+	}...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("generating 32-bit FLAC fixture: %v: %s", err, out)
+	}
+}
+
+// TestJoinCopiedFLACPreservesSampleDepth pins the depth exception in
+// the copy-mode join. The FLAC encoder stores s32-decoded input at 24
+// bits unless -strict experimental allows deeper output, so rebuilding
+// copied FLAC audio deeper than 24 bits without the flag silently
+// truncates it (measured with ffmpeg 9.0.2: a 32-bit source joined
+// without the flag re-emerged 24-bit with different PCM; with the
+// flag, bit-identical). JoinAudioArgs adds the flag when the probed
+// source depth exceeds the encoder's default; this test drives the
+// pipeline end to end with a true 32-bit source and asserts both the
+// joined depth and bitwise PCM equality with the segments.
+func TestJoinCopiedFLACPreservesSampleDepth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real FFmpeg)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe not installed")
+	}
+	requireEncoders(t, ffmpegPath, "libx264", "flac")
+
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.mkv")
+	write32BitFLACFixture(t, ffmpegPath, input)
+
+	// The fixture must really carry 32-bit audio; a build that cannot
+	// encode deep FLAC cannot exercise the regression.
+	source, err := ffprobe.Inspect(context.Background(), "ffprobe", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(source.AudioStreams) != 1 {
+		t.Fatalf("fixture audio streams = %d, want 1", len(source.AudioStreams))
+	}
+	if got := source.AudioStreams[0].BitsPerSample; got != 32 {
+		t.Skipf("fixture audio probed %d-bit; this build cannot demonstrate depth loss", got)
+	}
+	// The probed snapshot is what the production planner passes on.
+	media := model.MediaInfo{AudioStreams: []model.AudioStream{{Codec: "flac", BitsPerSample: 32}}}
+
+	profile := joinTestProfile(model.ContainerMKV, model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy})
+	output := filepath.Join(t.TempDir(), "joined.mkv")
+	// Verify is off deliberately: the FLAC block-size constraint is a
+	// cut-alignment lottery (see TestJoinFLACAudioIsReencodedContinuously).
+	parts, staging := runJoinPipeline(t, ffmpegPath, "ffprobe", input, output, profile, joinSegments, false, media)
+	t.Cleanup(func() { _ = os.RemoveAll(staging) })
+
+	joined, err := ffprobe.Inspect(context.Background(), "ffprobe", output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(joined.AudioStreams) != 1 {
+		t.Fatalf("joined audio streams = %d, want 1", len(joined.AudioStreams))
+	}
+	if got := joined.AudioStreams[0].BitsPerSample; got != 32 {
+		t.Errorf("joined audio probed %d-bit, want 32: the join re-encoded without -strict experimental and truncated the source", got)
+	}
+
+	// And the depth must carry content: the joined s32 decode is
+	// bit-identical to the segments' decodes concatenated in order
+	// (a 24-bit truncation fails both checks).
+	decodeS32 := func(path string) []byte {
+		t.Helper()
+		out, err := exec.CommandContext(context.Background(), ffmpegPath, []string{ //nolint:gosec // G204: integration test drives the locally discovered FFmpeg with t.TempDir paths
+			"-hide_banner", "-loglevel", "error",
+			"-i", path,
+			"-map", "0:a:0",
+			"-f", "s32le",
+			"-acodec", "pcm_s32le",
+			"-",
+		}...).Output()
+		if err != nil {
+			t.Fatalf("decoding s32 audio of %s: %v: %s", path, err, out)
+		}
+		return out
+	}
+	var segments []byte
+	for _, part := range parts {
+		segments = append(segments, decodeS32(part)...)
+	}
+	if sha256.Sum256(decodeS32(output)) != sha256.Sum256(segments) {
+		t.Errorf("joined PCM differs from the segments' concatenated PCM: the join altered the samples")
 	}
 }

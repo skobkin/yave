@@ -153,6 +153,12 @@ type AudioStream struct {
 	Codec      string
 	SampleRate int
 	Channels   int
+	// BitsPerSample is the stream's coded sample depth (ffprobe's
+	// bits_per_raw_sample, falling back to bits_per_sample); 0 when the
+	// probe does not report one. The join pass uses it to decide whether
+	// rebuilding copied FLAC audio needs more than the encoder's default
+	// depth (see ffmpeg.JoinAudioArgs).
+	BitsPerSample int
 }
 
 type SubtitleStream struct {

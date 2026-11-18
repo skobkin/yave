@@ -27,19 +27,21 @@ type probeFormat struct {
 }
 
 type probeStream struct {
-	Index       int               `json:"index"`
-	CodecName   string            `json:"codec_name"`
-	CodecType   string            `json:"codec_type"`
-	Width       int               `json:"width"`
-	Height      int               `json:"height"`
-	AverageRate string            `json:"avg_frame_rate"`
-	RealRate    string            `json:"r_frame_rate"`
-	PixelFormat string            `json:"pix_fmt"`
-	ColorRange  string            `json:"color_range"`
-	SampleRate  string            `json:"sample_rate"`
-	Channels    int               `json:"channels"`
-	Tags        map[string]string `json:"tags"`
-	Disposition map[string]int    `json:"disposition"`
+	Index            int               `json:"index"`
+	CodecName        string            `json:"codec_name"`
+	CodecType        string            `json:"codec_type"`
+	Width            int               `json:"width"`
+	Height           int               `json:"height"`
+	AverageRate      string            `json:"avg_frame_rate"`
+	RealRate         string            `json:"r_frame_rate"`
+	PixelFormat      string            `json:"pix_fmt"`
+	ColorRange       string            `json:"color_range"`
+	SampleRate       string            `json:"sample_rate"`
+	Channels         int               `json:"channels"`
+	BitsPerRawSample string            `json:"bits_per_raw_sample"`
+	BitsPerSample    int               `json:"bits_per_sample"`
+	Tags             map[string]string `json:"tags"`
+	Disposition      map[string]int    `json:"disposition"`
 }
 
 type probeChapter struct {
@@ -121,10 +123,11 @@ func Parse(data []byte) (model.MediaInfo, error) {
 			})
 		case "audio":
 			info.AudioStreams = append(info.AudioStreams, model.AudioStream{
-				Index:      stream.Index,
-				Codec:      stream.CodecName,
-				SampleRate: parseInt(stream.SampleRate),
-				Channels:   stream.Channels,
+				Index:         stream.Index,
+				Codec:         stream.CodecName,
+				SampleRate:    parseInt(stream.SampleRate),
+				Channels:      stream.Channels,
+				BitsPerSample: parseBitsPerSample(stream),
 			})
 		case "subtitle":
 			info.SubtitleStreams = append(info.SubtitleStreams, model.SubtitleStream{
@@ -188,6 +191,20 @@ func parseInt(value string) int {
 		return 0
 	}
 	return number
+}
+
+// parseBitsPerSample reports a stream's coded sample depth in bits.
+// ffprobe exposes the codec-level depth as bits_per_raw_sample — a
+// string like sample_rate, "N/A" when the codec does not report one —
+// and the container-level depth as bits_per_sample. FLAC publishes only
+// the raw field, which is the one the join's FLAC depth decision
+// (ffmpeg.JoinAudioArgs) needs; 0 when neither is present, matching the
+// optional-metadata tolerance of the rest of the parser.
+func parseBitsPerSample(stream probeStream) int {
+	if raw := parseInt(stream.BitsPerRawSample); raw > 0 {
+		return raw
+	}
+	return stream.BitsPerSample
 }
 
 func parseFrameRate(candidates ...string) string {
