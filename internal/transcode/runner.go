@@ -294,7 +294,17 @@ func (Runner) RunSequence(control *RunControl, stages []Stage, cb Callbacks) err
 		err := (Runner{}).Run(control, stage.Plan, stage.Duration, Callbacks{
 			OnLog: cb.OnLog,
 			OnProgress: func(p model.Progress) {
-				if cb.OnProgress == nil || total <= 0 {
+				if cb.OnProgress == nil {
+					return
+				}
+				if total <= 0 {
+					// Unknown total (e.g. ffprobe reported no duration):
+					// there is no percentage, but the out-time, speed,
+					// and elapsed updates still show real progress.
+					// Forward them unchanged, preserving the
+					// missing-metadata degradation the direct run
+					// provides.
+					cb.OnProgress(p)
 					return
 				}
 				stageTime := p.OutTime

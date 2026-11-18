@@ -550,3 +550,34 @@ func TestRunSequenceHelperProcessModes(t *testing.T) {
 		t.Fatalf("error = %v, want labeled FFmpeg failure", err)
 	}
 }
+
+// Regression (Codex review round 6): RunSequence dropped every progress
+// event when the total duration was unknown — an input ffprobe reported
+// no duration still converts, but the UI lost the out-time, speed, and
+// elapsed updates the direct run delivered for the same input. The
+// events must be forwarded without a percentage instead.
+func TestRunSequenceForwardsProgressWithoutDuration(t *testing.T) {
+	var mu sync.Mutex
+	var events []model.Progress
+	err := (Runner{}).RunSequence(NewRunControl(), []Stage{
+		{Plan: helperPlan("progress"), Duration: 0, Label: "conversion"},
+	}, Callbacks{OnProgress: func(p model.Progress) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, p)
+	}})
+	if err != nil {
+		t.Fatalf("RunSequence() error = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 2 {
+		t.Fatalf("progress events = %d, want 2 forwarded", len(events))
+	}
+	for i, want := range []time.Duration{time.Second, 2 * time.Second} {
+		if events[i].OutTime != want || events[i].Percentage != 0 {
+			t.Fatalf("event %d = {OutTime %s, pct %f}, want {OutTime %s, pct 0}",
+				i, events[i].OutTime, events[i].Percentage, want)
+		}
+	}
+}
