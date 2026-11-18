@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 const streamKeysFixture = `{
@@ -341,5 +343,74 @@ func TestStreamKeysRunsConfiguredProbe(t *testing.T) {
 	}
 	if _, err := exec.LookPath(script); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// spawnHeldPipeProbe writes a wrapper probe that prints the fixture
+// JSON and exits, leaving a background child holding the inherited
+// stdout for 30 seconds — the shape that would block CombinedOutput
+// until the descendant exits without a WaitDelay bound.
+func spawnHeldPipeProbe(t *testing.T, dir string) (script, target string) {
+	t.Helper()
+	script = filepath.Join(dir, "wrapper-ffprobe")
+	if err := os.WriteFile(script, []byte( //nolint:gosec // G306: executable bit required for the fake probe
+		`#!/bin/sh`+"\n"+`sleep 30 &`+"\n"+`cat <<'JSON'`+"\n"+streamKeysFixture+"\n"+`JSON`+"\n",
+	), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target = filepath.Join(dir, "segment001.mkv")
+	if err := os.WriteFile(target, []byte("media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return script, target
+}
+
+func shortenProbeWaitDelay(t *testing.T) {
+	t.Helper()
+	original := probeWaitDelay
+	probeWaitDelay = 200 * time.Millisecond
+	t.Cleanup(func() { probeWaitDelay = original })
+}
+
+// TestStreamKeysToleratesDescendantHeldPipes pins the bounded drain: a
+// probe that exits successfully while a descendant still holds its
+// output pipes must yield its complete JSON once probeWaitDelay bounds
+// the drain — not block until the descendant exits, and not fail.
+func TestStreamKeysToleratesDescendantHeldPipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fake executable")
+	}
+	script, target := spawnHeldPipeProbe(t, t.TempDir())
+	shortenProbeWaitDelay(t)
+
+	started := time.Now()
+	keys, err := StreamKeys(context.Background(), script, target)
+	if elapsed := time.Since(started); err != nil || elapsed > 5*time.Second {
+		t.Fatalf("StreamKeys = %#v, %v after %s; the pipe drain must be bounded and the complete output parsed", keys, err, elapsed)
+	}
+	if len(keys) != 2 || keys[0].CodecName != "hevc" {
+		t.Fatalf("keys from wrapper probe: %#v", keys)
+	}
+}
+
+// TestStreamKeysCancelBoundsHeldPipes pins the cancellation side of the
+// bound: canceling a probe whose descendant holds the pipes must return
+// the context error promptly instead of waiting for the descendant.
+func TestStreamKeysCancelBoundsHeldPipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fake executable")
+	}
+	script, target := spawnHeldPipeProbe(t, t.TempDir())
+	shortenProbeWaitDelay(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	started := time.Now()
+	_, err := StreamKeys(ctx, script, target)
+	if elapsed := time.Since(started); !errors.Is(err, context.Canceled) || elapsed > 5*time.Second {
+		t.Fatalf("err = %v after %s; a canceled probe must return context.Canceled within the WaitDelay bound", err, elapsed)
 	}
 }

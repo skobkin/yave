@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // StreamKey is the comparable per-stream signature that concat-demuxer
@@ -63,10 +64,21 @@ type keyDocument struct {
 	Streams []keyStream `json:"streams"`
 }
 
+// probeWaitDelay bounds how long StreamKeys waits for the probe's I/O
+// pipes to close after ffprobe itself has exited (and how long a
+// canceled probe gets to die). A probe configured as a wrapper — a
+// sandbox launcher, a logging shell script — may leave a descendant
+// holding the inherited output pipes long after the JSON is complete,
+// which would otherwise block the caller until every descendant exits.
+var probeWaitDelay = 5 * time.Second
+
 // StreamKeys probes one media file and returns a StreamKey per stream,
 // in stream order, via -show_streams -show_data. Cancellation aborts a
 // hung probe; ctx errors are returned unwrapped so callers can detect
-// context.Canceled.
+// context.Canceled. A probe that exits successfully while a descendant
+// still holds its output pipes yields its complete output once
+// probeWaitDelay bounds the drain, instead of blocking on the
+// descendant.
 func StreamKeys(ctx context.Context, ffprobePath, path string) ([]StreamKey, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -89,16 +101,23 @@ func StreamKeys(ctx context.Context, ffprobePath, path string) ([]StreamKey, err
 		"-show_data",
 		path,
 	}
-	output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput() //nolint:gosec // G204: resolved via exec.LookPath
+	cmd := exec.CommandContext(ctx, resolved, args...) //nolint:gosec // G204: resolved via exec.LookPath
+	cmd.WaitDelay = probeWaitDelay
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		detail := strings.TrimSpace(string(output))
-		if detail == "" {
-			detail = err.Error()
+		if !errors.Is(err, exec.ErrWaitDelay) {
+			detail := strings.TrimSpace(string(output))
+			if detail == "" {
+				detail = err.Error()
+			}
+			return nil, fmt.Errorf("probe streams %q: %s", path, detail)
 		}
-		return nil, fmt.Errorf("probe streams %q: %s", path, detail)
+		// ErrWaitDelay can only mean the probe exited while a descendant
+		// still held the pipes (a running probe is unbounded without
+		// cancellation): the JSON collected is complete, so parse it.
 	}
 	keys, err := parseStreamKeys(output)
 	if err != nil {
