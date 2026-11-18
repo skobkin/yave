@@ -143,8 +143,10 @@ func parseStreamKeys(data []byte) ([]StreamKey, error) {
 // while the dump is still intact; everything else in STREAMINFO —
 // block and frame sizes, total sample count, the MD5 of the decoded
 // audio — is per-segment data the encoder finalizes per file and must
-// not reject joinable segments. An unparsable dump falls back to the
-// whitespace-normalized raw text, keeping the comparison strict.
+// not reject joinable segments. The join pass re-encodes FLAC audio as
+// one continuous stream (ffmpeg.JoinAudioArgs), so per-segment
+// STREAMINFO never reaches the output. An unparsable dump falls back
+// to the whitespace-normalized raw text, keeping the comparison strict.
 func streamExtradataSignature(codecName, extradata string) string {
 	if strings.EqualFold(codecName, "flac") {
 		if b, ok := parseHexDump(extradata); ok && len(b) >= 14 {

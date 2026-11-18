@@ -676,6 +676,127 @@ func TestBuildConcatCommand(t *testing.T) {
 	}
 }
 
+func TestBuildConcatCommandAudioArgs(t *testing.T) {
+	t.Parallel()
+	build := func(audioArgs []string) []string {
+		t.Helper()
+		plan, err := BuildConcatCommand(ConcatRequest{
+			FFmpegPath: "/usr/bin/ffmpeg",
+			ListPath:   "/tmp/yave-join-123/concat.txt",
+			OutputPath: "/tmp/yave-join-123/final.mkv",
+			Container:  model.ContainerMKV,
+			AudioArgs:  audioArgs,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return plan.Args
+	}
+
+	args := build([]string{"-c:a", "flac", "-compression_level", "5"})
+	if !containsPair(args, "-c", "copy") {
+		t.Errorf("blanket -c copy must stay for video/subtitles: %#v", args)
+	}
+	iCopy, iFlac := indexOfArg(args, "copy"), indexOfArg(args, "-c:a")
+	if iFlac < 0 {
+		t.Fatalf("missing -c:a override: %#v", args)
+	}
+	if iFlac < iCopy {
+		t.Errorf("-c:a must follow -c copy to override audio only: %#v", args)
+	}
+	if !containsPair(args, "-c:a", "flac") || !containsPair(args, "-compression_level", "5") {
+		t.Errorf("audio re-encode args missing or reordered: %#v", args)
+	}
+
+	nilArgs := build(nil)
+	if indexOfArg(nilArgs, "-c:a") >= 0 {
+		t.Errorf("no AudioArgs must leave plain copy: %#v", nilArgs)
+	}
+}
+
+func TestJoinAudioArgs(t *testing.T) {
+	t.Parallel()
+	media := func(codecs ...string) model.MediaInfo {
+		streams := make([]model.AudioStream, len(codecs))
+		for i, codec := range codecs {
+			streams[i] = model.AudioStream{Index: i, Codec: codec}
+		}
+		return model.MediaInfo{AudioStreams: streams}
+	}
+	tests := []struct {
+		name      string
+		audio     model.AudioSettings
+		media     model.MediaInfo
+		wantArgs  []string
+		wantError string
+	}{
+		{
+			name:     "flac encode joins with the profile's encoder args",
+			audio:    model.AudioSettings{Mode: model.AudioEncode, Encoder: "flac", Compression: 8},
+			wantArgs: []string{"-c:a", "flac", "-compression_level", "8"},
+		},
+		{
+			name:     "aac encode keeps copy",
+			audio:    model.AudioSettings{Mode: model.AudioEncode, Encoder: "aac", Bitrate: "192k"},
+			media:    media("aac"),
+			wantArgs: nil,
+		},
+		{
+			name:     "copied first-stream flac re-encodes with defaults",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy},
+			media:    media("flac"),
+			wantArgs: []string{"-c:a", "flac"},
+		},
+		{
+			name:     "copied aac keeps copy",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy},
+			media:    media("aac"),
+			wantArgs: nil,
+		},
+		{
+			name:     "copy all streams checks every stream for flac",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy, CopyAllStreams: true},
+			media:    media("aac", "flac"),
+			wantArgs: []string{"-c:a", "flac"},
+		},
+		{
+			name:     "single-stream copy ignores a second flac stream",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy},
+			media:    media("aac", "flac"),
+			wantArgs: nil,
+		},
+		{
+			name:     "copied audio with no streams keeps copy",
+			audio:    model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy},
+			media:    model.MediaInfo{},
+			wantArgs: nil,
+		},
+		{
+			name:      "unknown encode-mode encoder errors",
+			audio:     model.AudioSettings{Mode: model.AudioEncode, Encoder: "madeup"},
+			wantError: `unsupported audio encoder "madeup"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			args, err := JoinAudioArgs(model.Profile{Audio: tt.audio}, tt.media)
+			if tt.wantError != "" {
+				if err == nil || err.Error() != tt.wantError {
+					t.Fatalf("err = %v, want %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(args, tt.wantArgs) {
+				t.Errorf("args = %#v, want %#v", args, tt.wantArgs)
+			}
+		})
+	}
+}
+
 func TestBuildConcatCommandRejectsUnknownContainer(t *testing.T) {
 	t.Parallel()
 	if _, err := BuildConcatCommand(ConcatRequest{

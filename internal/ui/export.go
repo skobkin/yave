@@ -263,7 +263,8 @@ func (c *Controller) planSeparateExport(req exportRequest, staged func(string) s
 // intermediates (processing-only stages — never counted or logged as
 // published), runtime verification that every intermediate shares one
 // stream layout, and a concat-demuxer pass to a staged final carrying
-// the real container extension.
+// the real container extension. The pass copies the copied streams;
+// FLAC audio is re-encoded continuously (JoinAudioArgs).
 func (c *Controller) planJoinExport(req exportRequest, staged func(string) string, segments []model.TimeRange) (exportPlan, error) {
 	if strings.TrimSpace(req.ffprobePath) == "" {
 		return exportPlan{}, errors.New("joining requires ffprobe to verify segment compatibility; configure an ffprobe executable in Settings")
@@ -294,11 +295,21 @@ func (c *Controller) planJoinExport(req exportRequest, staged func(string) strin
 	}
 	listPath := staged("concat.txt")
 	stagedFinal := staged("final" + containerExt(req.profile.Container))
+	// FLAC audio must be re-encoded as one continuous stream in the
+	// join pass (per-segment STREAMINFO and restarted frame numbering
+	// make a copied join non-conforming); every other audio codec stays
+	// copied. Decision from the realized profile plus the media
+	// snapshot, not the live config.
+	joinAudio, err := ffmpeg.JoinAudioArgs(req.profile, c.media)
+	if err != nil {
+		return exportPlan{}, fmt.Errorf("join command: %w", err)
+	}
 	concat, err := ffmpeg.BuildConcatCommand(ffmpeg.ConcatRequest{
 		FFmpegPath: c.config.FFmpeg.FFmpegPath,
 		ListPath:   listPath,
 		OutputPath: stagedFinal,
 		Container:  req.profile.Container,
+		AudioArgs:  joinAudio,
 	})
 	if err != nil {
 		return exportPlan{}, fmt.Errorf("join command: %w", err)
@@ -310,8 +321,9 @@ func (c *Controller) planJoinExport(req exportRequest, staged func(string) strin
 		stagedPath: stagedFinal,
 		stage: transcode.Stage{
 			Plan: concat,
-			// The join pass stream-copies every segment; its progress
-			// denominator is the whole selection.
+			// The join pass stream-copies every segment except FLAC
+			// audio, which it re-encodes continuously (lossless); its
+			// progress denominator is the whole selection.
 			Duration:   model.TrimSelection{Segments: segments}.Total(),
 			Label:      "joining segments",
 			OutputPath: req.baseOutput,

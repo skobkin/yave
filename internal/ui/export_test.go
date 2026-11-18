@@ -523,6 +523,56 @@ func TestPlanExportShapes(t *testing.T) {
 		}
 	})
 
+	t.Run("join re-encodes FLAC audio continuously", func(t *testing.T) {
+		// FLAC cannot be stream-copy joined: independently produced
+		// segments each finalize their own STREAMINFO and restart frame
+		// numbering, and a copied join preserves both — the FLAC
+		// reference decoder rejects the result. The concat pass must
+		// re-encode FLAC audio as one continuous (lossless) stream,
+		// for re-encoded segments and copied source audio alike, and
+		// must leave every other audio codec copied.
+		c, _, _ := exportTestController(t)
+		setTrimSegments(c, segments[:2]...)
+		c.trimExportMode = model.TrimExportJoin
+		dir := t.TempDir()
+
+		concatArgs := func(profile model.Profile, media model.MediaInfo) string {
+			t.Helper()
+			c.media = media
+			planned, err := c.planExport(exportRequest{
+				profile: profile, baseOutput: filepath.Join(dir, "movie.mkv"),
+				stagingDir: dir, ffprobePath: "/usr/bin/ffprobe",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return strings.Join(planned.stages[len(planned.stages)-1].stage.Plan.Args, " ")
+		}
+
+		flacEncode := exportTestProfile()
+		flacEncode.Audio = model.AudioSettings{Mode: model.AudioEncode, Encoder: "flac", Compression: 7}
+		if joined := concatArgs(flacEncode, model.MediaInfo{Duration: 30 * time.Second}); !strings.Contains(joined, "-c:a flac -compression_level 7") {
+			t.Errorf("flac-encode join must re-encode with the profile's settings: %s", joined)
+		}
+
+		copied := exportTestProfile()
+		flacMedia := model.MediaInfo{
+			Duration:     30 * time.Second,
+			AudioStreams: []model.AudioStream{{Codec: "flac"}},
+		}
+		if joined := concatArgs(copied, flacMedia); !strings.Contains(joined, "-c copy -c:a flac") || strings.Contains(joined, "-compression_level") {
+			t.Errorf("copied FLAC source must re-encode with encoder defaults: %s", joined)
+		}
+
+		aacMedia := model.MediaInfo{
+			Duration:     30 * time.Second,
+			AudioStreams: []model.AudioStream{{Codec: "aac"}},
+		}
+		if joined := concatArgs(exportTestProfile(), aacMedia); strings.Contains(joined, "-c:a") {
+			t.Errorf("non-FLAC audio must stay copied: %s", joined)
+		}
+	})
+
 	t.Run("relative output gets absolute concat-list entries", func(t *testing.T) {
 		// A template without {dir} resolves to a path relative to the
 		// process working directory, and the staging directory would be

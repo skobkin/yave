@@ -36,8 +36,10 @@ var joinSegments = []model.TimeRange{
 // runJoinPipeline composes and runs the join pipeline for one output.
 // It publishes by rename exactly like the job's approved path but
 // leaves the staging directory in place (returned) so tests can
-// inspect the intermediates; cleanup is the caller's job.
-func runJoinPipeline(t *testing.T, ffmpegPath, ffprobePath, input, output string, profile model.Profile, segments []model.TimeRange, verify bool) (parts []string, staging string) {
+// inspect the intermediates; cleanup is the caller's job. media is the
+// probed input snapshot the production planner would pass (only the
+// audio stream codecs are consulted, for the copy-mode join decision).
+func runJoinPipeline(t *testing.T, ffmpegPath, ffprobePath, input, output string, profile model.Profile, segments []model.TimeRange, verify bool, media model.MediaInfo) (parts []string, staging string) {
 	t.Helper()
 	var err error
 	staging, err = os.MkdirTemp(filepath.Dir(output), "yave-export-*")
@@ -48,6 +50,10 @@ func runJoinPipeline(t *testing.T, ffmpegPath, ffprobePath, input, output string
 
 	intermediate := profile
 	intermediate.Container = model.ContainerMKV
+	buildMedia := media
+	if len(buildMedia.VideoStreams) == 0 {
+		buildMedia.VideoStreams = []model.VideoStream{{Width: 320, Height: 240}}
+	}
 	parts = make([]string, len(segments))
 	for i, seg := range segments {
 		parts[i] = filepath.Join(staging, fmt.Sprintf("segment%03d.mkv", i+1))
@@ -56,7 +62,7 @@ func runJoinPipeline(t *testing.T, ffmpegPath, ffprobePath, input, output string
 			InputPath:  input,
 			OutputPath: parts[i],
 			Profile:    intermediate,
-			Media:      model.MediaInfo{VideoStreams: []model.VideoStream{{Width: 320, Height: 240}}},
+			Media:      buildMedia,
 			Trim:       model.TrimSelection{Segments: []model.TimeRange{seg}},
 		})
 		if err != nil {
@@ -87,11 +93,18 @@ func runJoinPipeline(t *testing.T, ffmpegPath, ffprobePath, input, output string
 		t.Fatalf("write concat list: %v", err)
 	}
 	stagedFinal := filepath.Join(staging, "final"+filepath.Ext(output))
+	// JoinAudioArgs mirrors the production planner's join decision:
+	// FLAC audio is re-encoded continuously, everything else is copied.
+	joinAudio, err := JoinAudioArgs(profile, media)
+	if err != nil {
+		t.Fatalf("join audio args: %v", err)
+	}
 	concat, err := BuildConcatCommand(ConcatRequest{
 		FFmpegPath: ffmpegPath,
 		ListPath:   list,
 		OutputPath: stagedFinal,
 		Container:  profile.Container,
+		AudioArgs:  joinAudio,
 	})
 	if err != nil {
 		t.Fatalf("join command: %v", err)
@@ -114,8 +127,10 @@ func runPlan(t *testing.T, plan model.RunPlan) {
 }
 
 // joinIntegrationEnv performs the skips every join test shares and
-// generates the fixture. It returns the fixture path.
-func joinIntegrationEnv(t *testing.T) (ffmpegPath, input string) {
+// generates the fixture. It returns the fixture path and the media
+// snapshot the join pipeline's audio decision consults (the fixture's
+// audio is AAC).
+func joinIntegrationEnv(t *testing.T) (ffmpegPath, input string, media model.MediaInfo) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("integration test (real FFmpeg)")
@@ -134,7 +149,8 @@ func joinIntegrationEnv(t *testing.T) (ffmpegPath, input string) {
 	dir := t.TempDir()
 	input = filepath.Join(dir, "input.mp4")
 	writeTrimFixture(t, ffmpegPath, input, filepath.Join(dir, "subs.srt"))
-	return ffmpegPath, input
+	media = model.MediaInfo{AudioStreams: []model.AudioStream{{Codec: "aac"}}}
+	return ffmpegPath, input, media
 }
 
 // joinTestProfile returns the software x265 profile pinned to
@@ -152,7 +168,7 @@ func joinTestProfile(container string, audio model.AudioSettings) model.Profile 
 // duration with video and audio in sync, and that the staging
 // directory does not survive publication.
 func TestJoinIntegration(t *testing.T) {
-	ffmpegPath, input := joinIntegrationEnv(t)
+	ffmpegPath, input, media := joinIntegrationEnv(t)
 	ffprobePath := "ffprobe"
 
 	// 2s of selected material joined across 1 boundary.
@@ -170,7 +186,7 @@ func TestJoinIntegration(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			profile := joinTestProfile(tc.container, model.AudioSettings{Mode: model.AudioCopy, Encoder: "copy"})
 			output := filepath.Join(t.TempDir(), "joined"+tc.ext)
-			_, staging := runJoinPipeline(t, ffmpegPath, ffprobePath, input, output, profile, joinSegments, true)
+			_, staging := runJoinPipeline(t, ffmpegPath, ffprobePath, input, output, profile, joinSegments, true, media)
 
 			// The staged final left the staging dir by rename; cleanup
 			// (the job's contract) must then remove the directory.
@@ -233,12 +249,12 @@ func probeStreamLayoutCSV(t *testing.T, path string) string {
 // join relies on: every intermediate probes to the identical stream
 // layout, and the joined output carries it too.
 func TestJoinIntermediatesShareStreamLayout(t *testing.T) {
-	ffmpegPath, input := joinIntegrationEnv(t)
+	ffmpegPath, input, media := joinIntegrationEnv(t)
 	ffprobePath := "ffprobe"
 
 	profile := joinTestProfile(model.ContainerMKV, model.AudioSettings{Mode: model.AudioCopy, Encoder: "copy"})
 	output := filepath.Join(t.TempDir(), "joined.mkv")
-	parts, staging := runJoinPipeline(t, ffmpegPath, ffprobePath, input, output, profile, joinSegments, true)
+	parts, staging := runJoinPipeline(t, ffmpegPath, ffprobePath, input, output, profile, joinSegments, true, media)
 	t.Cleanup(func() { _ = os.RemoveAll(staging) })
 
 	joinedLayout := probeStreamLayoutCSV(t, output)
@@ -451,7 +467,7 @@ func assertBoundaryContinuity(t *testing.T, audio pcm, boundary time.Duration, m
 // tolerance comment) and reports the evidence in a skip — it is not
 // declared supported.
 func TestJoinAudioBoundaryContinuity(t *testing.T) {
-	ffmpegPath, input := joinIntegrationEnv(t)
+	ffmpegPath, input, media := joinIntegrationEnv(t)
 	ffprobePath := "ffprobe"
 
 	// Boundaries in joined-output time: each segment's start is the sum
@@ -479,7 +495,7 @@ func TestJoinAudioBoundaryContinuity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			profile := joinTestProfile(model.ContainerMKV, tc.audio)
 			output := filepath.Join(t.TempDir(), "joined.mkv")
-			_, staging := runJoinPipeline(t, ffmpegPath, ffprobePath, input, output, profile, joinSegments, true)
+			_, staging := runJoinPipeline(t, ffmpegPath, ffprobePath, input, output, profile, joinSegments, true, media)
 			t.Cleanup(func() { _ = os.RemoveAll(staging) })
 
 			// Timestamp continuity: the first packet at or after each
@@ -535,7 +551,7 @@ func firstAtOrAfter(times []float64, at float64) (float64, bool) {
 // published by rename, measures its own segment's duration, and shares
 // the other parts' stream layout.
 func TestSeparatePartsIntegration(t *testing.T) {
-	ffmpegPath, input := joinIntegrationEnv(t)
+	ffmpegPath, input, _ := joinIntegrationEnv(t)
 	ffprobePath := "ffprobe"
 
 	dir := t.TempDir()
@@ -583,5 +599,121 @@ func TestSeparatePartsIntegration(t *testing.T) {
 		if layout := probeStreamLayoutCSV(t, part); layout != firstLayout {
 			t.Errorf("part %d layout differs from part 1:\n%s\nvs\n%s", i+2, layout, firstLayout)
 		}
+	}
+}
+
+// writeFLACFixture generates a six-second source whose audio is FLAC
+// at 44.1 kHz, so both join shapes (re-encoded segments and copied
+// source audio) carry FLAC into the intermediates.
+func writeFLACFixture(t *testing.T, ffmpegPath, path string) {
+	t.Helper()
+	out, err := exec.CommandContext(context.Background(), ffmpegPath, []string{ //nolint:gosec // G204: integration test drives the locally discovered FFmpeg with t.TempDir paths
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=duration=6:size=320x240:rate=30",
+		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=6",
+		"-map", "0:v:0", "-map", "1:a:0",
+		"-c:v", "libx264", "-preset", "ultrafast", "-g", "90",
+		"-c:a", "flac",
+		"-y", path,
+	}...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("generating FLAC fixture: %v: %s", err, out)
+	}
+}
+
+// TestJoinFLACAudioIsReencodedContinuously pins the FLAC join fix.
+// Independently produced FLAC segments each finalize their own
+// STREAMINFO and restart frame numbering, and a stream-copy join
+// preserves both: the output's header then describes only the first
+// segment and frame sample numbers regress across every boundary. The
+// FLAC reference decoder rejects such streams outright (flac 1.5.0:
+// "sample or frame number does not increase correctly" with
+// MISSING_FRAME errors; with source-copied segments it aborts
+// mid-stream), while ffmpeg's own decoder merely tolerates them. The
+// join pass therefore re-encodes FLAC audio as one continuous stream —
+// lossless, so no generational quality loss — and this test verifies
+// the result through the reference decoder when it is installed, plus
+// sample accounting through the pipeline's own decoders.
+func TestJoinFLACAudioIsReencodedContinuously(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real FFmpeg)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe not installed")
+	}
+	// libx264 generates the fixture, flac is the audio under test.
+	requireEncoders(t, ffmpegPath, "libx264", "flac")
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.mkv")
+	writeFLACFixture(t, ffmpegPath, input)
+	ffprobePath := "ffprobe"
+	media := model.MediaInfo{AudioStreams: []model.AudioStream{{Codec: "flac"}}}
+
+	var selection time.Duration
+	for _, seg := range joinSegments {
+		selection += seg.Length()
+	}
+
+	for _, tc := range []struct {
+		name  string
+		audio model.AudioSettings
+		// Cuts snap to FLAC frame boundaries (up to one 4096-sample
+		// frame per segment; copied cuts always, re-encoded cuts
+		// ±1 sample where the ms container timebase cannot represent
+		// the cut position at 44.1 kHz).
+		slop int
+	}{
+		{name: "re-encoded segments", audio: model.AudioSettings{Mode: model.AudioEncode, Encoder: "flac", Compression: 5}, slop: 2 * len(joinSegments)},
+		{name: "copied source audio", audio: model.AudioSettings{Mode: model.AudioCopy, Encoder: model.AudioCopy}, slop: 2 * 4096 * len(joinSegments)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := joinTestProfile(model.ContainerMKV, tc.audio)
+			output := filepath.Join(t.TempDir(), "joined.mkv")
+			parts, staging := runJoinPipeline(t, ffmpegPath, ffprobePath, input, output, profile, joinSegments, true, media)
+			t.Cleanup(func() { _ = os.RemoveAll(staging) })
+
+			// The join pass re-encodes the segments' audio as one
+			// continuous stream, so it must contain exactly what the
+			// segments decode to — the fix's core fidelity property.
+			audio := decodeAudioPCM(t, ffmpegPath, output)
+			segmentSamples := 0
+			for _, part := range parts {
+				segmentSamples += len(decodeAudioPCM(t, ffmpegPath, part).samples)
+			}
+			if len(audio.samples) != segmentSamples {
+				t.Errorf("joined audio = %d samples, segments decode to %d: the join lost or duplicated material", len(audio.samples), segmentSamples)
+			}
+
+			// And the segments themselves carry (approximately) the
+			// selection: this bounds the pre-existing cut rounding, not
+			// the join.
+			want := int(selection.Seconds()*float64(audio.rate)) * audio.channels
+			if diff := segmentSamples - want; diff < -tc.slop || diff > tc.slop {
+				t.Errorf("segments decode to %d samples, want the selection %d (±%d)", segmentSamples, want, tc.slop)
+			}
+
+			// Reference-decoder check: the canonical FLAC decoder must
+			// accept the joined stream. A copy-joined file fails here.
+			if _, err := exec.LookPath("flac"); err != nil {
+				t.Log("flac CLI not installed; skipping the reference-decoder check")
+				return
+			}
+			extracted := filepath.Join(t.TempDir(), "joined.flac")
+			if out, err := exec.CommandContext(context.Background(), ffmpegPath, []string{ //nolint:gosec // G204: locally discovered FFmpeg on t.TempDir paths
+				"-hide_banner", "-loglevel", "error",
+				"-i", output, "-map", "0:a:0", "-c:a", "copy", "-y", extracted,
+			}...).CombinedOutput(); err != nil {
+				t.Fatalf("extracting the FLAC stream: %v: %s", err, out)
+			}
+			if out, err := exec.CommandContext(context.Background(), "flac", []string{ //nolint:gosec // G204: reference decoder presence checked above
+				"-t", "-s", extracted,
+			}...).CombinedOutput(); err != nil {
+				t.Fatalf("flac -t rejected the joined stream: %v: %s", err, out)
+			}
+		})
 	}
 }

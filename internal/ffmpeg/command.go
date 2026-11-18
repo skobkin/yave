@@ -299,6 +299,11 @@ type ConcatRequest struct {
 	// model.Container* values.
 	Container string
 	Overwrite bool
+	// AudioArgs, when non-empty, overrides the blanket stream copy for
+	// audio streams: the join pass decodes the intermediates' audio and
+	// re-encodes it once with these args (JoinAudioArgs builds them).
+	// Video and subtitle streams stay copied.
+	AudioArgs []string
 }
 
 // containerMuxer maps a curated container to the explicit ffmpeg output
@@ -317,9 +322,11 @@ func containerMuxer(container string) (string, error) {
 }
 
 // BuildConcatCommand builds the join pass: a concat-demuxer invocation
-// that stream-copies every listed intermediate into one output. The
-// intermediates' compatibility is verified separately (ffprobe stream
-// layout comparison) before this command runs.
+// that stream-copies every listed intermediate into one output. FLAC
+// audio is the exception (AudioArgs): it must be re-encoded as one
+// continuous stream. The intermediates' compatibility is verified
+// separately (ffprobe stream layout comparison) before this command
+// runs.
 func BuildConcatCommand(req ConcatRequest) (model.RunPlan, error) {
 	if req.FFmpegPath == "" {
 		return model.RunPlan{}, errors.New("FFmpeg path is empty")
@@ -341,6 +348,9 @@ func BuildConcatCommand(req ConcatRequest) (model.RunPlan, error) {
 	args = append(args, "-progress", "pipe:1", "-nostats")
 	args = append(args, "-f", "concat", "-safe", "0", "-i", req.ListPath)
 	args = append(args, "-map", "0", "-c", "copy")
+	// After -c copy so the later -c:a overrides copy for audio streams
+	// only; video and subtitles stay copied.
+	args = append(args, req.AudioArgs...)
 	if req.Container == model.ContainerMP4 {
 		args = append(args, "-movflags", "+faststart")
 	}
@@ -351,6 +361,59 @@ func BuildConcatCommand(req ConcatRequest) (model.RunPlan, error) {
 		Preview:    ShellPreview(req.FFmpegPath, args),
 		OutputPath: req.OutputPath,
 	}, nil
+}
+
+// JoinAudioArgs decides how the join pass handles the intermediates'
+// audio: nil means stream copy (the default), non-nil args are the
+// audio re-encode BuildConcatCommand must append.
+//
+// FLAC never gets nil. Independently produced segments each finalize
+// their own STREAMINFO (total sample count, decoded-audio MD5) and
+// restart frame numbering at zero, and a stream-copy join preserves
+// both — the output's header then describes only the first segment and
+// frame sample numbers regress across every boundary. The FLAC
+// reference decoder rejects such streams outright (flac 1.5.0: "sample
+// or frame number does not increase correctly" with MISSING_FRAME
+// errors; source-copied segments abort mid-stream), while FFmpeg's own
+// decoder merely tolerates them. Re-encoding in the join pass decodes
+// the segments' FLAC and encodes one continuous stream: lossless, so
+// no generational quality loss, and the result is a conforming file.
+//
+// Encode mode reuses the profile's audio args — the same encoder and
+// compression level the segments were built with. Copy mode cannot:
+// its encoder settings describe a passthrough, and letting an AAC
+// choice leak in would turn a lossless source into a lossy re-encode —
+// so copied FLAC audio is re-encoded with the native FLAC encoder's
+// defaults, which the MKV-only FLAC container matrix accepts.
+func JoinAudioArgs(p model.Profile, media model.MediaInfo) ([]string, error) {
+	if !p.Audio.IsStreamCopy() {
+		raw, ok := encoder.DefaultRegistry().Get(p.Audio.Encoder)
+		if !ok {
+			return nil, fmt.Errorf("unsupported audio encoder %q", p.Audio.Encoder)
+		}
+		ae, ok := raw.(encoder.AudioEncoder)
+		if !ok {
+			return nil, fmt.Errorf("encoder %q is not an audio encoder", p.Audio.Encoder)
+		}
+		if !strings.EqualFold(ae.CodecFamily(), "flac") {
+			return nil, nil
+		}
+		return buildAudioArgs(p.Audio)
+	}
+	// Copy mode: the intermediates carry the source's codec. Mirror the
+	// stream selection the profile maps (validation's selectedAudioCodecs
+	// applies the same CopyAllStreams split), so the decision covers
+	// exactly the streams the join publishes.
+	streams := media.AudioStreams
+	if !p.Audio.CopyAllStreams && len(streams) > 1 {
+		streams = streams[:1]
+	}
+	for _, stream := range streams {
+		if strings.EqualFold(strings.TrimSpace(stream.Codec), "flac") {
+			return []string{"-c:a", "flac"}, nil
+		}
+	}
+	return nil, nil
 }
 
 // WriteConcatList writes the concat demuxer's list file: one
