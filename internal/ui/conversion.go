@@ -119,9 +119,10 @@ func (c *Controller) startConversion() {
 	}
 	if c.trimEnabled {
 		result.Merge(validation.ValidateTrim(c.trimSelection, &c.media, p.Video.Encoder))
-		// Join-export checks (video-copy rejection, audio-copy warning)
-		// gate BEFORE any dialog or staging directory is created.
-		result.Merge(validation.ValidateTrimExport(c.trimSelection, c.trimExportMode, &c.media, p.Video.Encoder, p.Audio))
+		// Join-export checks (video-copy rejection, copied-FLAC encoder
+		// availability, audio-copy warning) gate BEFORE any dialog or
+		// staging directory is created.
+		result.Merge(validation.ValidateTrimExport(c.trimSelection, c.trimExportMode, &c.media, c.caps, p.Video.Encoder, p.Audio))
 		// Invalid timecode entries keep the last valid selection for
 		// display, but Start must never silently use those stale
 		// boundaries.

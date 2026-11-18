@@ -73,7 +73,7 @@ func ValidateTrim(trim model.TrimSelection, media *model.MediaInfo, videoEncoder
 // profile-level validation, which must stay usable without source
 // metadata.
 func ValidateTrimExport(trim model.TrimSelection, mode model.TrimExportMode,
-	media *model.MediaInfo, videoEncoder string, audio model.AudioSettings) Result {
+	media *model.MediaInfo, caps model.Capabilities, videoEncoder string, audio model.AudioSettings) Result {
 	var result Result
 	if !trim.Active() || mode != model.TrimExportJoin || len(trim.Segments) <= 1 {
 		return result
@@ -88,10 +88,28 @@ func ValidateTrimExport(trim model.TrimSelection, mode model.TrimExportMode,
 				"select a video encoder, or switch the export mode to separate files")
 	}
 	if audio.IsStreamCopy() {
-		result.warning("trim.export", "%s",
-			"joining with copied audio can leave small gaps (about 20 ms) at each segment boundary "+
-				"from codec priming samples; switch the export mode to separate files "+
-				"for gap-free parts")
+		// Copied FLAC audio cannot be stream-copy joined: the join pass
+		// must re-encode it into one continuous stream (per-segment
+		// STREAMINFO and restarted frame numbering make a copied join a
+		// file the FLAC reference decoder rejects), which needs the FLAC
+		// encoder. Copy-mode profile validation never checks encoder
+		// availability, so this is the only gate — without it every
+		// segment would encode before the join failed. FLAC is lossless
+		// and carries no priming samples, so the copied-audio gap
+		// warning below deliberately does not apply to it.
+		if codecs, known := selectedAudioCodecs(audio, media); known && contains(codecs, "flac") {
+			if !encoderAvailable(caps, "flac") {
+				result.error("trim.export", "%s",
+					"joining copied FLAC audio requires the FLAC encoder to rebuild one continuous stream "+
+						"(a stream copy would produce a file the FLAC reference decoder rejects); "+
+						"the configured FFmpeg build does not provide it — switch the export mode to separate files")
+			}
+		} else {
+			result.warning("trim.export", "%s",
+				"joining with copied audio can leave small gaps (about 20 ms) at each segment boundary "+
+					"from codec priming samples; switch the export mode to separate files "+
+					"for gap-free parts")
+		}
 	} else if strings.Contains(strings.ToLower(strings.TrimSpace(audio.Encoder)), "aac") {
 		// Measured by the join integration tests
 		// (TestJoinAudioBoundaryContinuity): independently re-encoded AAC

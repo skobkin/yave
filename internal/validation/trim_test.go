@@ -188,6 +188,7 @@ func TestValidateTrimExport(t *testing.T) {
 		trim          model.TrimSelection
 		mode          model.TrimExportMode
 		media         *model.MediaInfo
+		caps          model.Capabilities
 		videoEncoder  string
 		audio         model.AudioSettings
 		wantErrors    int
@@ -241,6 +242,47 @@ func TestValidateTrimExport(t *testing.T) {
 			wantWarnings: 1, wantSubstring: "copied audio",
 		},
 		{
+			// The join pass rebuilds copied FLAC audio as one continuous
+			// stream, so the build must be able to encode FLAC — copy-mode
+			// profile validation never checks encoder availability, making
+			// this the only gate before every segment would encode and the
+			// join then fail. FLAC is lossless: no priming warning here.
+			name: "copied flac join without the encoder errors",
+			trim: multi, mode: model.TrimExportJoin,
+			media:        &model.MediaInfo{Duration: 10 * time.Minute, AudioStreams: []model.AudioStream{{Codec: "flac"}}},
+			videoEncoder: "libx264",
+			audio:        model.AudioSettings{Mode: model.AudioCopy},
+			wantErrors:   1, wantSubstring: "FLAC encoder",
+		},
+		{
+			name: "copied flac join with the encoder available is clean",
+			trim: multi, mode: model.TrimExportJoin,
+			media:        &model.MediaInfo{Duration: 10 * time.Minute, AudioStreams: []model.AudioStream{{Codec: "flac"}}},
+			caps:         model.Capabilities{Encoders: map[string]model.Encoder{"flac": {Name: "flac"}}},
+			videoEncoder: "libx264",
+			audio:        model.AudioSettings{Mode: model.AudioCopy},
+		},
+		{
+			name: "copied mixed audio targets only the flac stream for the check",
+			trim: multi, mode: model.TrimExportJoin,
+			media: &model.MediaInfo{Duration: 10 * time.Minute, AudioStreams: []model.AudioStream{
+				{Codec: "aac"}, {Codec: "flac"},
+			}},
+			caps:         model.Capabilities{Encoders: map[string]model.Encoder{"flac": {Name: "flac"}}},
+			videoEncoder: "libx264",
+			audio:        model.AudioSettings{Mode: model.AudioCopy, CopyAllStreams: true},
+		},
+		{
+			name: "unmapped second-stream flac keeps the copy warning",
+			trim: multi, mode: model.TrimExportJoin,
+			media: &model.MediaInfo{Duration: 10 * time.Minute, AudioStreams: []model.AudioStream{
+				{Codec: "aac"}, {Codec: "flac"},
+			}},
+			videoEncoder: "libx264",
+			audio:        model.AudioSettings{Mode: model.AudioCopy},
+			wantWarnings: 1, wantSubstring: "copied audio",
+		},
+		{
 			name: "separate mode never checked",
 			trim: multi, mode: model.TrimExportSeparate, media: media,
 			videoEncoder: "copy", audio: model.AudioSettings{Mode: model.AudioCopy},
@@ -265,7 +307,7 @@ func TestValidateTrimExport(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := ValidateTrimExport(tt.trim, tt.mode, tt.media, tt.videoEncoder, tt.audio)
+			result := ValidateTrimExport(tt.trim, tt.mode, tt.media, tt.caps, tt.videoEncoder, tt.audio)
 			if len(result.Errors) != tt.wantErrors {
 				t.Errorf("errors = %d (%v), want %d", len(result.Errors), result.Errors, tt.wantErrors)
 			}

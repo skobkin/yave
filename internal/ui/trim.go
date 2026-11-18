@@ -202,11 +202,11 @@ func (c *Controller) updateTrimMessages(encoder string, audio model.AudioSetting
 			}
 		}
 		result := validation.ValidateTrim(c.trimSelection, &c.media, encoder)
-		// Join-mode export checks (video-copy rejection, audio-copy
-		// gap warning) merge here: ValidateTrimExport is a no-op unless
-		// joining more than one segment, so the separate-file mode adds
-		// nothing.
-		result.Merge(validation.ValidateTrimExport(c.trimSelection, c.trimExportMode, &c.media, encoder, audio))
+		// Join-mode export checks (video-copy rejection, copied-FLAC
+		// encoder availability, audio-copy gap warning) merge here:
+		// ValidateTrimExport is a no-op unless joining more than one
+		// segment, so the separate-file mode adds nothing.
+		result.Merge(validation.ValidateTrimExport(c.trimSelection, c.trimExportMode, &c.media, c.caps, encoder, audio))
 		for _, issue := range result.Errors {
 			parts = append(parts, "Error: "+issue.Message)
 		}
