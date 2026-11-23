@@ -18,10 +18,18 @@ import (
 
 func (c *Controller) buildLayout() fyne.CanvasObject {
 	browse := widget.NewButton("Browse...", c.chooseInput)
+	c.showAllFiles = widget.NewCheck("All files", nil)
+	recent := widget.NewButton("Recent", nil)
+	recent.OnTapped = func() {
+		menu := widget.NewPopUpMenu(c.recentMenu(), c.window.Canvas())
+		pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(recent)
+		menu.ShowAtPosition(pos.Add(fyne.NewPos(0, recent.Size().Height)))
+	}
+	copyInfo := widget.NewButton("Copy", func() { fyne.CurrentApp().Clipboard().SetContent(c.mediaInfo.Text) })
 	inputBox := container.NewVBox(
 		widget.NewCard("FFmpeg", "", c.detection),
-		widget.NewCard("Input", "", container.NewBorder(nil, nil, nil, browse, c.inputEntry)),
-		widget.NewCard("Media information", "", c.mediaInfo),
+		widget.NewCard("Input", "", container.NewBorder(nil, nil, nil, container.NewHBox(c.showAllFiles, recent, browse), c.inputEntry)),
+		widget.NewCard("Media information", "", container.NewBorder(nil, container.NewHBox(layout.NewSpacer(), copyInfo), nil, nil, c.mediaInfo)),
 	)
 	inputTab := container.NewVScroll(inputBox)
 

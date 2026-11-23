@@ -42,6 +42,11 @@ type UIConfig struct {
 	TrayNoticeShown bool `yaml:"tray_notice_shown"`
 	// WindowWidth / WindowHeight remember the main window's size in
 	// device-independent pixels; zero means "use the default".
+	// LastInputDir is where the open-file dialog starts; RecentFiles lists
+	// the most recently opened inputs, newest first.
+	LastInputDir string   `yaml:"last_input_dir,omitempty"`
+	RecentFiles  []string `yaml:"recent_files,omitempty"`
+
 	WindowWidth  int `yaml:"window_width,omitempty"`
 	WindowHeight int `yaml:"window_height,omitempty"`
 }
@@ -193,10 +198,12 @@ type GPUAdapter struct {
 }
 
 type MediaInfo struct {
-	Path         string
-	Format       string
-	Duration     time.Duration
-	Bitrate      int64
+	Path     string
+	Format   string
+	Duration time.Duration
+	Bitrate  int64
+	// Size is the file size in bytes from the container, 0 when unknown.
+	Size         int64
 	VideoStreams []VideoStream
 	// CoverArtStreams holds attached pictures (disposition attached_pic,
 	// e.g. MP3/M4A cover art). They are video streams to ffmpeg but not
@@ -216,6 +223,14 @@ type VideoStream struct {
 	FrameRate   string
 	PixelFormat string
 	ColorRange  string
+	Bitrate     int64 // bits per second, 0 when unknown
+	Language    string
+	Title       string
+	// ColorSpace / ColorTransfer / ColorPrimaries are ffprobe's color
+	// metadata names ("bt2020nc", "smpte2084", …), empty when absent.
+	ColorSpace     string
+	ColorTransfer  string
+	ColorPrimaries string
 	// Rotation is the display rotation in degrees, normalized to
 	// [0, 360), from the display matrix side data or the legacy "rotate"
 	// tag. ffmpeg autorotates frames before filters run, so 90 and 270
@@ -233,10 +248,14 @@ func (v VideoStream) DisplaySize() (width, height int) {
 }
 
 type AudioStream struct {
-	Index      int
-	Codec      string
-	SampleRate int
-	Channels   int
+	Index         int
+	Codec         string
+	SampleRate    int
+	Channels      int
+	ChannelLayout string
+	Bitrate       int64
+	Language      string
+	Title         string
 	// BitsPerSample is the stream's coded sample depth (ffprobe's
 	// bits_per_raw_sample, falling back to bits_per_sample); 0 when the
 	// probe does not report one. The join pass uses it to decide whether
@@ -246,8 +265,15 @@ type AudioStream struct {
 }
 
 type SubtitleStream struct {
-	Index int
-	Codec string
+	Index    int
+	Codec    string
+	Language string
+	Title    string
+}
+
+// IsHDR reports whether the stream's transfer characteristic is PQ or HLG.
+func (v VideoStream) IsHDR() bool {
+	return v.ColorTransfer == "smpte2084" || v.ColorTransfer == "arib-std-b67"
 }
 
 func (m MediaInfo) PrimaryVideo() (VideoStream, bool) {

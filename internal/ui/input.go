@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,8 +28,22 @@ func (c *Controller) chooseInput() {
 		_ = reader.Close()
 		c.setInput(reader.URI().Path())
 	}, c.window)
-	d.SetFilter(storage.NewExtensionFileFilter([]string{".mkv", ".mp4", ".webm", ".mov", ".avi", ".m4v"}))
+	if c.showAllFiles == nil || !c.showAllFiles.Checked {
+		d.SetFilter(storage.NewExtensionFileFilter(mediaExtensions))
+	}
+	if loc := locationFor(c.dialogStartDir()); loc != nil {
+		d.SetLocation(loc)
+	}
+	d.Resize(openFileDialogSize(c.window.Canvas().Size()))
 	d.Show()
+}
+
+// dialogStartDir is the folder of the current input, else the last one.
+func (c *Controller) dialogStartDir() string {
+	if c.inputPath != "" {
+		return filepath.Dir(c.inputPath)
+	}
+	return c.config.UI.LastInputDir
 }
 
 func (c *Controller) setInput(path string) {
@@ -36,6 +51,7 @@ func (c *Controller) setInput(path string) {
 	if path == "" {
 		return
 	}
+	c.rememberInput(path)
 	c.inputGeneration++
 	gen := c.inputGeneration
 	// Reset every per-input piece of state synchronously: until the new
@@ -157,26 +173,4 @@ func (c *Controller) applyDetection(caps model.Capabilities) {
 	c.reconcileDevices(false)
 	c.updateControlState()
 	c.selectRunnableProfile()
-}
-
-func formatMediaInfo(info model.MediaInfo) string {
-	lines := []string{
-		fmt.Sprintf("Format: %s | Duration: %s | Bitrate: %s", info.Format, info.Duration.Round(time.Second), formatBitrate(info.Bitrate)),
-	}
-	if v, ok := info.PrimaryVideo(); ok {
-		lines = append(lines, fmt.Sprintf("Video: %s, %dx%d, %s fps, %s, range %s",
-			v.Codec, v.Width, v.Height, v.FrameRate, v.PixelFormat, v.ColorRange))
-	}
-	for i, a := range info.AudioStreams {
-		lines = append(lines, fmt.Sprintf("Audio %d: %s, %d Hz, %d channels", i+1, a.Codec, a.SampleRate, a.Channels))
-	}
-	lines = append(lines, fmt.Sprintf("Subtitles: %d | Chapters: %d", len(info.SubtitleStreams), info.ChapterCount))
-	return strings.Join(lines, "\n")
-}
-
-func formatBitrate(value int64) string {
-	if value <= 0 {
-		return "unknown"
-	}
-	return fmt.Sprintf("%.1f Mbps", float64(value)/1_000_000)
 }

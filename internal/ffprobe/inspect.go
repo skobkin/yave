@@ -24,6 +24,7 @@ type probeFormat struct {
 	Duration   string            `json:"duration"`
 	StartTime  string            `json:"start_time"`
 	BitRate    string            `json:"bit_rate"`
+	Size       string            `json:"size"`
 	Tags       map[string]string `json:"tags"`
 }
 
@@ -37,6 +38,11 @@ type probeStream struct {
 	RealRate         string            `json:"r_frame_rate"`
 	PixelFormat      string            `json:"pix_fmt"`
 	ColorRange       string            `json:"color_range"`
+	ColorSpace       string            `json:"color_space"`
+	ColorTransfer    string            `json:"color_transfer"`
+	ColorPrimaries   string            `json:"color_primaries"`
+	ChannelLayout    string            `json:"channel_layout"`
+	BitRate          string            `json:"bit_rate"`
 	SampleRate       string            `json:"sample_rate"`
 	Channels         int               `json:"channels"`
 	BitsPerRawSample string            `json:"bits_per_raw_sample"`
@@ -143,6 +149,7 @@ func Parse(data []byte) (model.MediaInfo, error) {
 		Format:       document.Format.FormatName,
 		Duration:     duration,
 		Bitrate:      parseInt64(document.Format.BitRate),
+		Size:         parseInt64(document.Format.Size),
 		ChapterCount: len(document.Chapters),
 	}
 	for _, stream := range document.Streams {
@@ -161,6 +168,13 @@ func Parse(data []byte) (model.MediaInfo, error) {
 				PixelFormat: stream.PixelFormat,
 				ColorRange:  stream.ColorRange,
 				Rotation:    rotationDegrees(stream),
+				Bitrate:     parseInt64(stream.BitRate),
+				Language:    streamTag(stream.Tags, "language"),
+				Title:       streamTag(stream.Tags, "title"),
+
+				ColorSpace:     stream.ColorSpace,
+				ColorTransfer:  stream.ColorTransfer,
+				ColorPrimaries: stream.ColorPrimaries,
 			})
 		case "audio":
 			info.AudioStreams = append(info.AudioStreams, model.AudioStream{
@@ -168,12 +182,18 @@ func Parse(data []byte) (model.MediaInfo, error) {
 				Codec:         stream.CodecName,
 				SampleRate:    parseInt(stream.SampleRate),
 				Channels:      stream.Channels,
+				ChannelLayout: stream.ChannelLayout,
+				Bitrate:       parseInt64(stream.BitRate),
+				Language:      streamTag(stream.Tags, "language"),
+				Title:         streamTag(stream.Tags, "title"),
 				BitsPerSample: parseBitsPerSample(stream),
 			})
 		case "subtitle":
 			info.SubtitleStreams = append(info.SubtitleStreams, model.SubtitleStream{
-				Index: stream.Index,
-				Codec: stream.CodecName,
+				Index:    stream.Index,
+				Codec:    stream.CodecName,
+				Language: streamTag(stream.Tags, "language"),
+				Title:    streamTag(stream.Tags, "title"),
 			})
 		}
 	}
@@ -259,6 +279,17 @@ func parseFrameRate(candidates ...string) string {
 		denominator, denominatorErr := strconv.ParseInt(parts[1], 10, 64)
 		if numeratorErr == nil && denominatorErr == nil && numerator > 0 && denominator > 0 {
 			return candidate
+		}
+	}
+	return ""
+}
+
+// streamTag returns a stream tag value, matching the key
+// case-insensitively (Matroska and MP4 muxers disagree on case).
+func streamTag(tags map[string]string, key string) string {
+	for k, v := range tags {
+		if strings.EqualFold(k, key) {
+			return strings.TrimSpace(v)
 		}
 	}
 	return ""

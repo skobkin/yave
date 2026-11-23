@@ -310,3 +310,25 @@ func TestParseVideoRotation(t *testing.T) {
 		})
 	}
 }
+
+func TestParseStreamDetails(t *testing.T) {
+	got, err := Parse([]byte(`{"streams":[
+	  {"index":0,"codec_name":"hevc","codec_type":"video","width":3840,"height":2160,"bit_rate":"7000000",
+	   "color_space":"bt2020nc","color_transfer":"smpte2084","color_primaries":"bt2020","tags":{"LANGUAGE":"eng","title":"Main"}},
+	  {"index":1,"codec_name":"opus","codec_type":"audio","channels":6,"channel_layout":"5.1(side)","bit_rate":"192000","tags":{"language":"jpn"}},
+	  {"index":2,"codec_name":"subrip","codec_type":"subtitle","tags":{"language":"fra","title":"Forced"}}
+	],"format":{"format_name":"matroska,webm","size":"123456","duration":"10"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, a, s := got.VideoStreams[0], got.AudioStreams[0], got.SubtitleStreams[0]
+	if got.Size != 123456 || v.Bitrate != 7000000 || v.Language != "eng" || v.Title != "Main" || !v.IsHDR() || v.ColorPrimaries != "bt2020" {
+		t.Fatalf("video/format details: size=%d %#v", got.Size, v)
+	}
+	if a.ChannelLayout != "5.1(side)" || a.Bitrate != 192000 || a.Language != "jpn" {
+		t.Fatalf("audio details: %#v", a)
+	}
+	if s.Language != "fra" || s.Title != "Forced" {
+		t.Fatalf("subtitle details: %#v", s)
+	}
+}

@@ -122,6 +122,7 @@ type Controller struct {
 	segmentHeader          *widget.Label
 	segmentRows            *fyne.Container
 	segmentRowViews        []segmentRow
+	showAllFiles           *widget.Check
 	openFolder             *widget.Button
 	playOutput             *widget.Button
 	runResult              *widget.Label
@@ -278,11 +279,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	c.window.Resize(initialWindowSize(cfg.UI.WindowWidth, cfg.UI.WindowHeight))
 	c.window.CenterOnScreen()
 	c.window.SetIcon(resources.AppIcon())
-	c.window.SetOnDropped(func(_ fyne.Position, uris []fyne.URI) {
-		if len(uris) > 0 {
-			c.setInput(uris[0].Path())
-		}
-	})
+	c.window.SetOnDropped(func(_ fyne.Position, uris []fyne.URI) { c.handleDrop(uris) })
 	c.loadProfile(c.startupProfile())
 	c.detect()
 	if initialInput != "" {
