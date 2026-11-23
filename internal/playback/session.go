@@ -46,6 +46,11 @@ func (s *Session) Frames() <-chan Frame { return s.frames }
 // Done is closed once both decoders are reaped.
 func (s *Session) Done() <-chan struct{} { return s.done }
 
+// Cancel asks playback to end without waiting: the decoders are killed
+// and reaped in the background, and Done closes when that finished.
+// UI code uses it so the interface thread never waits on a subprocess.
+func (s *Session) Cancel() { s.cancel() }
+
 // Stop cancels playback and waits for the decoders to exit.
 func (s *Session) Stop() {
 	s.cancel()
