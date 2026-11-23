@@ -75,6 +75,22 @@ dialog. Builds without a stamped version — including `go build -o yave
 ./cmd/yave` — are development builds and never check automatically; the tray
 action stays available.
 
+## Trim playback
+
+The Trim tab can play the input while you choose cut boundaries: **Play** /
+**Pause** (also Space on the timeline) plays from the playhead, **Play
+selection** plays the selected segment from In to Out, and clicking or
+dragging the timeline seeks while playing. Frames and audio are decoded by
+the configured FFmpeg into a scaled preview (up to 640 px wide and 30 fps),
+so no extra media libraries are needed.
+
+Audio goes through the system's PulseAudio/PipeWire server or ALSA
+(`libasound.so.2`), loaded at run time; no development headers are needed to
+build. When no audio output can be opened, playback continues without sound
+and says so. Playback is optional: manual frame stepping, In/Out entries and
+exports work the same without it, and it is unavailable while an export runs
+or for inputs without a video stream.
+
 ## Output templates
 
 The default template is:
