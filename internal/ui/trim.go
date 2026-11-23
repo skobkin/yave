@@ -1398,19 +1398,27 @@ func formatTimestamp(d time.Duration) string {
 }
 
 // parseTimestamp parses [H:]MM:SS[.mmm] with minutes/seconds in
-// 0..59 and milliseconds in 0..999. Anything else (empty, negative,
-// out-of-range fields, trailing junk) is an error.
+// 0..59 and milliseconds in 0..999, or bare seconds (S[.mmm], where the
+// seconds may exceed 59). Anything else (empty, negative, out-of-range
+// fields, trailing junk) is an error.
 func parseTimestamp(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, errors.New("empty timecode")
 	}
 	parts := strings.Split(s, ":")
-	if len(parts) < 2 || len(parts) > 3 {
+	if len(parts) > 3 {
 		return 0, fmt.Errorf("invalid timecode %q", s)
 	}
 	var hours int64
-	minutes, seconds := parts[len(parts)-2], parts[len(parts)-1]
+	// Bare seconds ("90.5") have no minutes field and may exceed 59.
+	minutes, seconds := "0", parts[len(parts)-1]
+	maxSeconds := int64(59)
+	if len(parts) >= 2 {
+		minutes = parts[len(parts)-2]
+	} else {
+		maxSeconds = maxBareSeconds
+	}
 	if len(parts) == 3 {
 		parsed, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil || parsed < 0 {
@@ -1440,7 +1448,7 @@ func parseTimestamp(s string) (time.Duration, error) {
 		}
 		millis = parsed
 	}
-	sec, err := parseTimeField(secText, 59)
+	sec, err := parseTimeField(secText, maxSeconds)
 	if err != nil {
 		return 0, fmt.Errorf("invalid seconds in %q", s)
 	}
@@ -1449,6 +1457,10 @@ func parseTimestamp(s string) (time.Duration, error) {
 	}
 	return time.Duration(hours*3_600_000+min*60_000+sec*1_000+millis) * time.Millisecond, nil
 }
+
+// maxBareSeconds bounds a bare-seconds entry (about 11 years) so the
+// millisecond arithmetic in parseTimestamp cannot overflow.
+const maxBareSeconds = 1 << 28
 
 func parseTimeField(text string, maxValue int64) (int64, error) {
 	if text == "" {

@@ -154,7 +154,7 @@ func (c *Controller) createWidgets() {
 		c.setTrimBoundary("in", text)
 	})
 	c.trimIn.Validator = timestampValidator
-	c.trimIn.SetPlaceHolder("HH:MM:SS.mmm")
+	c.trimIn.SetPlaceHolder("MM:SS.mmm or seconds")
 	c.trimOut = entry(func(text string) {
 		if c.displayingBoundaries {
 			return
@@ -162,7 +162,7 @@ func (c *Controller) createWidgets() {
 		c.setTrimBoundary("out", text)
 	})
 	c.trimOut.Validator = timestampValidator
-	c.trimOut.SetPlaceHolder("HH:MM:SS.mmm")
+	c.trimOut.SetPlaceHolder("MM:SS.mmm or seconds")
 	c.trimSetIn = widget.NewButton("Set In", c.setInFromPlayhead)
 	c.trimSetOut = widget.NewButton("Set Out", c.setOutFromPlayhead)
 	c.trimReset = widget.NewButton("Reset", func() {
