@@ -189,6 +189,8 @@ func (c *Controller) createWidgets() {
 		c.trimExportMode = trimExportModeFromOption(option)
 		c.changed(option)
 	}
+	c.trimHint = widget.NewLabel("")
+	c.trimHint.TextStyle = fyne.TextStyle{Italic: true}
 	c.trimAdd = widget.NewButton("Add segment", c.addTrimSegment)
 	c.trimDelete = widget.NewButton("Delete segment", c.deleteTrimSegment)
 	c.trimDuration = widget.NewLabel("")

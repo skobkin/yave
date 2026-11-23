@@ -51,6 +51,23 @@ func (c *Controller) trimRequest() model.TrimSelection {
 	return c.trimSelection
 }
 
+// trimUnavailableReason explains why "Enable trimming" is disabled, or
+// returns "" when trimming is available (a known input duration).
+func trimUnavailableReason(inputPath string, inspecting bool, media model.MediaInfo) string {
+	switch {
+	case inputPath == "":
+		return "Open a video on the Input tab to cut it"
+	case inspecting:
+		return "Inspecting input…"
+	case media.Duration > 0:
+		return ""
+	case len(media.VideoStreams) == 0 && (len(media.AudioStreams) > 0 || len(media.CoverArtStreams) > 0):
+		return "Input has no video stream"
+	default:
+		return "Input duration is unknown"
+	}
+}
+
 // --- enable / reset ---
 
 // setTrimControlsEnabled toggles every trim control except the enable

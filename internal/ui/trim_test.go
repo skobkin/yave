@@ -2838,3 +2838,26 @@ func TestTimelinePreviewPendingMarker(t *testing.T) {
 		t.Fatal("MouseOut must clear the hover position")
 	}
 }
+
+func TestTrimUnavailableReason(t *testing.T) {
+	t.Parallel()
+	video := model.MediaInfo{Duration: time.Minute, VideoStreams: []model.VideoStream{{}}}
+	tests := []struct {
+		name       string
+		path       string
+		inspecting bool
+		media      model.MediaInfo
+		want       string
+	}{
+		{"no input", "", false, model.MediaInfo{}, "Open a video on the Input tab to cut it"},
+		{"inspecting", "/a.mkv", true, model.MediaInfo{}, "Inspecting input…"},
+		{"available", "/a.mkv", false, video, ""},
+		{"audio only", "/a.mp3", false, model.MediaInfo{AudioStreams: []model.AudioStream{{}}}, "Input has no video stream"},
+		{"failed or unknown", "/a.mkv", false, model.MediaInfo{}, "Input duration is unknown"},
+	}
+	for _, tt := range tests {
+		if got := trimUnavailableReason(tt.path, tt.inspecting, tt.media); got != tt.want {
+			t.Errorf("%s: reason = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}

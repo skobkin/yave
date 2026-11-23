@@ -44,6 +44,7 @@ func (c *Controller) setInput(path string) {
 	c.media = model.MediaInfo{}
 	c.inputPath = path
 	c.inputEntry.SetText(path)
+	c.inspecting = true
 	c.mediaInfo.SetText("Inspecting input...")
 	c.cancelTrimWork()
 	c.resetTrimForNewInput()
@@ -57,6 +58,7 @@ func (c *Controller) setInput(path string) {
 			if c.inputGeneration != gen {
 				return
 			}
+			c.inspecting = false
 			if err != nil {
 				c.media = model.MediaInfo{}
 				c.mediaInfo.SetText("Inspection failed: " + err.Error())
