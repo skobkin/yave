@@ -5,10 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
+	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/vaapi"
 )
 
 func TestParseEncodersFiltersAndPrefers(t *testing.T) {
@@ -146,4 +149,107 @@ func writeExecutable(t *testing.T, dir, name, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestNarrowVAAPIToDevices(t *testing.T) {
+	// Renoir-like iGPU from issue #24: H.264 and HEVC Main/Main10
+	// encode, VP9 decode only.
+	renoir := vaapi.DeviceInfo{Path: "/dev/dri/renderD129", EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+		vaapi.ProfileH264ConstrainedBaseline: {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+		vaapi.ProfileH264Main:                {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+		vaapi.ProfileH264High:                {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+		vaapi.ProfileHEVCMain:                {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+		vaapi.ProfileHEVCMain10:              {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+		vaapi.ProfileVP9Profile0:             {vaapi.EntrypointVLD},
+		vaapi.ProfileVP9Profile2:             {vaapi.EntrypointVLD},
+	}}
+	hevcMainOnly := vaapi.DeviceInfo{Path: "/dev/dri/renderD130", EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+		vaapi.ProfileHEVCMain: {vaapi.EntrypointVLD, vaapi.EntrypointEncSlice},
+	}}
+	nvdec := vaapi.DeviceInfo{Path: "/dev/dri/renderD128", EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{
+		vaapi.ProfileHEVCMain:   {vaapi.EntrypointVLD},
+		vaapi.ProfileHEVCMain10: {vaapi.EntrypointVLD},
+	}}
+	broken := vaapi.DeviceInfo{Path: "/dev/dri/renderD131", Err: "libva unavailable"}
+
+	vaapiEncoders := func() map[string]model.Encoder {
+		out := map[string]model.Encoder{"libx265": {Name: "libx265", Profiles: []string{"main", "main10"}}}
+		for _, name := range []string{"h264_vaapi", "hevc_vaapi", "vp9_vaapi"} {
+			e, ok := encoder.DefaultRegistry().Model(name)
+			if !ok {
+				t.Fatalf("%s missing from the registry", name)
+			}
+			out[name] = e
+		}
+		return out
+	}
+
+	tests := []struct {
+		name         string
+		devices      []vaapi.DeviceInfo
+		wantMissing  []string
+		wantProfiles map[string][]string
+	}{
+		{
+			name:         "renoir drops vp9, keeps every hevc profile",
+			devices:      []vaapi.DeviceInfo{renoir},
+			wantMissing:  []string{"vp9_vaapi"},
+			wantProfiles: map[string][]string{"hevc_vaapi": {"main", "main10", "rext"}, "libx265": {"main", "main10"}},
+		},
+		{
+			name:         "hevc main only drops main10 and the rest (rext is served by Main at 8-bit)",
+			devices:      []vaapi.DeviceInfo{hevcMainOnly},
+			wantMissing:  []string{"h264_vaapi", "vp9_vaapi"},
+			wantProfiles: map[string][]string{"hevc_vaapi": {"main", "rext"}},
+		},
+		{
+			name:         "decode-only plus encode-capable GPU unions",
+			devices:      []vaapi.DeviceInfo{nvdec, renoir},
+			wantMissing:  []string{"vp9_vaapi"},
+			wantProfiles: map[string][]string{"hevc_vaapi": {"main", "main10", "rext"}},
+		},
+		{
+			name:        "decode-only GPU hides every VAAPI encoder",
+			devices:     []vaapi.DeviceInfo{nvdec},
+			wantMissing: []string{"h264_vaapi", "hevc_vaapi", "vp9_vaapi"},
+		},
+		{
+			name:         "all probes failed fails open",
+			devices:      []vaapi.DeviceInfo{broken},
+			wantProfiles: map[string][]string{"hevc_vaapi": nil, "vp9_vaapi": nil},
+		},
+		{
+			name:         "no devices fails open",
+			devices:      nil,
+			wantProfiles: map[string][]string{"hevc_vaapi": nil, "vp9_vaapi": nil},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoders := vaapiEncoders()
+			before := vaapiEncoders()
+			narrowVAAPIToDevices(encoders, tt.devices)
+			for _, name := range tt.wantMissing {
+				if _, ok := encoders[name]; ok {
+					t.Errorf("%s still present", name)
+				}
+			}
+			if _, ok := encoders["libx265"]; !ok {
+				t.Error("non-VAAPI encoder libx265 must never be removed")
+			}
+			for name, want := range tt.wantProfiles {
+				got, ok := encoders[name]
+				if !ok {
+					t.Errorf("%s missing", name)
+					continue
+				}
+				if want == nil {
+					want = before[name].Profiles // untouched
+				}
+				if !slices.Equal(got.Profiles, want) {
+					t.Errorf("%s profiles = %v, want %v", name, got.Profiles, want)
+				}
+			}
+		})
+	}
 }

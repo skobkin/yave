@@ -87,6 +87,7 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe, probeD
 	}
 	encoders := filterUnavailableHWEncoders(ParseEncoders(encodersOutput), hw)
 	narrowProfilesToBuild(ctx, ffmpegPath, encoders)
+	narrowVAAPIToDevices(encoders, vaapiDevices)
 	caps := model.Capabilities{
 		FFmpegPath:     ffmpegPath,
 		FFprobePath:    ffprobePath,
@@ -126,6 +127,51 @@ func narrowProfilesToBuild(ctx context.Context, ffmpegPath string, encoders map[
 		}
 		if narrowed := intersectProfiles(m.Profiles, enumerated); len(narrowed) > 0 {
 			m.Profiles = narrowed
+			encoders[name] = m
+		}
+	}
+}
+
+// narrowVAAPIToDevices drops VAAPI profiles — and whole VAAPI encoders —
+// that no probed render node can encode, so the dropdowns stop offering
+// choices that only fail at run time (a GPU without VP9 encode still
+// lists vp9_vaapi because the ffmpeg build has it).
+//
+// It fails open: with no capability data (non-Linux, libva missing,
+// every probe failed) nothing changes, and a profile with no VAProfile
+// mapping is kept. Requirements are resolved against empty media, so
+// the 10-bit chain selection that depends on the source stays with the
+// validation and UI hint paths. An encoder is removed only when its
+// automatic profile and every curated profile are unencodable; it
+// never keeps an empty profile list.
+func narrowVAAPIToDevices(encoders map[string]model.Encoder, devices []vaapi.DeviceInfo) {
+	if _, known := vaapi.AnyDeviceEncodes(devices, nil); !known {
+		return
+	}
+	for name, m := range encoders {
+		autoRequired, ok := encoder.RequiredVAProfiles(name, "", model.MediaInfo{})
+		if !ok {
+			continue
+		}
+		autoOK, _ := vaapi.AnyDeviceEncodes(devices, autoRequired)
+
+		kept := make([]string, 0, len(m.Profiles))
+		for _, profile := range m.Profiles {
+			required, mapped := encoder.RequiredVAProfiles(name, profile, model.MediaInfo{})
+			if !mapped || len(required) == 0 {
+				kept = append(kept, profile)
+				continue
+			}
+			if supported, _ := vaapi.AnyDeviceEncodes(devices, required); supported {
+				kept = append(kept, profile)
+			}
+		}
+		if !autoOK && len(kept) == 0 {
+			delete(encoders, name)
+			continue
+		}
+		if len(m.Profiles) > 0 && len(kept) != len(m.Profiles) {
+			m.Profiles = kept
 			encoders[name] = m
 		}
 	}

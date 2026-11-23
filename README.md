@@ -26,7 +26,10 @@ VAAPI device that can actually encode the selected codec.
   encode the chosen codec and profile — decode-only nodes (for example
   NVIDIA's VA-API wrapper) are skipped. Without libva, automatic mode falls
   back to the first render node. An explicit `vaapi_device` in a profile
-  always overrides the automatic choice.
+  always overrides the automatic choice. The same probe narrows the encoder
+  and profile dropdowns: a VAAPI encoder or profile that no probed device can
+  encode (for example `vp9_vaapi` on a GPU without VP9 encode) is hidden.
+  Without probe data nothing is hidden.
 
 ## Build and run
 

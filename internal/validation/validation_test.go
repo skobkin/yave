@@ -1039,3 +1039,18 @@ func TestValidateVAAPIDevice(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateVAAPIEncoderRemovedByDeviceNarrowing(t *testing.T) {
+	profile := validProfile()
+	profile.Video.Encoder = "vp9_vaapi"
+	caps := capabilities()
+	delete(caps.Encoders, "vp9_vaapi") // what ffmpeg.narrowVAAPIToDevices does for this GPU
+	caps.VAAPIDevices = []vaapi.DeviceInfo{{
+		Path:        "/dev/dri/renderD129",
+		EntryPoints: map[vaapi.Profile][]vaapi.Entrypoint{vaapi.ProfileVP9Profile0: {vaapi.EntrypointVLD}},
+	}}
+
+	result := validation.ValidateProfile(profile, caps, nil)
+
+	assertErrorContains(t, result, "profile.video.encoder", "no detected VA-API device can encode it")
+}

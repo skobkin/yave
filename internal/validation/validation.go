@@ -104,6 +104,10 @@ func validateProfile(profile model.Profile, capabilities model.Capabilities, med
 	case !supportedVideoEncoder(videoEncoder):
 		result.error("profile.video.encoder", "unsupported video encoder %q", profile.Video.Encoder)
 	case videoEncoder != "copy" && !encoderAvailable(capabilities, videoEncoder):
+		if _, isVAAPI := encoder.RequiredVAProfiles(videoEncoder, "", model.MediaInfo{}); isVAAPI && len(capabilities.VAAPIDevices) > 0 {
+			result.error("profile.video.encoder", "video encoder %q is not available: the detected FFmpeg build lacks it or no detected VA-API device can encode it", profile.Video.Encoder)
+			break
+		}
 		result.error("profile.video.encoder", "video encoder %q is not available in the detected FFmpeg build", profile.Video.Encoder)
 	}
 
