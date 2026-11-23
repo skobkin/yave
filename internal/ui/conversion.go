@@ -14,7 +14,6 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
-	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/templates"
 	"git.skobk.in/skobkin/yave/internal/transcode"
@@ -49,12 +48,12 @@ func (c *Controller) refresh() {
 	c.command.SetText("")
 	if c.inputPath != "" {
 		width, height := dimensions(p, c.media)
-		videoSettings, audioSettings := encoder.SettingsSummary(p.Video.Encoder, p.Video, p.Audio)
+		ext, codec, videoSettings, audioSettings := templateFields(p)
 		req := templates.Request{
 			InputPath: c.inputPath,
-			Extension: p.Container,
+			Extension: ext,
 			Profile:   p.Name,
-			Codec:     p.Video.Encoder,
+			Codec:     codec,
 			Width:     width,
 			Height:    height,
 			Time:      time.Now(),
@@ -96,9 +95,10 @@ func (c *Controller) refresh() {
 	// The Trim tab's validation message (boundary errors + stream-copy
 	// warning + join-export checks) recomputes here so it stays
 	// synchronized with every state change that flows through refresh().
-	c.updateTrimMessages(p.Video.Encoder, p.Audio)
+	c.updateTrimMessages(trimValidationInputs(p))
 	c.updateSegmentButtons()
 	c.updatePlaybackControls()
+	c.updateStreamIncludeControls()
 	c.updateProfileDirtyMarker()
 	startReason := startBlockReason(c.inputPath, c.inputEntry.Text, c.inspecting, c.caps.FFmpegPath != "", c.numericFieldProblems())
 	c.startHint.SetText(startReason)
@@ -110,7 +110,8 @@ func (c *Controller) refresh() {
 }
 
 func (c *Controller) startConversion() {
-	p := c.profileFromWidgets()
+	p := c.withStreamOverrides(c.profileFromWidgets())
+	trimEncoder, trimAudio := trimValidationInputs(p)
 	// A multi-part separate export never writes the resolved base —
 	// every target carries a _partNN suffix — so its base resolves
 	// without the input-collision check and validation sees the
@@ -135,11 +136,11 @@ func (c *Controller) startConversion() {
 		result = validation.Validate(p, &c.media, c.caps, c.inputPath, resolved)
 	}
 	if c.trimEnabled {
-		result.Merge(validation.ValidateTrim(c.trimSelection, &c.media, p.Video.Encoder))
+		result.Merge(validation.ValidateTrim(c.trimSelection, &c.media, trimEncoder))
 		// Join-export checks (video-copy rejection, copied-FLAC encoder
 		// availability, audio-copy warning) gate BEFORE any dialog or
 		// staging directory is created.
-		result.Merge(validation.ValidateTrimExport(c.trimSelection, c.trimExportMode, &c.media, c.caps, p.Video.Encoder, p.Audio))
+		result.Merge(validation.ValidateTrimExport(c.trimSelection, c.trimExportMode, &c.media, c.caps, trimEncoder, trimAudio))
 		// Invalid timecode entries keep the last valid selection for
 		// display, but Start must never silently use those stale
 		// boundaries.
@@ -509,10 +510,10 @@ func (c *Controller) stopCancelTimer() {
 
 func (c *Controller) resolveOutput(p model.Profile, at time.Time) (string, error) {
 	width, height := dimensions(p, c.media)
-	videoSettings, audioSettings := encoder.SettingsSummary(p.Video.Encoder, p.Video, p.Audio)
+	ext, codec, videoSettings, audioSettings := templateFields(p)
 	return templates.Resolve(p.OutputTemplate, templates.Request{
-		InputPath: c.inputPath, Extension: p.Container, Profile: p.Name,
-		Codec: p.Video.Encoder, Width: width, Height: height, Time: at,
+		InputPath: c.inputPath, Extension: ext, Profile: p.Name,
+		Codec: codec, Width: width, Height: height, Time: at,
 		VideoSettings: videoSettings, AudioSettings: audioSettings,
 	})
 }
@@ -525,10 +526,10 @@ func (c *Controller) resolveOutput(p model.Profile, at time.Time) (string, error
 // targets are validated when the export is planned.
 func (c *Controller) resolveOutputParts(p model.Profile, at time.Time) (string, error) {
 	width, height := dimensions(p, c.media)
-	videoSettings, audioSettings := encoder.SettingsSummary(p.Video.Encoder, p.Video, p.Audio)
+	ext, codec, videoSettings, audioSettings := templateFields(p)
 	return templates.ResolveParts(p.OutputTemplate, templates.Request{
-		InputPath: c.inputPath, Extension: p.Container, Profile: p.Name,
-		Codec: p.Video.Encoder, Width: width, Height: height, Time: at,
+		InputPath: c.inputPath, Extension: ext, Profile: p.Name,
+		Codec: codec, Width: width, Height: height, Time: at,
 		VideoSettings: videoSettings, AudioSettings: audioSettings,
 	})
 }

@@ -105,34 +105,41 @@ type Controller struct {
 	trimPlay          *widget.Button
 	trimPlaySelection *widget.Button
 
-	trimEnable       *widget.Check
-	savedProfile     model.Profile // editor baseline for dirty tracking
-	hasSavedProfile  bool
-	profileLabel     *widget.Label
-	startHint        *widget.Label
-	logFollow        *widget.Check
-	openLog          *widget.Button
-	copyCommand      *widget.Button
-	trimHint         *widget.Label // why trimming is unavailable
-	inspecting       bool          // ffprobe is running for the current input
-	trimTimeline     *timeline
-	trimIn           *widget.Entry
-	trimOut          *widget.Entry
-	trimSetIn        *widget.Button
-	trimSetOut       *widget.Button
-	trimReset        *widget.Button
-	trimExport       *widget.Select
-	trimAdd          *widget.Button
-	trimDelete       *widget.Button
-	trimDuration     *widget.Label
-	trimMessage      *widget.Label // trim validation: entry errors + copy warning
-	previewStatus    *widget.Label // extraction/indexing status, separate from validation
-	previewTimeLabel *widget.Label // timestamp of the displayed preview frame
-	hoverTimeLabel   *widget.Label // hovered timestamp, shown while hovering
-	previewImage     *canvas.Image
-	previewVeil      *canvas.Rectangle   // foreground tint over the stale frame while extracting
-	previewSpinner   *spinner            // extraction-in-flight cue spinning over the preview's center
-	trimControls     []fyne.CanvasObject // disabled while trimming is off
+	trimEnable             *widget.Check
+	savedProfile           model.Profile // editor baseline for dirty tracking
+	hasSavedProfile        bool
+	profileLabel           *widget.Label
+	includeVideo           *widget.Check
+	includeAudio           *widget.Check
+	includeVideoHint       *widget.Label
+	includeAudioHint       *widget.Label
+	userIncludeVideo       bool // the user's (saved) choice; the checkbox shows the effective state
+	userIncludeAudio       bool
+	applyingStreamOverride bool
+	startHint              *widget.Label
+	logFollow              *widget.Check
+	openLog                *widget.Button
+	copyCommand            *widget.Button
+	trimHint               *widget.Label // why trimming is unavailable
+	inspecting             bool          // ffprobe is running for the current input
+	trimTimeline           *timeline
+	trimIn                 *widget.Entry
+	trimOut                *widget.Entry
+	trimSetIn              *widget.Button
+	trimSetOut             *widget.Button
+	trimReset              *widget.Button
+	trimExport             *widget.Select
+	trimAdd                *widget.Button
+	trimDelete             *widget.Button
+	trimDuration           *widget.Label
+	trimMessage            *widget.Label // trim validation: entry errors + copy warning
+	previewStatus          *widget.Label // extraction/indexing status, separate from validation
+	previewTimeLabel       *widget.Label // timestamp of the displayed preview frame
+	hoverTimeLabel         *widget.Label // hovered timestamp, shown while hovering
+	previewImage           *canvas.Image
+	previewVeil            *canvas.Rectangle   // foreground tint over the stale frame while extracting
+	previewSpinner         *spinner            // extraction-in-flight cue spinning over the preview's center
+	trimControls           []fyne.CanvasObject // disabled while trimming is off
 	// rateControlHint explains the selected rate-control mode (Auto
 	// and VBR semantics are not obvious). It is a plain label so mode
 	// switches update it by SetText without rebuilding the form.

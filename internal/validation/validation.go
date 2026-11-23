@@ -97,26 +97,34 @@ func validateProfile(profile model.Profile, capabilities model.Capabilities, med
 		result.error("profile.container", "unsupported output container %q", profile.Container)
 	}
 
-	videoEncoder := strings.ToLower(strings.TrimSpace(profile.Video.Encoder))
-	switch {
-	case videoEncoder == "":
-		result.error("profile.video.encoder", "video encoder is required")
-	case !supportedVideoEncoder(videoEncoder):
-		result.error("profile.video.encoder", "unsupported video encoder %q", profile.Video.Encoder)
-	case videoEncoder != "copy" && !encoderAvailable(capabilities, videoEncoder):
-		if _, isVAAPI := encoder.RequiredVAProfiles(videoEncoder, "", model.MediaInfo{}); isVAAPI && vaapiProbed(capabilities.VAAPIDevices) {
-			result.error("profile.video.encoder", "video encoder %q is not available: the detected FFmpeg build lacks it or no detected VA-API device can encode it", profile.Video.Encoder)
-			break
-		}
-		result.error("profile.video.encoder", "video encoder %q is not available in the detected FFmpeg build", profile.Video.Encoder)
+	if profile.ExcludeVideo && profile.ExcludeAudio {
+		result.error("profile.exclude", "video and audio are both excluded: include at least one of them")
 	}
 
-	validateVideo(&result, profile.Video, videoEncoder)
-	validateVAAPIDevice(&result, profile.Video, capabilities, videoEncoder, media)
-	validateBuildProfile(&result, profile.Video, videoEncoder, capabilities)
-	validateProfileBitDepth(&result, profile.Video, videoEncoder, media)
-	validateChainBitDepth(&result, profile.Video, videoEncoder, media)
-	validateAudio(&result, profile.Audio, capabilities)
+	if !profile.ExcludeVideo {
+		videoEncoder := strings.ToLower(strings.TrimSpace(profile.Video.Encoder))
+		switch {
+		case videoEncoder == "":
+			result.error("profile.video.encoder", "video encoder is required")
+		case !supportedVideoEncoder(videoEncoder):
+			result.error("profile.video.encoder", "unsupported video encoder %q", profile.Video.Encoder)
+		case videoEncoder != "copy" && !encoderAvailable(capabilities, videoEncoder):
+			if _, isVAAPI := encoder.RequiredVAProfiles(videoEncoder, "", model.MediaInfo{}); isVAAPI && vaapiProbed(capabilities.VAAPIDevices) {
+				result.error("profile.video.encoder", "video encoder %q is not available: the detected FFmpeg build lacks it or no detected VA-API device can encode it", profile.Video.Encoder)
+				break
+			}
+			result.error("profile.video.encoder", "video encoder %q is not available in the detected FFmpeg build", profile.Video.Encoder)
+		}
+
+		validateVideo(&result, profile.Video, videoEncoder)
+		validateVAAPIDevice(&result, profile.Video, capabilities, videoEncoder, media)
+		validateBuildProfile(&result, profile.Video, videoEncoder, capabilities)
+		validateProfileBitDepth(&result, profile.Video, videoEncoder, media)
+		validateChainBitDepth(&result, profile.Video, videoEncoder, media)
+	}
+	if !profile.ExcludeAudio {
+		validateAudio(&result, profile.Audio, capabilities)
+	}
 	validateSubtitles(&result, profile.Subtitles)
 
 	if oneOf(container, model.ContainerMKV, model.ContainerMP4, model.ContainerWebM) {

@@ -1071,3 +1071,43 @@ func TestValidateRunRejectsInputWithoutVideoStream(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateStreamExclusion(t *testing.T) {
+	input := createInput(t)
+	out := filepath.Join(t.TempDir(), "output.mkv")
+	audioOnlyInput := &model.MediaInfo{AudioStreams: []model.AudioStream{{Index: 0, Codec: "aac"}}}
+
+	t.Run("both excluded is an error", func(t *testing.T) {
+		p := validProfile()
+		p.ExcludeVideo, p.ExcludeAudio = true, true
+		assertErrorContains(t, validation.Validate(p, nil, capabilities(), input, out), "profile.exclude", "include at least one")
+	})
+	t.Run("audio extraction from an audio-only input is valid", func(t *testing.T) {
+		p := validProfile()
+		p.ExcludeVideo = true
+		if r := validation.Validate(p, audioOnlyInput, capabilities(), input, out); !r.Valid() {
+			t.Fatalf("unexpected errors: %#v", r.Errors)
+		}
+	})
+	t.Run("excluded video skips video encoder checks", func(t *testing.T) {
+		p := validProfile()
+		p.ExcludeVideo = true
+		p.Video.Encoder = "no_such_encoder"
+		if r := validation.Validate(p, audioOnlyInput, capabilities(), input, out); !r.Valid() {
+			t.Fatalf("excluded video must not be validated: %#v", r.Errors)
+		}
+	})
+	t.Run("excluded audio skips audio checks", func(t *testing.T) {
+		p := validProfile()
+		p.ExcludeAudio = true
+		p.Audio = model.AudioSettings{Mode: model.AudioEncode, Encoder: "no_such_encoder"}
+		media := &model.MediaInfo{VideoStreams: []model.VideoStream{{Codec: "h264", Width: 1280, Height: 720}}}
+		if r := validation.Validate(p, media, capabilities(), input, out); !r.Valid() {
+			t.Fatalf("excluded audio must not be validated: %#v", r.Errors)
+		}
+	})
+	t.Run("video input without exclusion keeps the cover-art hint", func(t *testing.T) {
+		r := validation.Validate(validProfile(), audioOnlyInput, capabilities(), input, out)
+		assertErrorContains(t, r, "profile.video.encoder", "Include video")
+	})
+}

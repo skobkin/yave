@@ -1009,3 +1009,69 @@ func TestBuildCommandNeverMapsCoverArtAsVideo(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildCommandStreamExclusion(t *testing.T) {
+	t.Parallel()
+	base := model.BuiltinProfiles()[3] // x265 software archive
+	base.Audio = model.AudioSettings{Mode: model.AudioEncode, Encoder: "aac", Bitrate: "128k"}
+	media := model.MediaInfo{
+		VideoStreams: []model.VideoStream{{Index: 0, Width: 1920, Height: 1080}},
+		AudioStreams: []model.AudioStream{{Index: 1, Codec: "aac"}},
+	}
+	build := func(t *testing.T, mutate func(*model.Profile), trim model.TrimSelection) []string {
+		t.Helper()
+		p := base
+		mutate(&p)
+		plan, err := BuildCommand(BuildRequest{
+			FFmpegPath: "ffmpeg", InputPath: "/in.mkv", OutputPath: "/out.mka",
+			Profile: p, Media: media, Trim: trim,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return plan.Args
+	}
+	has := func(args []string, want string) bool { return slices.Contains(args, want) }
+
+	t.Run("normal keeps both", func(t *testing.T) {
+		args := build(t, func(*model.Profile) {}, model.TrimSelection{})
+		if has(args, "-vn") || has(args, "-an") || !containsPair(args, "-map", "0:v:0") || !containsPair(args, "-map", "0:a:0?") {
+			t.Fatalf("unexpected args %v", args)
+		}
+	})
+	t.Run("audio only", func(t *testing.T) {
+		args := build(t, func(p *model.Profile) { p.ExcludeVideo = true }, model.TrimSelection{})
+		if !has(args, "-vn") || has(args, "-an") || containsPair(args, "-map", "0:v:0") || has(args, "-vf") || has(args, "libx265") {
+			t.Fatalf("audio-only args %v", args)
+		}
+		if !containsPair(args, "-map", "0:a:0?") || !containsPair(args, "-c:a", "aac") {
+			t.Fatalf("audio not encoded: %v", args)
+		}
+		if !containsPair(args, "-f", "matroska") {
+			t.Fatalf("audio-only output must pin the muxer: %v", args)
+		}
+	})
+	t.Run("video only", func(t *testing.T) {
+		args := build(t, func(p *model.Profile) { p.ExcludeAudio = true }, model.TrimSelection{})
+		if !has(args, "-an") || has(args, "-vn") || containsPair(args, "-map", "0:a:0?") || has(args, "-c:a") {
+			t.Fatalf("video-only args %v", args)
+		}
+		if !containsPair(args, "-map", "0:v:0") {
+			t.Fatalf("video not mapped: %v", args)
+		}
+	})
+	t.Run("audio only trim", func(t *testing.T) {
+		trim := model.TrimSelection{Segments: []model.TimeRange{{Start: time.Second, End: 3 * time.Second}}}
+		args := build(t, func(p *model.Profile) { p.ExcludeVideo = true }, trim)
+		if !containsPair(args, "-ss", "1.000000") || !containsPair(args, "-t", "2.000000") {
+			t.Fatalf("trim args missing: %v", args)
+		}
+	})
+	t.Run("both excluded is rejected", func(t *testing.T) {
+		p := base
+		p.ExcludeVideo, p.ExcludeAudio = true, true
+		if _, err := BuildCommand(BuildRequest{FFmpegPath: "ffmpeg", InputPath: "/in", OutputPath: "/out", Profile: p, Media: media}); err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+}

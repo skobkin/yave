@@ -28,20 +28,26 @@ var containerCodecs = map[string]struct {
 
 func validateCompatibility(result *Result, profile model.Profile, container string, media *model.MediaInfo, requireSourceMetadata bool) {
 	codecs := containerCodecs[container]
-	if requireSourceMetadata && media != nil && len(media.VideoStreams) == 0 {
-		result.error("profile.video.encoder", "the input has no video stream (audio-only files and cover art are not video); a video conversion cannot be run on it")
-	}
-	videoCodec, known := selectedVideoCodec(profile.Video.Encoder, media)
-	if known && !codecs.video[videoCodec] {
-		result.error("profile.video.encoder", "%s video is not compatible with the %s container", displayCodec(videoCodec), strings.ToUpper(container))
-	}
-	if requireSourceMetadata && !known && strings.EqualFold(profile.Video.Encoder, "copy") {
-		result.error("profile.video.encoder", "cannot validate video copy compatibility without source video codec metadata")
+	if !profile.ExcludeVideo {
+		if requireSourceMetadata && media != nil && len(media.VideoStreams) == 0 {
+			result.error("profile.video.encoder", "the input has no video stream (audio-only files and cover art are not video); uncheck \"Include video\" to extract the audio")
+		}
+		videoCodec, known := selectedVideoCodec(profile.Video.Encoder, media)
+		if known && !codecs.video[videoCodec] {
+			result.error("profile.video.encoder", "%s video is not compatible with the %s container", displayCodec(videoCodec), strings.ToUpper(container))
+		}
+		if requireSourceMetadata && !known && strings.EqualFold(profile.Video.Encoder, "copy") {
+			result.error("profile.video.encoder", "cannot validate video copy compatibility without source video codec metadata")
+		}
 	}
 
-	audioCodecs, known := selectedAudioCodecs(profile.Audio, media)
-	if requireSourceMetadata && !known && strings.EqualFold(profile.Audio.Mode, model.AudioCopy) {
-		result.error("profile.audio.encoder", "cannot validate audio copy compatibility without source audio codec metadata")
+	var audioCodecs []string
+	if !profile.ExcludeAudio {
+		var known bool
+		audioCodecs, known = selectedAudioCodecs(profile.Audio, media)
+		if requireSourceMetadata && !known && strings.EqualFold(profile.Audio.Mode, model.AudioCopy) {
+			result.error("profile.audio.encoder", "cannot validate audio copy compatibility without source audio codec metadata")
+		}
 	}
 	for _, codec := range audioCodecs {
 		if !codecs.audio[codec] {
@@ -52,7 +58,9 @@ func validateCompatibility(result *Result, profile model.Profile, container stri
 	if container == model.ContainerMP4 && contains(audioCodecs, "opus") {
 		result.warning("profile.audio.encoder", "Opus in MP4 has limited player compatibility")
 	}
-	validateSubtitleCompatibility(result, profile.Subtitles, container, media)
+	if !profile.ExcludeVideo {
+		validateSubtitleCompatibility(result, profile.Subtitles, container, media)
+	}
 }
 
 func validateSubtitleCompatibility(result *Result, subtitles model.SubtitleSettings, container string, media *model.MediaInfo) {

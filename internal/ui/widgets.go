@@ -97,6 +97,7 @@ func (c *Controller) createWidgets() {
 	c.audioBitrate = widget.NewSelect([]string{}, c.changed)
 	c.compression = newIntegerSlider(mustAudioCompressionRange("flac"), 8, c.changed)
 	c.allAudio = widget.NewCheck("Process all audio streams", func(bool) { c.changed("") })
+	c.newStreamIncludeChecks()
 	c.subtitles = widget.NewSelect([]string{model.SubtitleNone, model.SubtitleCopy}, c.changed)
 	// The audio tab is one dynamic form rebuilt behind a signature; build
 	// the initial (copy-mode) row set here so tests and buildLayout see

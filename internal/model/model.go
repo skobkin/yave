@@ -49,6 +49,26 @@ type Profile struct {
 	Video          VideoSettings    `yaml:"video"`
 	Audio          AudioSettings    `yaml:"audio"`
 	Subtitles      SubtitleSettings `yaml:"subtitles"`
+	// ExcludeVideo / ExcludeAudio drop that stream type from the output
+	// (audio extraction, muted video). They are stored inverted so a
+	// config written before these keys existed keeps including both.
+	ExcludeVideo bool `yaml:"exclude_video"`
+	ExcludeAudio bool `yaml:"exclude_audio"`
+}
+
+// OutputExtension returns the file extension (without the dot) for the
+// profile's output: the container name, or the audio-only variant when
+// video is excluded (mka for Matroska, m4a for MP4; WebM keeps webm).
+func (p Profile) OutputExtension() string {
+	if p.ExcludeVideo && !p.ExcludeAudio {
+		switch p.Container {
+		case ContainerMKV:
+			return "mka"
+		case ContainerMP4:
+			return "m4a"
+		}
+	}
+	return p.Container
 }
 
 type VideoSettings struct {

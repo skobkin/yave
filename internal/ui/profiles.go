@@ -135,6 +135,8 @@ func (c *Controller) loadProfile(p model.Profile) {
 	c.compression.SetValue(p.Audio.Compression)
 	c.allAudio.SetChecked(p.Audio.CopyAllStreams)
 	c.subtitles.SetSelected(p.Subtitles.Mode)
+	c.userIncludeVideo, c.userIncludeAudio = !p.ExcludeVideo, !p.ExcludeAudio
+	c.updateStreamIncludeControls()
 }
 
 // videoProfileValue maps the Profile dropdown to the profile value,
@@ -158,7 +160,7 @@ func (c *Controller) videoProfileValue() string {
 // validation (which resolves the same way internally), and the actual
 // run always agree.
 func (c *Controller) commandProfile() model.Profile {
-	p := c.profileFromWidgets()
+	p := c.withStreamOverrides(c.profileFromWidgets())
 	if strings.TrimSpace(p.Video.VAAPIDevice) != "" {
 		return p
 	}
@@ -213,7 +215,9 @@ func (c *Controller) profileFromWidgets() model.Profile {
 			Compression:    c.compression.Value(),
 			CopyAllStreams: c.allAudio.Checked,
 		},
-		Subtitles: model.SubtitleSettings{Mode: c.subtitles.Selected},
+		Subtitles:    model.SubtitleSettings{Mode: c.subtitles.Selected},
+		ExcludeVideo: !c.userIncludeVideo,
+		ExcludeAudio: !c.userIncludeAudio,
 	}
 }
 

@@ -63,9 +63,17 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 	}
 	args = append(args, "-progress", "pipe:1", "-nostats")
 
-	ve, err := lookupVideoEncoder(p.Video.Encoder)
-	if err != nil {
-		return model.RunPlan{}, err
+	if p.ExcludeVideo && p.ExcludeAudio {
+		return model.RunPlan{}, errors.New("video and audio are both excluded: nothing to write")
+	}
+
+	var ve encoder.VideoEncoder
+	if !p.ExcludeVideo {
+		var err error
+		ve, err = lookupVideoEncoder(p.Video.Encoder)
+		if err != nil {
+			return model.RunPlan{}, err
+		}
 	}
 
 	// Per-encoder pre-input flags (e.g. -vaapi_device, -init_hw_device qsv,
@@ -91,15 +99,21 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 		args = append(args, "-ss", formatSeconds(seg.Start))
 	}
 
-	args = append(args, "-i", req.InputPath, "-map", req.Media.VideoMapSpecifier())
-	if p.Audio.CopyAllStreams {
-		args = append(args, "-map", "0:a?")
-	} else {
-		args = append(args, "-map", "0:a:0?")
+	args = append(args, "-i", req.InputPath)
+	if !p.ExcludeVideo {
+		args = append(args, "-map", req.Media.VideoMapSpecifier())
+	}
+	if !p.ExcludeAudio {
+		if p.Audio.CopyAllStreams {
+			args = append(args, "-map", "0:a?")
+		} else {
+			args = append(args, "-map", "0:a:0?")
+		}
 	}
 
 	warnings := make([]string, 0)
-	if p.Subtitles.Mode == model.SubtitleCopy {
+	// Audio-only outputs (mka/m4a) carry no subtitle streams.
+	if p.Subtitles.Mode == model.SubtitleCopy && !p.ExcludeVideo {
 		subtitleArgs, subtitleWarnings := subtitleMapping(p.Container, req.Media.SubtitleStreams)
 		if req.Trim.Active() && len(subtitleArgs) > 0 {
 			// Copied subtitle events cannot be cut at trim boundaries:
@@ -121,17 +135,25 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 		}
 	}
 
-	videoArgs, err := buildVideoArgs(ve, p.Video, req.Media)
-	if err != nil {
-		return model.RunPlan{}, err
+	if p.ExcludeVideo {
+		args = append(args, "-vn")
+	} else {
+		videoArgs, err := buildVideoArgs(ve, p.Video, req.Media)
+		if err != nil {
+			return model.RunPlan{}, err
+		}
+		args = append(args, videoArgs...)
 	}
-	args = append(args, videoArgs...)
 
-	audioArgs, err := buildAudioArgs(p.Audio)
-	if err != nil {
-		return model.RunPlan{}, err
+	if p.ExcludeAudio {
+		args = append(args, "-an")
+	} else {
+		audioArgs, err := buildAudioArgs(p.Audio)
+		if err != nil {
+			return model.RunPlan{}, err
+		}
+		args = append(args, audioArgs...)
 	}
-	args = append(args, audioArgs...)
 
 	if p.Subtitles.Mode == model.SubtitleCopy && hasMappedSubtitles(args) {
 		args = append(args, "-c:s", "copy")
@@ -148,7 +170,7 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 	// dropped negative packets would strand a copied video stream
 	// mid-GOP, which is why that stream keeps the keyframe-snap
 	// behavior the copy warning describes.
-	if _, ok := req.Trim.First(); ok && ve != nil {
+	if _, ok := req.Trim.First(); ok && (ve != nil || p.ExcludeVideo) {
 		args = append(args, "-ss", formatSeconds(0))
 	}
 	// Output-side duration cap. With the input-side -ss above,
@@ -161,6 +183,15 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 		args = append(args, "-movflags", "+faststart")
 	}
 
+	if p.ExcludeVideo {
+		// The audio-only extension (mka/m4a) must not decide the muxer:
+		// m4a would select the ipod muxer, which rejects Opus.
+		muxer, err := containerMuxer(p.Container)
+		if err != nil {
+			return model.RunPlan{}, err
+		}
+		args = append(args, "-f", muxer)
+	}
 	args = append(args, req.OutputPath)
 	return model.RunPlan{
 		Executable: req.FFmpegPath,

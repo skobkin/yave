@@ -55,9 +55,9 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		widget.NewCard("Resolved output", "", c.outputPreview),
 	)
 
-	videoTab := container.NewVScroll(container.NewVBox(c.videoFormBox))
+	videoTab := container.NewVScroll(container.NewVBox(streamIncludeRow(c.includeVideo, c.includeVideoHint), c.videoFormBox))
 
-	audioTab := container.NewVBox(c.audioFormBox)
+	audioTab := container.NewVBox(streamIncludeRow(c.includeAudio, c.includeAudioHint), c.audioFormBox)
 
 	runTab := container.NewBorder(
 		container.NewVBox(
