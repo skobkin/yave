@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"git.skobk.in/skobkin/yave/internal/procgroup"
 )
 
 const (
@@ -270,6 +272,8 @@ type decoder struct {
 func startDecoder(ctx context.Context, path string, args []string) (*decoder, error) {
 	cmd := exec.CommandContext(ctx, path, args...) //nolint:gosec // G204: executable comes from capability detection
 	cmd.WaitDelay = pipeCloseGrace
+	procgroup.Configure(cmd)
+	cmd.Cancel = func() error { return procgroup.Kill(cmd.Process) }
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -318,7 +322,7 @@ func (d *decoder) wait() error {
 
 func (d *decoder) stop() error {
 	if d.cmd.Process != nil {
-		_ = d.cmd.Process.Kill() //nolint:errcheck // already exited is fine
+		_ = procgroup.Kill(d.cmd.Process) //nolint:errcheck // already exited is fine
 	}
 	_, _ = io.Copy(io.Discard, d.stdout) //nolint:errcheck // drain so Wait cannot block
 	return d.wait()

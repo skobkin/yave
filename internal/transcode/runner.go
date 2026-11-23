@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/procgroup"
 )
 
 type Callbacks struct {
@@ -120,7 +121,7 @@ func (c *RunControl) Terminate() {
 	c.triggerCancelContextLocked()
 	c.mu.Unlock()
 	if process != nil {
-		_ = process.Kill()
+		_ = procgroup.Kill(process)
 	}
 }
 
@@ -142,7 +143,7 @@ func (c *RunControl) attach(process *os.Process, stdin io.WriteCloser) {
 	c.mu.Unlock()
 
 	if terminate {
-		_ = process.Kill()
+		_ = procgroup.Kill(process)
 		return
 	}
 	if cancel {
@@ -168,6 +169,7 @@ func (Runner) Run(control *RunControl, plan model.RunPlan, duration time.Duratio
 	}
 
 	cmd := exec.Command(plan.Executable, plan.Args...) //nolint:gosec // G204: executable path validated by ffmpeg.ResolveExecutable
+	procgroup.Configure(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("open FFmpeg control pipe: %w", err)
