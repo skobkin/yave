@@ -55,7 +55,7 @@ func TestMoreMenuHoldsRareActionsAndUpdateCheck(t *testing.T) {
 	for _, item := range c.moreMenu().Items {
 		labels = append(labels, item.Label)
 	}
-	want := []string{"Duplicate profile", "Rename profile", "Delete profile", "Set as default", "", "Settings…", "Check for updates…", "About"}
+	want := []string{"Duplicate profile", "Rename profile", "Delete profile", "Set as default", "", "Export profile…", "Import profile…", "Restore built-in profiles…", "", "Settings…", "Check for updates…", "About"}
 	if len(labels) != len(want) {
 		t.Fatalf("menu = %v", labels)
 	}

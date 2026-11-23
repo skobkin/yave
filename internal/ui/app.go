@@ -124,6 +124,7 @@ type Controller struct {
 	segmentRowViews        []segmentRow
 	showAllFiles           *widget.Check
 	shortcutHandlers       map[fyne.KeyName]func() // Ctrl+<key> handlers, also driven by tests
+	defaultMarker          *widget.Label
 	openFolder             *widget.Button
 	playOutput             *widget.Button
 	runResult              *widget.Label

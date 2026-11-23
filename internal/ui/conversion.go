@@ -99,6 +99,7 @@ func (c *Controller) refresh() {
 	c.updateSegmentList()
 	c.updatePlaybackControls()
 	c.updateStreamIncludeControls()
+	c.updateDefaultMarker()
 	c.updateProfileDirtyMarker()
 	startReason := startBlockReason(c.inputPath, c.inputEntry.Text, c.inspecting, c.caps.FFmpegPath != "", c.numericFieldProblems())
 	c.startHint.SetText(startReason)

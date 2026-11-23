@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"git.skobk.in/skobkin/yave/internal/profiles"
 	"git.skobk.in/skobkin/yave/internal/templates"
 )
 
@@ -179,13 +180,21 @@ func (c *Controller) buildStatusBar() *fyne.Container {
 func (c *Controller) moreMenu() *fyne.Menu {
 	return fyne.NewMenu("",
 		fyne.NewMenuItem("Duplicate profile", func() {
-			c.askProfileName("Duplicate profile", c.profile.Selected+" copy", c.saveAs)
+			c.askProfileName("Duplicate profile",
+				profiles.UniqueName(c.profile.Selected+" copy", c.profileNameTaken), c.profileNameTaken, c.saveAs)
 		}),
 		fyne.NewMenuItem("Rename profile", func() {
-			c.askProfileName("Rename profile", c.profile.Selected, c.renameProfile)
+			current := c.profile.Selected
+			c.askProfileName("Rename profile", current, func(name string) bool {
+				return name != current && c.profileNameTaken(name)
+			}, c.renameProfile)
 		}),
 		fyne.NewMenuItem("Delete profile", c.deleteProfile),
 		fyne.NewMenuItem("Set as default", c.setDefault),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Export profile…", c.exportProfile),
+		fyne.NewMenuItem("Import profile…", c.importProfile),
+		fyne.NewMenuItem("Restore built-in profiles…", c.restoreBuiltins),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Settings…", c.showSettings),
 		fyne.NewMenuItem("Check for updates…", c.checkForUpdates),
@@ -257,9 +266,11 @@ func (c *Controller) profileBar() fyne.CanvasObject {
 	}
 	actions := container.NewHBox(
 		widget.NewButton("Save", c.saveCurrentProfile),
-		widget.NewButton("Save as", func() { c.askProfileName("Save profile as", "", c.saveAs) }),
+		widget.NewButton("Save as", func() { c.askProfileName("Save profile as", "", c.profileNameTaken, c.saveAs) }),
 		more,
 	)
 	c.profileLabel = widget.NewLabel("Profile:")
-	return container.NewBorder(nil, nil, c.profileLabel, actions, c.profile)
+	c.defaultMarker = widget.NewLabel("★ default")
+	c.defaultMarker.Hide()
+	return container.NewBorder(nil, nil, c.profileLabel, container.NewHBox(c.defaultMarker, actions), c.profile)
 }

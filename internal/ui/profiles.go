@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"fyne.io/fyne/v2/storage"
 	"slices"
 	"strings"
 
@@ -348,6 +349,7 @@ func (c *Controller) saveCurrentProfile() {
 			c.config.Profiles[i] = p
 			c.saveConfig()
 			c.markProfileSaved()
+			c.status.SetText(fmt.Sprintf("Profile %q saved", p.Name))
 			c.refresh()
 			return
 		}
@@ -484,10 +486,35 @@ func (c *Controller) deleteProfile() {
 func (c *Controller) setDefault() {
 	c.config.DefaultProfile = c.profile.Selected
 	c.saveConfig()
+	c.status.SetText(fmt.Sprintf("Profile %q set as default", c.profile.Selected))
+	c.updateDefaultMarker()
 }
 
-func (c *Controller) askProfileName(title, initial string, callback func(string)) {
+// updateDefaultMarker shows a star beside the profile selector while the
+// selected profile is the startup default.
+func (c *Controller) updateDefaultMarker() {
+	if c.defaultMarker == nil {
+		return
+	}
+	if c.profile.Selected != "" && c.profile.Selected == c.config.DefaultProfile {
+		c.defaultMarker.Show()
+	} else {
+		c.defaultMarker.Hide()
+	}
+}
+
+// profileNameTaken reports whether a profile with that name exists.
+func (c *Controller) profileNameTaken(name string) bool {
+	_, ok := profiles.Find(c.config.Profiles, name)
+	return ok
+}
+
+// askProfileName shows the name dialog with inline validation: OK stays
+// disabled and the reason is shown until the name is acceptable. taken
+// decides which existing names clash (Rename lets the current name pass).
+func (c *Controller) askProfileName(title, initial string, taken func(string) bool, callback func(string)) {
 	entry := widget.NewEntry()
+	entry.Validator = func(name string) error { return profiles.ValidateName(name, taken) }
 	entry.SetText(initial)
 	items := []*widget.FormItem{
 		widget.NewFormItem("Profile name", entry),
@@ -496,13 +523,133 @@ func (c *Controller) askProfileName(title, initial string, callback func(string)
 		if !ok {
 			return
 		}
-		name := strings.TrimSpace(entry.Text)
-		if name != "" {
-			callback(name)
-		}
+		callback(strings.TrimSpace(entry.Text))
 	}, c.window)
 	d.Resize(fyne.NewSize(560, 180))
 	d.Show()
+}
+
+// exportProfile writes the profile as shown in the editor to a YAML file.
+func (c *Controller) exportProfile() {
+	p := c.profileFromWidgets()
+	data, err := profiles.ExportProfile(p)
+	if err != nil {
+		dialog.ShowError(err, c.window)
+		return
+	}
+	d := dialog.NewFileSave(func(w fyne.URIWriteCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, c.window)
+			return
+		}
+		if w == nil {
+			return
+		}
+		defer func() { _ = w.Close() }()
+		if _, err := w.Write(data); err != nil {
+			dialog.ShowError(fmt.Errorf("write profile: %w", err), c.window)
+			return
+		}
+		c.status.SetText(fmt.Sprintf("Profile %q exported", p.Name))
+	}, c.window)
+	d.SetFileName(sanitizeFileName(p.Name) + ".yaml")
+	d.Resize(openFileDialogSize(c.window.Canvas().Size()))
+	d.Show()
+}
+
+// sanitizeFileName makes a profile name safe as a file name.
+func sanitizeFileName(name string) string {
+	out := strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`/\:*?"<>|`, r) || r < 0x20 {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(name))
+	if out == "" {
+		return "profile"
+	}
+	return out
+}
+
+// importProfile reads a profile YAML file; a name clash is resolved by
+// asking for another name.
+func (c *Controller) importProfile() {
+	d := dialog.NewFileOpen(func(r fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, c.window)
+			return
+		}
+		if r == nil {
+			return
+		}
+		defer func() { _ = r.Close() }()
+		p, err := profiles.ImportProfile(r)
+		if err != nil {
+			dialog.ShowError(err, c.window)
+			return
+		}
+		if !c.profileNameTaken(p.Name) {
+			c.addImported(p)
+			return
+		}
+		c.askProfileName("Profile name already exists — choose another",
+			profiles.UniqueName(p.Name, c.profileNameTaken), c.profileNameTaken,
+			func(name string) {
+				p.Name = name
+				c.addImported(p)
+			})
+	}, c.window)
+	d.SetFilter(storage.NewExtensionFileFilter([]string{".yaml", ".yml"}))
+	d.Resize(openFileDialogSize(c.window.Canvas().Size()))
+	d.Show()
+}
+
+// addImported adds an imported profile, persists it and selects it.
+func (c *Controller) addImported(p model.Profile) {
+	if err := profiles.Add(&c.config, p); err != nil {
+		dialog.ShowError(err, c.window)
+		return
+	}
+	c.saveConfig()
+	c.profile.Options = c.profileNames()
+	c.profile.Refresh()
+	c.guardUnsavedProfile(func() {
+		c.loadProfile(p)
+		c.status.SetText(fmt.Sprintf("Profile %q imported", p.Name))
+	})
+}
+
+// restoreBuiltins adds missing built-in profiles and, after asking, resets
+// modified ones; user profiles are never touched.
+func (c *Controller) restoreBuiltins() {
+	status := profiles.CheckBuiltins(c.config)
+	if len(status.Missing)+len(status.Modified) == 0 {
+		dialog.ShowInformation("Built-in profiles", "All built-in profiles are present and unmodified.", c.window)
+		return
+	}
+	apply := func(reset bool) {
+		done := profiles.RestoreBuiltins(&c.config, reset)
+		c.saveConfig()
+		c.profile.Options = c.profileNames()
+		c.profile.Refresh()
+		if reset && slices.Contains(done.Modified, c.profile.Selected) {
+			c.loadProfile(c.profileByName(c.profile.Selected))
+		}
+		c.status.SetText(fmt.Sprintf("Built-in profiles restored: %d added, %d reset", len(done.Missing), len(done.Modified)))
+	}
+	if len(status.Modified) == 0 {
+		apply(false)
+		return
+	}
+	message := fmt.Sprintf("Modified built-in profiles: %s.\n\nReset them to their defaults too?", strings.Join(status.Modified, ", "))
+	d := dialog.NewCustomConfirm("Restore built-in profiles", "Reset modified", "Only add missing", widget.NewLabel(message),
+		apply, c.window)
+	d.Show()
+}
+
+func (c *Controller) profileByName(name string) model.Profile {
+	p, _ := profiles.Find(c.config.Profiles, name)
+	return p
 }
 
 func (c *Controller) startupProfile() model.Profile {
