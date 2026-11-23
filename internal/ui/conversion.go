@@ -190,18 +190,44 @@ func (c *Controller) startConversion() {
 		c.runJob(job, messages)
 	}
 	if len(existing) > 0 {
-		dialog.NewConfirm("Overwrite output?", overwritePromptMessage(existing), func(ok bool) {
-			if ok {
-				approved := make(map[string]bool, len(existing))
-				for _, path := range existing {
-					approved[path] = true
-				}
-				start(approved)
+		c.showOverwriteDialog(existing, func() {
+			approved := make(map[string]bool, len(existing))
+			for _, path := range existing {
+				approved[path] = true
 			}
-		}, c.window).Show()
+			start(approved)
+		}, func() {
+			c.startAutoRenamed(p, cp, resolved, messages)
+		})
 		return
 	}
 	start(map[string]bool{})
+}
+
+// startAutoRenamed runs the export under a free "_N" name instead of
+// replacing the existing files, re-validating the new output paths.
+func (c *Controller) startAutoRenamed(p, cp model.Profile, resolved string, messages []string) {
+	mode, trim := c.trimExportMode, c.trimRequest()
+	renamed, ok := freeOutputBase(resolved, c.inputPath, func(base string) []string {
+		return exportTargetPaths(mode, trim, base)
+	})
+	if !ok {
+		c.showValidationErrors("Error: could not find a free output name next to "+resolved, "Output")
+		return
+	}
+	targets := exportTargetPaths(mode, trim, renamed)
+	result := validation.ValidateTargets(p, &c.media, c.caps, c.inputPath, targets)
+	if !result.Valid() {
+		c.showValidationErrors(strings.Join(issueMessages(result), "\n"), firstErrorTab(result.Errors))
+		return
+	}
+	job, err := c.buildTrimExportJob(cp, renamed, map[string]bool{})
+	if err != nil {
+		c.showRunError("Export planning failed", err.Error())
+		return
+	}
+	c.outputPath = renamed
+	c.runJob(job, append([]string{"Auto-rename: writing to " + renamed}, messages...))
 }
 
 // showValidationErrors reports why Start was refused in a dialog, with a
