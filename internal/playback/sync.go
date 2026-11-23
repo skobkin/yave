@@ -55,17 +55,38 @@ type clock interface {
 }
 
 // wallClock advances with real time from a media-position origin.
+// The origin is pinned by begin (the first decoded frame); until then it
+// reads as the origin itself.
 type wallClock struct {
-	from  time.Duration
-	start time.Time
-	now   func() time.Time
+	from time.Duration
+	now  func() time.Time
+
+	mu      sync.Mutex
+	start   time.Time
+	started bool
 }
 
 func newWallClock(from time.Duration) *wallClock {
-	return &wallClock{from: from, start: time.Now(), now: time.Now}
+	return &wallClock{from: from, now: time.Now}
 }
 
-func (c *wallClock) Now() time.Duration { return c.from + c.now().Sub(c.start) }
+// begin starts the clock; later calls are no-ops.
+func (c *wallClock) begin() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.started {
+		c.start, c.started = c.now(), true
+	}
+}
+
+func (c *wallClock) Now() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.started {
+		return c.from
+	}
+	return c.from + c.now().Sub(c.start)
+}
 
 // countingReader counts bytes consumed by the audio sink and notes
 // when the stream ends.

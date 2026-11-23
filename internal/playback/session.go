@@ -151,13 +151,21 @@ func Start(ctx context.Context, o Options, sink AudioSink) (*Session, error) {
 // normally so its exit status and stderr become the error; a stream
 // the parser rejected while the process still runs is cancelled first.
 func (s *Session) finishVideo(ctx context.Context, cancel context.CancelFunc, video *decoder, perr error) {
+	// Sample caller cancellation before cancelling ourselves, otherwise a
+	// parse error would be mistaken for a caller stop and lost.
+	stoppedByCaller := ctx.Err() != nil
 	processEnded := perr == nil || errors.Is(perr, io.EOF) || errors.Is(perr, io.ErrUnexpectedEOF)
 	if !processEnded {
 		cancel()
 	}
 	waitErr := video.wait()
-	if ctx.Err() != nil {
-		return // stopped by the caller or cancelled by us after a parse error
+	if stoppedByCaller {
+		return
+	}
+	if !processEnded && perr != nil {
+		// We killed the process ourselves; its exit status is noise.
+		s.setErr(fmt.Errorf("%w%s", perr, video.diagnostics()))
+		return
 	}
 	switch {
 	case waitErr != nil:
@@ -201,6 +209,12 @@ func (s *Session) present(ctx context.Context, video *decoder, clk clock, o Opti
 			return streamErr(ctx, err)
 		}
 		at := o.From + time.Duration(k)*interval
+		if k == 0 {
+			// Decoder start-up latency must not count as playback time.
+			if b, ok := clk.(interface{ begin() }); ok {
+				b.begin()
+			}
+		}
 		for {
 			act, wait := decide(at, clk.Now())
 			if act == actWait {

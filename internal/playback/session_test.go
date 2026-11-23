@@ -203,6 +203,34 @@ func TestSessionTruncatedStreamIsAnError(t *testing.T) {
 	}
 }
 
+func TestSessionMalformedStreamIsAnError(t *testing.T) {
+	ffmpeg := writeFakeFFmpeg(t, "printf 'garbage\\n'\nsleep 30", "exit 0")
+	s, err := Start(context.Background(), Options{FFmpegPath: ffmpeg, Input: "in.mkv"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, s)
+	<-s.Done()
+	if s.Err() == nil {
+		t.Error("Err() = nil, want the parse error")
+	}
+}
+
+func TestWallClockStartsAtBegin(t *testing.T) {
+	now := time.Unix(100, 0)
+	c := &wallClock{from: 5 * time.Second, now: func() time.Time { return now }}
+	now = now.Add(time.Second) // latency before the first frame
+	if got := c.Now(); got != 5*time.Second {
+		t.Fatalf("Now() before begin = %v, want the origin", got)
+	}
+	c.begin()
+	now = now.Add(2 * time.Second)
+	c.begin() // idempotent
+	if got := c.Now(); got != 7*time.Second {
+		t.Errorf("Now() = %v, want 7s", got)
+	}
+}
+
 func TestStartValidatesOptions(t *testing.T) {
 	if _, err := Start(context.Background(), Options{Input: "in.mkv"}, nil); err == nil {
 		t.Error("empty FFmpeg path must be rejected")

@@ -104,7 +104,7 @@ func validateProfile(profile model.Profile, capabilities model.Capabilities, med
 	case !supportedVideoEncoder(videoEncoder):
 		result.error("profile.video.encoder", "unsupported video encoder %q", profile.Video.Encoder)
 	case videoEncoder != "copy" && !encoderAvailable(capabilities, videoEncoder):
-		if _, isVAAPI := encoder.RequiredVAProfiles(videoEncoder, "", model.MediaInfo{}); isVAAPI && len(capabilities.VAAPIDevices) > 0 {
+		if _, isVAAPI := encoder.RequiredVAProfiles(videoEncoder, "", model.MediaInfo{}); isVAAPI && vaapiProbed(capabilities.VAAPIDevices) {
 			result.error("profile.video.encoder", "video encoder %q is not available: the detected FFmpeg build lacks it or no detected VA-API device can encode it", profile.Video.Encoder)
 			break
 		}
@@ -695,4 +695,11 @@ func supportedVideoEncoder(encoderName string) bool {
 
 func supportedAudioEncoder(encoder string) bool {
 	return oneOf(encoder, "libopus", "opus", "aac", "libmp3lame", "mp3", "flac")
+}
+
+// vaapiProbed reports whether at least one device was probed successfully,
+// so a device-capability explanation is trustworthy.
+func vaapiProbed(devices []vaapi.DeviceInfo) bool {
+	_, known := vaapi.AnyDeviceEncodes(devices, nil)
+	return known
 }
