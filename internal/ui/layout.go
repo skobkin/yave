@@ -18,11 +18,12 @@ import (
 
 func (c *Controller) buildLayout() fyne.CanvasObject {
 	browse := widget.NewButton("Browse...", c.chooseInput)
-	inputTab := container.NewVBox(
+	inputBox := container.NewVBox(
 		widget.NewCard("FFmpeg", "", c.detection),
 		widget.NewCard("Input", "", container.NewBorder(nil, nil, nil, browse, c.inputEntry)),
 		widget.NewCard("Media information", "", c.mediaInfo),
 	)
+	inputTab := container.NewVScroll(inputBox)
 
 	// The trim tab deliberately uses no heading cards: the section
 	// titles ("Trim", "Frame preview", "Boundaries") cost vertical
@@ -57,7 +58,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 
 	videoTab := container.NewVScroll(container.NewVBox(streamIncludeRow(c.includeVideo, c.includeVideoHint), c.videoFormBox))
 
-	audioTab := container.NewVBox(streamIncludeRow(c.includeAudio, c.includeAudioHint), c.audioFormBox)
+	audioTab := container.NewVScroll(container.NewVBox(streamIncludeRow(c.includeAudio, c.includeAudioHint), c.audioFormBox))
 
 	runTab := container.NewBorder(
 		container.NewVBox(
@@ -164,6 +165,29 @@ func (c *Controller) buildStatusBar() *fyne.Container {
 	return container.NewBorder(nil, nil, status, actions, c.progress)
 }
 
+// moreMenu lists the rarely used profile actions and the application
+// entries behind the profile bar's "⋯" button.
+func (c *Controller) moreMenu() *fyne.Menu {
+	return fyne.NewMenu("",
+		fyne.NewMenuItem("Duplicate profile", func() {
+			c.askProfileName("Duplicate profile", c.profile.Selected+" copy", c.saveAs)
+		}),
+		fyne.NewMenuItem("Rename profile", func() {
+			c.askProfileName("Rename profile", c.profile.Selected, c.renameProfile)
+		}),
+		fyne.NewMenuItem("Delete profile", c.deleteProfile),
+		fyne.NewMenuItem("Set as default", c.setDefault),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Settings…", c.showSettings),
+		fyne.NewMenuItem("Check for updates…", c.checkForUpdates),
+		fyne.NewMenuItem("About", c.showAbout),
+	)
+}
+
+func (c *Controller) showAbout() {
+	dialog.ShowInformation("About YAVE", windowTitle()+"\nA focused desktop FFmpeg transcoding frontend.", c.window)
+}
+
 func (c *Controller) outputTemplateHelpButton() *widget.Button {
 	button := widget.NewButton("?", c.showOutputTemplateHelp)
 	button.Importance = widget.LowImportance
@@ -216,14 +240,16 @@ func (c *Controller) showOutputTemplateHelp() {
 }
 
 func (c *Controller) profileBar() fyne.CanvasObject {
+	more := widget.NewButtonWithIcon("", theme.MoreHorizontalIcon(), nil)
+	more.OnTapped = func() {
+		menu := widget.NewPopUpMenu(c.moreMenu(), c.window.Canvas())
+		pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(more)
+		menu.ShowAtPosition(pos.Add(fyne.NewPos(0, more.Size().Height)))
+	}
 	actions := container.NewHBox(
 		widget.NewButton("Save", c.saveCurrentProfile),
 		widget.NewButton("Save as", func() { c.askProfileName("Save profile as", "", c.saveAs) }),
-		widget.NewButton("Duplicate", func() { c.askProfileName("Duplicate profile", c.profile.Selected+" copy", c.saveAs) }),
-		widget.NewButton("Rename", func() { c.askProfileName("Rename profile", c.profile.Selected, c.renameProfile) }),
-		widget.NewButton("Delete", c.deleteProfile),
-		widget.NewButton("Set default", c.setDefault),
-		widget.NewButton("Settings", c.showSettings),
+		more,
 	)
 	c.profileLabel = widget.NewLabel("Profile:")
 	return container.NewBorder(nil, nil, c.profileLabel, actions, c.profile)

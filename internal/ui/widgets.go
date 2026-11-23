@@ -19,6 +19,8 @@ import (
 
 func (c *Controller) createWidgets() {
 	c.status = widget.NewLabel("Idle")
+	// A long error must not widen the window; the log keeps the full text.
+	c.status.Truncation = fyne.TextTruncateEllipsis
 	c.detection = widget.NewLabel("Detecting FFmpeg...")
 	c.detection.Wrapping = fyne.TextWrapWord
 	c.inputEntry = widget.NewEntry()

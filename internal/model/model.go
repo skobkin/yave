@@ -29,6 +29,10 @@ type UIConfig struct {
 	// TrayNoticeShown records that the one-time "keeps running in the
 	// tray" notice has been shown.
 	TrayNoticeShown bool `yaml:"tray_notice_shown"`
+	// WindowWidth / WindowHeight remember the main window's size in
+	// device-independent pixels; zero means "use the default".
+	WindowWidth  int `yaml:"window_width,omitempty"`
+	WindowHeight int `yaml:"window_height,omitempty"`
 }
 
 type FFmpegConfig struct {

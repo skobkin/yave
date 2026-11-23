@@ -269,7 +269,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	c.runStages = (transcode.Runner{}).RunSequence
 	c.createWidgets()
 	c.window.SetContent(c.buildLayout())
-	c.window.Resize(fyne.NewSize(1050, 760))
+	c.window.Resize(initialWindowSize(cfg.UI.WindowWidth, cfg.UI.WindowHeight))
 	c.window.CenterOnScreen()
 	c.window.SetIcon(resources.AppIcon())
 	c.window.SetOnDropped(func(_ fyne.Position, uris []fyne.URI) {
@@ -356,6 +356,7 @@ func (c *Controller) setWindowVisible(visible bool) {
 }
 
 func (c *Controller) hideWindow() {
+	c.rememberWindowSize()
 	c.window.Hide()
 	c.setWindowVisible(false)
 }
@@ -465,6 +466,7 @@ func (c *Controller) quitApplication() {
 		prompt.SetCloseIntercept(nil)
 		prompt.Close()
 	}
+	c.rememberWindowSize()
 	c.window.SetCloseIntercept(nil)
 	// Terminate killed FFmpeg, so the run goroutine unwinds quickly; the
 	// staging directory is removed at the end of that unwind, after
