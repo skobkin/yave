@@ -194,7 +194,7 @@ func (c *Controller) moreMenu() *fyne.Menu {
 }
 
 func (c *Controller) showAbout() {
-	dialog.ShowInformation("About YAVE", windowTitle()+"\nA focused desktop FFmpeg transcoding frontend.", c.window)
+	dialog.ShowInformation("About YAVE", windowTitle()+"\nA focused desktop FFmpeg transcoding frontend.\n\nShortcuts: "+shortcutHelp, c.window)
 }
 
 func (c *Controller) outputTemplateHelpButton() *widget.Button {

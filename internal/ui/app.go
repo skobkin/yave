@@ -123,6 +123,7 @@ type Controller struct {
 	segmentRows            *fyne.Container
 	segmentRowViews        []segmentRow
 	showAllFiles           *widget.Check
+	shortcutHandlers       map[fyne.KeyName]func() // Ctrl+<key> handlers, also driven by tests
 	openFolder             *widget.Button
 	playOutput             *widget.Button
 	runResult              *widget.Label
@@ -276,6 +277,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	c.runStages = (transcode.Runner{}).RunSequence
 	c.createWidgets()
 	c.window.SetContent(c.buildLayout())
+	c.registerShortcuts()
 	c.window.Resize(initialWindowSize(cfg.UI.WindowWidth, cfg.UI.WindowHeight))
 	c.window.CenterOnScreen()
 	c.window.SetIcon(resources.AppIcon())
