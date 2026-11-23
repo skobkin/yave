@@ -223,3 +223,49 @@ func TestInspectRunsExpectedCommand(t *testing.T) {
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
+
+// TestInspectIgnoresStderrNoise pins that warnings ffprobe prints on stderr
+// while exiting 0 do not corrupt the JSON document, and that stderr still
+// reaches the error message when ffprobe fails.
+func TestInspectIgnoresStderrNoise(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a POSIX shell script")
+	}
+	tests := []struct {
+		name    string
+		script  string
+		wantErr string
+	}{
+		{
+			name:   "stderr noise with success",
+			script: "#!/bin/sh\necho '[h264 @ 0x1] error while decoding MB' >&2\nprintf '%s\\n' '{\"format\":{\"format_name\":\"matroska\"}}'\n",
+		},
+		{
+			name:    "failure keeps stderr",
+			script:  "#!/bin/sh\necho 'no such file' >&2\necho '{}'\nexit 1\n",
+			wantErr: "no such file",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			scriptPath := filepath.Join(dir, "ffprobe")
+			if err := os.WriteFile(scriptPath, []byte(tc.script), 0o755); err != nil { //nolint:gosec // G306: test helper script must be executable
+				t.Fatal(err)
+			}
+			got, err := Inspect(context.Background(), scriptPath, filepath.Join(dir, "in.mkv"))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || strings.Contains(err.Error(), "{}") {
+					t.Fatalf("error = %v, want stderr %q only", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Format != "matroska" {
+				t.Fatalf("format = %q", got.Format)
+			}
+		})
+	}
+}

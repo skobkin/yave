@@ -103,13 +103,13 @@ func StreamKeys(ctx context.Context, ffprobePath, path string) ([]StreamKey, err
 	}
 	cmd := exec.CommandContext(ctx, resolved, args...) //nolint:gosec // G204: resolved via exec.LookPath
 	cmd.WaitDelay = probeWaitDelay
-	output, err := cmd.CombinedOutput()
+	output, stderr, err := runProbe(cmd)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		if !errors.Is(err, exec.ErrWaitDelay) {
-			detail := strings.TrimSpace(string(output))
+			detail := stderr
 			if detail == "" {
 				detail = err.Error()
 			}

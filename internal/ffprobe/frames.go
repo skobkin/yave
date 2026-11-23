@@ -125,12 +125,12 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 			"-read_intervals", interval,
 			inputPath,
 		}
-		output, err := exec.CommandContext(ctx, resolved, args...).CombinedOutput() //nolint:gosec // G204: resolved via exec.LookPath
+		output, stderr, err := runProbe(exec.CommandContext(ctx, resolved, args...)) //nolint:gosec // G204: resolved via exec.LookPath
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, 0, ctx.Err()
 			}
-			detail := strings.TrimSpace(string(output))
+			detail := stderr
 			if detail == "" {
 				detail = err.Error()
 			}
@@ -184,18 +184,18 @@ func FrameTimes(ctx context.Context, executable, inputPath string, from, to time
 // missing, "N/A" or unparseable origin degrades to 0 rather than
 // failing the window fetch.
 func inputOrigin(ctx context.Context, resolved, inputPath string) (time.Duration, time.Duration, error) {
-	out, err := exec.CommandContext(ctx, resolved, //nolint:gosec // G204: resolved via exec.LookPath
+	out, stderr, err := runProbe(exec.CommandContext(ctx, resolved, //nolint:gosec // G204: resolved via exec.LookPath
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=start_time,duration:stream_tags=DURATION:format=start_time,duration,format_name",
 		"-of", "json",
 		inputPath,
-	).CombinedOutput()
+	))
 	if err != nil {
 		if ctx.Err() != nil {
 			return 0, 0, ctx.Err()
 		}
-		detail := strings.TrimSpace(string(out))
+		detail := stderr
 		if detail == "" {
 			detail = err.Error()
 		}
