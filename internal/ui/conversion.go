@@ -96,6 +96,7 @@ func (c *Controller) refresh() {
 	// synchronized with every state change that flows through refresh().
 	c.updateTrimMessages(trimValidationInputs(p))
 	c.updateSegmentButtons()
+	c.updateSegmentList()
 	c.updatePlaybackControls()
 	c.updateStreamIncludeControls()
 	c.updateProfileDirtyMarker()

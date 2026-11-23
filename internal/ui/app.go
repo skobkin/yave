@@ -118,6 +118,10 @@ type Controller struct {
 	userIncludeAudio       bool
 	applyingStreamOverride bool
 	notifier               notify.Notifier
+	segmentPanel           *fyne.Container
+	segmentHeader          *widget.Label
+	segmentRows            *fyne.Container
+	segmentRowViews        []segmentRow
 	openFolder             *widget.Button
 	playOutput             *widget.Button
 	runResult              *widget.Label

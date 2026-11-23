@@ -1931,7 +1931,7 @@ func TestTrimTabLayout(t *testing.T) {
 	// The controls VBox is glued to the bottom edge, in this order; the
 	// transport buttons ride on the enable check's row.
 	wantControls := []fyne.CanvasObject{
-		c.previewStatus, transport, c.trimTimeline, c.trimMessage, segments, boundaries,
+		c.previewStatus, transport, c.trimTimeline, c.trimMessage, c.segmentPanel, segments, boundaries,
 	}
 	if len(controls.Objects) != len(wantControls) {
 		t.Fatalf("bottom controls hold %d rows, want %d", len(controls.Objects), len(wantControls))

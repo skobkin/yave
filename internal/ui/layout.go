@@ -41,6 +41,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		container.NewHBox(c.trimEnable, c.trimHint, layout.NewSpacer(), c.trimPlay, c.trimPlaySelection),
 		c.trimTimeline,
 		c.trimMessage,
+		c.buildSegmentPanel(),
 		trimSegmentsRow(c),
 		trimBoundariesRow(c),
 	)
