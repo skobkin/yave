@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
@@ -90,7 +91,11 @@ type Controller struct {
 	// setBoundaryDisplay around every display write.
 	displayingBoundaries bool
 	inputGeneration      uint64 // guards late async results per input
-	previews             trimPreviews
+	detectGeneration     uint64 // guards late FFmpeg detection results
+	// discover runs FFmpeg capability detection; nil means ffmpeg.Discover.
+	// Tests inject it to control timing.
+	discover func(context.Context, model.FFmpegConfig) (model.Capabilities, error)
+	previews trimPreviews
 
 	// Optional Trim-tab playback (see playback.go): its state and the
 	// transport buttons that sit next to the enable check.

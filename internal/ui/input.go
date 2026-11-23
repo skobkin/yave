@@ -48,8 +48,9 @@ func (c *Controller) setInput(path string) {
 	c.cancelTrimWork()
 	c.resetTrimForNewInput()
 	c.refresh()
+	ffprobePath := c.config.FFmpeg.FFprobePath
 	go func() {
-		info, err := ffprobe.Inspect(context.Background(), c.config.FFmpeg.FFprobePath, path)
+		info, err := ffprobe.Inspect(context.Background(), ffprobePath, path)
 		c.dispatchUI(func() {
 			// A late result from an older input must not overwrite the
 			// newer input's state.
@@ -72,11 +73,24 @@ func (c *Controller) setInput(path string) {
 }
 
 func (c *Controller) detect() {
+	// Snapshot the config and bump the generation on the UI thread: the
+	// goroutine must not read c.config, which Settings and applyDetection
+	// write, and a slow earlier detection must not overwrite a newer one.
+	c.detectGeneration++
+	gen := c.detectGeneration
+	cfg := c.config.FFmpeg
+	discover := c.discover
+	if discover == nil {
+		discover = ffmpeg.Discover
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		caps, err := ffmpeg.Discover(ctx, c.config.FFmpeg)
-		fyne.Do(func() {
+		caps, err := discover(ctx, cfg)
+		c.dispatchUI(func() {
+			if c.detectGeneration != gen {
+				return
+			}
 			if err != nil {
 				c.caps = model.Capabilities{}
 				c.detection.SetText("Detection failed: " + err.Error())
