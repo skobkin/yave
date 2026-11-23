@@ -25,6 +25,8 @@ func (c *Controller) createWidgets() {
 	c.inputEntry = widget.NewEntry()
 	c.inputEntry.SetPlaceHolder("Select or drop a video file")
 	c.inputEntry.OnSubmitted = c.setInput
+	// An edited-but-unsubmitted path gates Start (see startBlockReason).
+	c.inputEntry.OnChanged = func(string) { c.refresh() }
 	c.mediaInfo = widget.NewLabel("No input selected")
 	c.mediaInfo.Wrapping = fyne.TextWrapWord
 
@@ -248,6 +250,9 @@ func (c *Controller) createWidgets() {
 			c.copyCommand.Enable()
 		}
 	}
+	c.startHint = widget.NewLabel("")
+	c.startHint.Truncation = fyne.TextTruncateEllipsis
+	c.startHint.TextStyle = fyne.TextStyle{Italic: true}
 	c.start = widget.NewButton("Start", c.startConversion)
 	c.cancel = widget.NewButton("Cancel", c.cancelConversion)
 	c.cancel.Disable()

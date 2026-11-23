@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
@@ -97,7 +99,9 @@ func (c *Controller) refresh() {
 	c.updateTrimMessages(p.Video.Encoder, p.Audio)
 	c.updateSegmentButtons()
 	c.updatePlaybackControls()
-	if c.runControl == nil {
+	startReason := startBlockReason(c.inputPath, c.inputEntry.Text, c.inspecting, c.caps.FFmpegPath != "", c.numericFieldProblems())
+	c.startHint.SetText(startReason)
+	if c.runControl == nil && startReason == "" {
 		c.start.Enable()
 	} else {
 		c.start.Disable()
@@ -140,12 +144,21 @@ func (c *Controller) startConversion() {
 		// boundaries.
 		result.Errors = append(result.Errors, c.trimEntryIssues()...)
 	}
+	for _, problem := range c.numericFieldProblems() {
+		result.Errors = append(result.Errors, validation.Issue{
+			Severity: validation.SeverityError, Field: "profile.video", Message: problem,
+		})
+	}
 	messages := issueMessages(result)
 	if resolveErr != nil {
 		messages = append([]string{"Error: " + resolveErr.Error()}, messages...)
 	}
 	if resolveErr != nil || !result.Valid() {
-		c.showRunError("Validation failed", strings.Join(messages, "\n"))
+		tab := firstErrorTab(result.Errors)
+		if resolveErr != nil && tab == "" {
+			tab = "Output"
+		}
+		c.showValidationErrors(strings.Join(messages, "\n"), tab)
 		return
 	}
 	// The run uses the materialized profile (automatic VAAPI device
@@ -188,6 +201,32 @@ func (c *Controller) startConversion() {
 		return
 	}
 	start(map[string]bool{})
+}
+
+// showValidationErrors reports why Start was refused in a dialog, with a
+// button that jumps to the tab holding the offending control. The run log
+// of the previous conversion stays untouched.
+func (c *Controller) showValidationErrors(message, tab string) {
+	c.status.SetText("Validation failed")
+	label := widget.NewLabel(message)
+	label.Wrapping = fyne.TextWrapWord
+	scroll := container.NewVScroll(label)
+	scroll.SetMinSize(fyne.NewSize(480, 140))
+	if tab == "" {
+		dialog.NewCustom("Cannot start", "Close", scroll, c.window).Show()
+		return
+	}
+	dialog.NewCustomConfirm("Cannot start", "Go to "+tab, "Close", scroll, func(goTo bool) {
+		if !goTo {
+			return
+		}
+		for _, item := range c.tabs.Items {
+			if item.Text == tab {
+				c.tabs.Select(item)
+				return
+			}
+		}
+	}, c.window).Show()
 }
 
 func (c *Controller) showRunError(status, message string) {

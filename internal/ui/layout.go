@@ -158,7 +158,7 @@ func (c *Controller) buildStatusBar() *fyne.Container {
 	progressInfoSize := widget.NewLabel(progressInfoWidthSample).MinSize()
 	progressInfo := container.NewGridWrap(progressInfoSize, c.progressInfo)
 	status := container.NewHBox(c.status, progressInfo)
-	actions := container.NewHBox(c.start, c.cancel)
+	actions := container.NewHBox(c.startHint, c.start, c.cancel)
 
 	return container.NewBorder(nil, nil, status, actions, c.progress)
 }

@@ -106,6 +106,7 @@ type Controller struct {
 	trimPlaySelection *widget.Button
 
 	trimEnable       *widget.Check
+	startHint        *widget.Label
 	logFollow        *widget.Check
 	openLog          *widget.Button
 	copyCommand      *widget.Button
