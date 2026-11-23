@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -144,11 +145,16 @@ type GPUAdapter struct {
 }
 
 type MediaInfo struct {
-	Path            string
-	Format          string
-	Duration        time.Duration
-	Bitrate         int64
-	VideoStreams    []VideoStream
+	Path         string
+	Format       string
+	Duration     time.Duration
+	Bitrate      int64
+	VideoStreams []VideoStream
+	// CoverArtStreams holds attached pictures (disposition attached_pic,
+	// e.g. MP3/M4A cover art). They are video streams to ffmpeg but not
+	// video content, so they are kept out of VideoStreams: an audio file
+	// with a cover is an audio-only input.
+	CoverArtStreams []VideoStream
 	AudioStreams    []AudioStream
 	SubtitleStreams []SubtitleStream
 	ChapterCount    int
@@ -187,6 +193,23 @@ func (m MediaInfo) PrimaryVideo() (VideoStream, bool) {
 		return VideoStream{}, false
 	}
 	return m.VideoStreams[0], true
+}
+
+// VideoMapSpecifier returns the ffmpeg -map specifier for the primary video
+// stream. It is "0:v:0" unless attached pictures precede the primary video
+// in the input, in which case the absolute stream index is used so that
+// cover art is never selected as the video.
+func (m MediaInfo) VideoMapSpecifier() string {
+	primary, ok := m.PrimaryVideo()
+	if !ok {
+		return "0:v:0"
+	}
+	for _, cover := range m.CoverArtStreams {
+		if cover.Index < primary.Index {
+			return fmt.Sprintf("0:%d", primary.Index)
+		}
+	}
+	return "0:v:0"
 }
 
 type Progress struct {

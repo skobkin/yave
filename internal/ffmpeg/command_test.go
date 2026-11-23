@@ -974,3 +974,38 @@ func TestWriteConcatList(t *testing.T) {
 		t.Fatal("empty part list must be rejected")
 	}
 }
+
+func TestBuildCommandNeverMapsCoverArtAsVideo(t *testing.T) {
+	t.Parallel()
+	profile := model.BuiltinProfiles()[3]
+	tests := []struct {
+		name  string
+		media model.MediaInfo
+		want  string
+	}{
+		{
+			name:  "cover after the video keeps 0:v:0",
+			media: model.MediaInfo{VideoStreams: []model.VideoStream{{Index: 0, Width: 1920, Height: 1080}}, CoverArtStreams: []model.VideoStream{{Index: 2}}},
+			want:  "0:v:0",
+		},
+		{
+			name:  "cover before the video maps the real stream by index",
+			media: model.MediaInfo{VideoStreams: []model.VideoStream{{Index: 1, Width: 1920, Height: 1080}}, CoverArtStreams: []model.VideoStream{{Index: 0}}},
+			want:  "0:1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := BuildCommand(BuildRequest{
+				FFmpegPath: "ffmpeg", InputPath: "/tmp/in.mp4", OutputPath: "/tmp/out.mkv",
+				Profile: profile, Media: tc.media,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsPair(plan.Args, "-map", tc.want) {
+				t.Fatalf("args %v lack -map %s", plan.Args, tc.want)
+			}
+		})
+	}
+}

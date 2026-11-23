@@ -1054,3 +1054,20 @@ func TestValidateVAAPIEncoderRemovedByDeviceNarrowing(t *testing.T) {
 
 	assertErrorContains(t, result, "profile.video.encoder", "no detected VA-API device can encode it")
 }
+
+func TestValidateRunRejectsInputWithoutVideoStream(t *testing.T) {
+	input := createInput(t)
+	profile := validProfile()
+	out := filepath.Join(t.TempDir(), "output.mkv")
+	audioOnly := &model.MediaInfo{AudioStreams: []model.AudioStream{{Index: 0, Codec: "aac"}}}
+	coverOnly := &model.MediaInfo{
+		AudioStreams:    []model.AudioStream{{Index: 0, Codec: "mp3"}},
+		CoverArtStreams: []model.VideoStream{{Index: 1, Codec: "mjpeg"}},
+	}
+	for name, media := range map[string]*model.MediaInfo{"audio only": audioOnly, "cover art only": coverOnly} {
+		t.Run(name, func(t *testing.T) {
+			result := validation.Validate(profile, media, capabilities(), input, out)
+			assertErrorContains(t, result, "profile.video.encoder", "no video stream")
+		})
+	}
+}

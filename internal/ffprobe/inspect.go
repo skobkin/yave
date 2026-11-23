@@ -112,7 +112,11 @@ func Parse(data []byte) (model.MediaInfo, error) {
 	for _, stream := range document.Streams {
 		switch stream.CodecType {
 		case "video":
-			info.VideoStreams = append(info.VideoStreams, model.VideoStream{
+			target := &info.VideoStreams
+			if stream.Disposition["attached_pic"] == 1 {
+				target = &info.CoverArtStreams
+			}
+			*target = append(*target, model.VideoStream{
 				Index:       stream.Index,
 				Codec:       stream.CodecName,
 				Width:       stream.Width,

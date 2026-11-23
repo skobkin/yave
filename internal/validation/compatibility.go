@@ -28,6 +28,9 @@ var containerCodecs = map[string]struct {
 
 func validateCompatibility(result *Result, profile model.Profile, container string, media *model.MediaInfo, requireSourceMetadata bool) {
 	codecs := containerCodecs[container]
+	if requireSourceMetadata && media != nil && len(media.VideoStreams) == 0 {
+		result.error("profile.video.encoder", "the input has no video stream (audio-only files and cover art are not video); a video conversion cannot be run on it")
+	}
 	videoCodec, known := selectedVideoCodec(profile.Video.Encoder, media)
 	if known && !codecs.video[videoCodec] {
 		result.error("profile.video.encoder", "%s video is not compatible with the %s container", displayCodec(videoCodec), strings.ToUpper(container))

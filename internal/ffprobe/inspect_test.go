@@ -269,3 +269,19 @@ func TestInspectIgnoresStderrNoise(t *testing.T) {
 		})
 	}
 }
+
+func TestParseSeparatesAttachedPictures(t *testing.T) {
+	got, err := Parse([]byte(`{"streams":[
+	  {"index":0,"codec_name":"mp3","codec_type":"audio","sample_rate":"44100","channels":2},
+	  {"index":1,"codec_name":"mjpeg","codec_type":"video","width":500,"height":500,"disposition":{"attached_pic":1}}
+	],"format":{"format_name":"mp3","duration":"10"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.VideoStreams) != 0 || len(got.CoverArtStreams) != 1 || got.CoverArtStreams[0].Index != 1 {
+		t.Fatalf("cover art must not count as video: %#v", got)
+	}
+	if _, ok := got.PrimaryVideo(); ok {
+		t.Fatal("an audio file with cover art has no primary video")
+	}
+}

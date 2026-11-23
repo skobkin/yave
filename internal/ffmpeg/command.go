@@ -91,7 +91,7 @@ func BuildCommand(req BuildRequest) (model.RunPlan, error) {
 		args = append(args, "-ss", formatSeconds(seg.Start))
 	}
 
-	args = append(args, "-i", req.InputPath, "-map", "0:v:0")
+	args = append(args, "-i", req.InputPath, "-map", req.Media.VideoMapSpecifier())
 	if p.Audio.CopyAllStreams {
 		args = append(args, "-map", "0:a?")
 	} else {
@@ -249,10 +249,17 @@ func subtitleMapping(container string, streams []model.SubtitleStream) ([]string
 	return args, warnings
 }
 
+// isNumericStreamMap reports whether spec is an absolute "0:<index>" video
+// mapping (see model.MediaInfo.VideoMapSpecifier) rather than a subtitle one.
+func isNumericStreamMap(spec string) bool {
+	_, err := strconv.Atoi(strings.TrimPrefix(spec, "0:"))
+	return err == nil
+}
+
 func hasMappedSubtitles(args []string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == "-map" && strings.HasPrefix(args[i+1], "0:") &&
-			args[i+1] != "0:v:0" && !strings.HasPrefix(args[i+1], "0:a") {
+			args[i+1] != "0:v:0" && !strings.HasPrefix(args[i+1], "0:a") && !isNumericStreamMap(args[i+1]) {
 			return true
 		}
 	}
