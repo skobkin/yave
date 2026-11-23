@@ -92,6 +92,12 @@ type Controller struct {
 	inputGeneration      uint64 // guards late async results per input
 	previews             trimPreviews
 
+	// Optional Trim-tab playback (see playback.go): its state and the
+	// transport buttons that sit next to the enable check.
+	play              playbackState
+	trimPlay          *widget.Button
+	trimPlaySelection *widget.Button
+
 	trimEnable       *widget.Check
 	trimTimeline     *timeline
 	trimIn           *widget.Entry

@@ -35,7 +35,9 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	// whole tab fits next to the timeline without scrolling.
 	controls := container.NewVBox(
 		c.previewStatus,
-		c.trimEnable,
+		// Transport buttons share the enable row so playback costs no
+		// extra vertical space.
+		container.NewHBox(c.trimEnable, layout.NewSpacer(), c.trimPlay, c.trimPlaySelection),
 		c.trimTimeline,
 		c.trimMessage,
 		trimSegmentsRow(c),

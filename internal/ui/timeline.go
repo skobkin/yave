@@ -106,6 +106,9 @@ type timeline struct {
 	// SetSegments.
 	onSetIn  func()
 	onSetOut func()
+	// onTogglePlay fires for Space so the controller can start or pause
+	// playback; nil leaves the key unhandled.
+	onTogglePlay func()
 }
 
 func newTimeline() *timeline {
@@ -349,6 +352,10 @@ func (t *timeline) TypedKey(ev *fyne.KeyEvent) {
 		t.step(-1)
 	case fyne.KeyRight:
 		t.step(1)
+	case fyne.KeySpace:
+		if t.onTogglePlay != nil {
+			t.onTogglePlay()
+		}
 	case fyne.KeyLeftBracket:
 		if t.ctrlHeld {
 			t.setInToPlayhead()

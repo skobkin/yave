@@ -1856,7 +1856,7 @@ func TestTrimTabLayout(t *testing.T) {
 		t.Fatalf("border bottom is %T, want the controls container", content.Objects[1])
 	}
 
-	var boundaries, segments *fyne.Container
+	var boundaries, segments, transport *fyne.Container
 	containsAll := func(objs []fyne.CanvasObject, want ...fyne.CanvasObject) bool {
 		for _, w := range want {
 			found := false
@@ -1879,6 +1879,9 @@ func TestTrimTabLayout(t *testing.T) {
 		}
 		if containsAll(box.Objects, c.trimExport, c.trimAdd, c.trimDelete) {
 			segments = box
+		}
+		if containsAll(box.Objects, c.trimEnable, c.trimPlay, c.trimPlaySelection) {
+			transport = box
 		}
 		for _, obj := range box.Objects {
 			switch o := obj.(type) {
@@ -1914,9 +1917,13 @@ func TestTrimTabLayout(t *testing.T) {
 	if segments == nil {
 		t.Fatal("export mode and segment buttons must share one row container")
 	}
-	// The controls VBox is glued to the bottom edge, in this order.
+	if transport == nil {
+		t.Fatal("the enable check and the Play buttons must share one row container")
+	}
+	// The controls VBox is glued to the bottom edge, in this order; the
+	// transport buttons ride on the enable check's row.
 	wantControls := []fyne.CanvasObject{
-		c.previewStatus, c.trimEnable, c.trimTimeline, c.trimMessage, segments, boundaries,
+		c.previewStatus, transport, c.trimTimeline, c.trimMessage, segments, boundaries,
 	}
 	if len(controls.Objects) != len(wantControls) {
 		t.Fatalf("bottom controls hold %d rows, want %d", len(controls.Objects), len(wantControls))

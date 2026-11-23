@@ -100,6 +100,7 @@ func (c *Controller) setTrimEnabled(enabled bool) {
 // trimming enabled (Reset's contract): the command keeps
 // -ss 0.000 -t <duration> until trimming is disabled entirely.
 func (c *Controller) resetTrimSelection() {
+	c.cancelPlayback()
 	c.trimSelection = model.TrimSelection{
 		Segments: []model.TimeRange{{Start: 0, End: c.media.Duration}},
 	}
@@ -485,6 +486,12 @@ func segmentBoundary(sel model.TrimSelection, selected, which int) time.Duration
 // preview does not depend on the playhead, so refresh() is deliberately
 // not called here — dragging must not rebuild the preview per pixel.
 func (c *Controller) onTimelinePlayhead(at time.Duration) {
+	// While playing, a committed move is a seek: playback resumes from
+	// the new position instead of requesting a static frame.
+	if c.playbackActive() {
+		c.seekPlayback(at)
+		return
+	}
 	// A manual move supersedes any queued frame walk: when the in-flight
 	// window lands it applies nothing (frameStepIdle), so the playhead
 	// stays where the user put it instead of jumping back to the stale
@@ -611,6 +618,7 @@ func (c *Controller) onFFmpegExecutableChanged() {
 	}
 	pending := c.previews.pendingAt // captured before cancel clears it
 	shown := c.previews.displayedAt
+	c.cancelPlayback() // the running decoder belongs to the old executable
 	c.cancelPreviewWork()
 	c.ensureExtractor() // path differs → rebuild + cache clear
 	if !c.trimEnabled || c.inputPath == "" || c.media.Duration <= 0 {
@@ -651,7 +659,7 @@ func (c *Controller) requestPreview(at time.Duration) {
 // debounce and retire the in-flight extraction for that very frame,
 // postponing it indefinitely while the pointer stays in one bucket.
 func (c *Controller) requestHover(at time.Duration) {
-	if !c.trimEnabled || c.inputPath == "" || c.media.Duration <= 0 {
+	if !c.trimEnabled || c.inputPath == "" || c.media.Duration <= 0 || c.playbackActive() {
 		return
 	}
 	q := at / hoverQuantum * hoverQuantum
@@ -671,7 +679,7 @@ func (c *Controller) requestHover(at time.Duration) {
 // restoreCommittedPreview returns the display to the committed playhead
 // after a hover leaves: cache first, then a fresh explicit request.
 func (c *Controller) restoreCommittedPreview() {
-	if !c.trimEnabled || c.inputPath == "" || c.media.Duration <= 0 {
+	if !c.trimEnabled || c.inputPath == "" || c.media.Duration <= 0 || c.playbackActive() {
 		return
 	}
 	at := c.trimTimeline.Playhead()
@@ -1314,6 +1322,7 @@ func (c *Controller) cancelPreviewWork() {
 // Called on input change and before the application quits so no
 // extraction outlives the UI.
 func (c *Controller) cancelTrimWork() {
+	c.cancelPlayback()
 	c.cancelPreviewWork()
 	if c.previews.stripCancel != nil {
 		c.previews.stripCancel()

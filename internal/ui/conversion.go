@@ -90,6 +90,7 @@ func (c *Controller) refresh() {
 	// synchronized with every state change that flows through refresh().
 	c.updateTrimMessages(p.Video.Encoder, p.Audio)
 	c.updateSegmentButtons()
+	c.updatePlaybackControls()
 	if c.runControl == nil {
 		c.start.Enable()
 	} else {
@@ -199,6 +200,9 @@ func (c *Controller) showRunError(status, message string) {
 // reports as successfully published — join-mode intermediates (empty
 // OutputPath) are never counted and never described as published.
 func (c *Controller) runJob(job *trimExportJob, messages []string) {
+	// An export owns the CPU and the preview display: playback stops
+	// before it starts and stays unavailable until it finishes.
+	c.cancelPlayback()
 	control := transcode.NewRunControl()
 	c.runControl = control
 	c.cancelStage = cancellationRunning

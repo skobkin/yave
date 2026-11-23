@@ -119,10 +119,15 @@ func (c *Controller) createWidgets() {
 	c.trimEnable = widget.NewCheck("Enable trimming", c.setTrimEnabled)
 	c.trimTimeline = newTimeline()
 	c.trimTimeline.stepFrame = func(at time.Duration, dir int) (time.Duration, bool) {
+		// Manual frame seeking takes over from playback: stop it and let
+		// the step show the exact frame it lands on.
+		c.cancelPlayback()
 		next, state := c.previews.index.step(at, dir, c.media.Duration)
 		c.applyFrameStep(next, state)
 		return next, state == frameStepMoved
 	}
+	c.newPlaybackButtons()
+	c.trimTimeline.onTogglePlay = c.togglePlayback
 	c.trimTimeline.onPlayhead = c.onTimelinePlayhead
 	c.trimTimeline.onSegments = c.onTimelineSegments
 	c.trimTimeline.onSelected = c.onTimelineSelected
