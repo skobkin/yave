@@ -8,6 +8,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 	"fyne.io/systray"
@@ -56,9 +57,10 @@ type Controller struct {
 	updateChecker   updateChecker
 	checkingUpdates atomic.Bool
 	// trayApp publishes the tray menu; nil when no system tray is available.
-	trayApp       desktop.App
-	trayCheckItem *fyne.MenuItem
-	trayQuitItem  *fyne.MenuItem
+	trayApp        desktop.App
+	trayToggleItem *fyne.MenuItem
+	trayCheckItem  *fyne.MenuItem
+	trayQuitItem   *fyne.MenuItem
 
 	status        *widget.Label
 	detection     *widget.Label
@@ -279,6 +281,9 @@ func (c *Controller) configureTray(desk desktop.App) {
 	desk.SetSystemTrayIcon(resources.TrayIcon())
 	c.trayProgress = newTrayProgressIndicator(desk.SetSystemTrayIcon)
 	c.trayApp = desk
+	c.trayToggleItem = fyne.NewMenuItem(trayToggleLabel(true), func() {
+		fyne.Do(c.toggleWindow)
+	})
 	c.trayCheckItem = fyne.NewMenuItem("Check for updates…", func() {
 		// Fyne's tray menus already dispatch item actions onto the UI
 		// thread; the fyne.Do keeps that true even for a backend that
@@ -288,34 +293,89 @@ func (c *Controller) configureTray(desk desktop.App) {
 	c.trayQuitItem = fyne.NewMenuItem("Quit", c.requestQuit)
 	c.trayQuitItem.IsQuit = true
 	desk.SetSystemTrayMenu(c.trayMenu())
-	c.window.SetCloseIntercept(c.hideWindow)
-	systray.SetOnTapped(func() {
-		fyne.Do(func() {
-			if c.windowVisible {
-				c.window.Hide()
-				c.windowVisible = false
-				return
-			}
-			c.window.Show()
-			c.windowVisible = true
-		})
-	})
+	c.window.SetCloseIntercept(c.onCloseRequested)
+	systray.SetOnTapped(func() { fyne.Do(c.toggleWindow) })
+}
+
+func trayToggleLabel(visible bool) string {
+	if visible {
+		return "Hide YAVE"
+	}
+	return "Show YAVE"
+}
+
+// toggleWindow shows the window when hidden and hides it when visible.
+// Must run on the UI thread.
+func (c *Controller) toggleWindow() {
+	if c.windowVisible {
+		c.hideWindow()
+		return
+	}
+	c.window.Show()
+	c.setWindowVisible(true)
+}
+
+// setWindowVisible records the window's visibility and keeps the tray
+// toggle item's label in step with it, republishing the menu when the
+// label changed (AppIndicator hosts do not poll the item).
+func (c *Controller) setWindowVisible(visible bool) {
+	c.windowVisible = visible
+	if c.trayToggleItem == nil {
+		return
+	}
+	label := trayToggleLabel(visible)
+	if c.trayToggleItem.Label == label {
+		return
+	}
+	c.trayToggleItem.Label = label
+	if c.trayApp != nil {
+		c.trayApp.SetSystemTrayMenu(c.trayMenu())
+	}
 }
 
 func (c *Controller) hideWindow() {
 	c.window.Hide()
-	c.windowVisible = false
+	c.setWindowVisible(false)
+}
+
+// onCloseRequested handles the window close button. With "quit on close"
+// it goes through the normal quit flow (including the run-in-progress
+// prompt); otherwise it hides the window to the tray, explaining once how
+// to get it back.
+func (c *Controller) onCloseRequested() {
+	if c.config.UI.QuitOnClose {
+		c.requestQuit()
+		return
+	}
+	if c.config.UI.TrayNoticeShown {
+		c.hideWindow()
+		return
+	}
+	c.config.UI.TrayNoticeShown = true
+	c.saveConfig()
+	notice := dialog.NewInformation("YAVE keeps running",
+		"YAVE keeps running in the system tray. Use the tray icon menu (Show YAVE) to bring the window back, or turn off \"Close to tray\" in Settings to quit when the window is closed.",
+		c.window)
+	// The dialog lives on the window, so hide the window only once the
+	// notice is dismissed.
+	notice.SetOnClosed(c.hideWindow)
+	notice.Show()
 }
 
 // trayMenu assembles the system tray menu; the single source of the item
 // list so republishing stays in sync with configureTray.
 func (c *Controller) trayMenu() *fyne.Menu {
-	return fyne.NewMenu("YAVE", c.trayCheckItem, c.trayQuitItem)
+	items := make([]*fyne.MenuItem, 0, 3)
+	if c.trayToggleItem != nil {
+		items = append(items, c.trayToggleItem)
+	}
+	items = append(items, c.trayCheckItem, c.trayQuitItem)
+	return fyne.NewMenu("YAVE", items...)
 }
 
 func (c *Controller) ShowAndRun() {
 	c.window.Show()
-	c.windowVisible = true
+	c.setWindowVisible(true)
 	c.startUpdateChecks()
 	c.window.ShowAndRun()
 	if c.updateChecker != nil {

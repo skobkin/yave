@@ -16,6 +16,19 @@ type Config struct {
 	DefaultProfile string        `yaml:"default_profile"`
 	FFmpeg         FFmpegConfig  `yaml:"ffmpeg"`
 	Updates        UpdatesConfig `yaml:"updates"`
+	UI             UIConfig      `yaml:"ui"`
+}
+
+// UIConfig holds window behavior settings. The zero value keeps the
+// historical behavior (closing the window hides it to the tray), so configs
+// written before these keys existed are unchanged.
+type UIConfig struct {
+	// QuitOnClose makes the window close button quit the application
+	// instead of hiding the window to the system tray.
+	QuitOnClose bool `yaml:"quit_on_close"`
+	// TrayNoticeShown records that the one-time "keeps running in the
+	// tray" notice has been shown.
+	TrayNoticeShown bool `yaml:"tray_notice_shown"`
 }
 
 type FFmpegConfig struct {

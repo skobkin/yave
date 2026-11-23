@@ -164,7 +164,7 @@ func (c *Controller) revealMainWindowIfHidden() {
 	if c.windowVisible {
 		return
 	}
-	c.windowVisible = true
+	c.setWindowVisible(true)
 	c.window.Show()
 	c.window.RequestFocus()
 }

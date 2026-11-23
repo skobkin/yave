@@ -10,6 +10,9 @@ import (
 	"fyne.io/fyne/v2"
 	fynetest "fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/profiles"
 )
 
 type fakeConversionControl struct {
@@ -308,4 +311,80 @@ func TestQuitProceedsAfterCleanupWaitTimeout(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("quitApplication hung past the cleanup wait timeout")
 	}
+}
+
+func TestTrayMenuListsToggleFirstAndLabelFollowsVisibility(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+
+	quit := fyne.NewMenuItem("Quit", nil)
+	quit.IsQuit = true
+	c := &Controller{
+		window:         app.NewWindow("YAVE"),
+		windowVisible:  true,
+		trayToggleItem: fyne.NewMenuItem(trayToggleLabel(true), nil),
+		trayCheckItem:  fyne.NewMenuItem("Check for updates…", nil),
+		trayQuitItem:   quit,
+	}
+	items := c.trayMenu().Items
+	if len(items) != 3 || items[0] != c.trayToggleItem {
+		t.Fatalf("tray menu = %v, want the show/hide item first", items)
+	}
+
+	c.toggleWindow() // visible -> hidden
+	if c.windowVisible || c.trayToggleItem.Label != "Show YAVE" {
+		t.Fatalf("after hide: visible=%v label=%q", c.windowVisible, c.trayToggleItem.Label)
+	}
+	c.toggleWindow() // hidden -> visible
+	if !c.windowVisible || c.trayToggleItem.Label != "Hide YAVE" {
+		t.Fatalf("after show: visible=%v label=%q", c.windowVisible, c.trayToggleItem.Label)
+	}
+}
+
+func TestCloseRequestedFollowsQuitOnCloseSetting(t *testing.T) {
+	t.Run("quit on close goes through the quit flow", func(t *testing.T) {
+		app := fynetest.NewApp()
+		defer app.Quit()
+		c := &Controller{
+			app:           app,
+			window:        app.NewWindow("YAVE"),
+			windowVisible: true,
+			runControl:    &fakeConversionControl{},
+		}
+		c.config.UI.QuitOnClose = true
+		c.onCloseRequested()
+		if c.quitPrompt == nil {
+			t.Fatal("closing during a run with quit-on-close must show the quit confirmation")
+		}
+		if !c.windowVisible {
+			t.Fatal("the window must stay visible while the prompt is open")
+		}
+	})
+
+	t.Run("first hide shows the notice once and persists it", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		app := fynetest.NewApp()
+		defer app.Quit()
+		c := &Controller{
+			app:        app,
+			window:     app.NewWindow("YAVE"),
+			configPath: filepath.Join(t.TempDir(), "config.yaml"),
+			config:     model.DefaultConfig(),
+		}
+		c.windowVisible = true
+		c.window.Show()
+		c.onCloseRequested()
+		if !c.config.UI.TrayNoticeShown {
+			t.Fatal("notice flag not recorded")
+		}
+		saved, err := profiles.Load(c.configPath)
+		if err != nil || !saved.UI.TrayNoticeShown {
+			t.Fatalf("notice flag not persisted: %v %#v", err, saved.UI)
+		}
+		// Second close hides immediately, without another notice.
+		c.onCloseRequested()
+		if c.windowVisible {
+			t.Fatal("window must hide immediately once the notice was shown")
+		}
+	})
 }

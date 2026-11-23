@@ -17,10 +17,13 @@ func (c *Controller) showSettings() {
 	ffprobePath.SetText(c.config.FFmpeg.FFprobePath)
 	checkUpdates := widget.NewCheck("", nil)
 	checkUpdates.SetChecked(c.config.Updates.CheckAutomatically)
+	closeToTray := widget.NewCheck("", nil)
+	closeToTray.SetChecked(!c.config.UI.QuitOnClose)
 	form := dialog.NewForm("Settings", "Save and detect", "Cancel", []*widget.FormItem{
 		widget.NewFormItem("FFmpeg path", ffmpegPath),
 		widget.NewFormItem("ffprobe path", ffprobePath),
 		widget.NewFormItem("Check for updates automatically", checkUpdates),
+		widget.NewFormItem("Close to tray", closeToTray),
 	}, func(ok bool) {
 		if !ok {
 			return
@@ -29,6 +32,7 @@ func (c *Controller) showSettings() {
 		c.config.FFmpeg.FFmpegPath = strings.TrimSpace(ffmpegPath.Text)
 		c.config.FFmpeg.FFprobePath = strings.TrimSpace(ffprobePath.Text)
 		c.config.Updates.CheckAutomatically = checkUpdates.Checked
+		c.config.UI.QuitOnClose = !closeToTray.Checked
 		if c.config.FFmpeg.FFmpegPath != prevFFmpeg {
 			// Invalidate previews immediately — do not wait for detect()
 			// to resolve the new path, or a hung old extraction could
