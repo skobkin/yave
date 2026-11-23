@@ -169,3 +169,22 @@ func TestNormalizeLowercasesEnumFields(t *testing.T) {
 		t.Fatalf("enum fields not normalized: %#v", got)
 	}
 }
+
+func TestNotificationSettingsRoundTripAndDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := model.DefaultConfig()
+	if cfg.Notifications != (model.NotificationsConfig{}) {
+		t.Fatalf("default must keep every notification on: %#v", cfg.Notifications)
+	}
+	cfg.Notifications = model.NotificationsConfig{DisableCompleted: true, DisableCanceled: true}
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Notifications != cfg.Notifications {
+		t.Fatalf("notifications = %#v, want %#v", loaded.Notifications, cfg.Notifications)
+	}
+}

@@ -11,12 +11,23 @@ import (
 const ConfigVersion = 1
 
 type Config struct {
-	Version        int           `yaml:"version"`
-	Profiles       []Profile     `yaml:"profiles"`
-	DefaultProfile string        `yaml:"default_profile"`
-	FFmpeg         FFmpegConfig  `yaml:"ffmpeg"`
-	Updates        UpdatesConfig `yaml:"updates"`
-	UI             UIConfig      `yaml:"ui"`
+	Version        int                 `yaml:"version"`
+	Profiles       []Profile           `yaml:"profiles"`
+	DefaultProfile string              `yaml:"default_profile"`
+	FFmpeg         FFmpegConfig        `yaml:"ffmpeg"`
+	Updates        UpdatesConfig       `yaml:"updates"`
+	UI             UIConfig            `yaml:"ui"`
+	Notifications  NotificationsConfig `yaml:"notifications"`
+}
+
+// NotificationsConfig controls desktop notifications. Every flag is a
+// "disable" switch so a config written before this section existed keeps
+// all notifications on.
+type NotificationsConfig struct {
+	DisableAll       bool `yaml:"disable_all"`
+	DisableCompleted bool `yaml:"disable_completed"`
+	DisableFailed    bool `yaml:"disable_failed"`
+	DisableCanceled  bool `yaml:"disable_canceled"`
 }
 
 // UIConfig holds window behavior settings. The zero value keeps the

@@ -4,9 +4,11 @@ import (
 	"strings"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
+	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/profiles"
 )
 
@@ -19,11 +21,31 @@ func (c *Controller) showSettings() {
 	checkUpdates.SetChecked(c.config.Updates.CheckAutomatically)
 	closeToTray := widget.NewCheck("", nil)
 	closeToTray.SetChecked(!c.config.UI.QuitOnClose)
+	n := c.config.Notifications
+	notifyCompletedCheck := widget.NewCheck("Conversion finished", nil)
+	notifyCompletedCheck.SetChecked(!n.DisableCompleted)
+	notifyFailedCheck := widget.NewCheck("Conversion failed", nil)
+	notifyFailedCheck.SetChecked(!n.DisableFailed)
+	notifyCanceledCheck := widget.NewCheck("Conversion canceled", nil)
+	notifyCanceledCheck.SetChecked(!n.DisableCanceled)
+	typeChecks := []*widget.Check{notifyCompletedCheck, notifyFailedCheck, notifyCanceledCheck}
+	notifyAll := widget.NewCheck("", func(on bool) {
+		for _, check := range typeChecks {
+			if on {
+				check.Enable()
+			} else {
+				check.Disable()
+			}
+		}
+	})
+	notifyAll.SetChecked(!n.DisableAll)
 	form := dialog.NewForm("Settings", "Save and detect", "Cancel", []*widget.FormItem{
 		widget.NewFormItem("FFmpeg path", ffmpegPath),
 		widget.NewFormItem("ffprobe path", ffprobePath),
 		widget.NewFormItem("Check for updates automatically", checkUpdates),
 		widget.NewFormItem("Close to tray", closeToTray),
+		widget.NewFormItem("Desktop notifications", notifyAll),
+		widget.NewFormItem("   Notify when", container.NewVBox(typeChecks[0], typeChecks[1], typeChecks[2])),
 	}, func(ok bool) {
 		if !ok {
 			return
@@ -33,6 +55,12 @@ func (c *Controller) showSettings() {
 		c.config.FFmpeg.FFprobePath = strings.TrimSpace(ffprobePath.Text)
 		c.config.Updates.CheckAutomatically = checkUpdates.Checked
 		c.config.UI.QuitOnClose = !closeToTray.Checked
+		c.config.Notifications = model.NotificationsConfig{
+			DisableAll:       !notifyAll.Checked,
+			DisableCompleted: !notifyCompletedCheck.Checked,
+			DisableFailed:    !notifyFailedCheck.Checked,
+			DisableCanceled:  !notifyCanceledCheck.Checked,
+		}
 		if c.config.FFmpeg.FFmpegPath != prevFFmpeg {
 			// Invalidate previews immediately — do not wait for detect()
 			// to resolve the new path, or a hung old extraction could
@@ -47,7 +75,7 @@ func (c *Controller) showSettings() {
 	// wide "Check for updates automatically" label column leaves the two
 	// path entries only a sliver of width; 560px matches the profile-name
 	// dialog and gives the entries room for full executable paths.
-	form.Resize(fyne.NewSize(560, 260))
+	form.Resize(fyne.NewSize(560, 380))
 	form.Show()
 }
 

@@ -14,6 +14,7 @@ import (
 	"fyne.io/systray"
 
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/notify"
 	"git.skobk.in/skobkin/yave/internal/profiles"
 	"git.skobk.in/skobkin/yave/internal/resources"
 	"git.skobk.in/skobkin/yave/internal/transcode"
@@ -116,6 +117,7 @@ type Controller struct {
 	userIncludeVideo       bool // the user's (saved) choice; the checkbox shows the effective state
 	userIncludeAudio       bool
 	applyingStreamOverride bool
+	notifier               notify.Notifier
 	openFolder             *widget.Button
 	playOutput             *widget.Button
 	runResult              *widget.Label
@@ -285,6 +287,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	if desk, ok := a.(desktop.App); ok {
 		c.configureTray(desk)
 	}
+	c.setupNotifier()
 	c.setupUpdateChecker()
 	return c, nil
 }

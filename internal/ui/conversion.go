@@ -446,6 +446,7 @@ func (c *Controller) startRunLogUpdates(runLog *runLog, control conversionContro
 func (c *Controller) setRunResult(err error, published, total int, elapsed time.Duration, outputs []string) {
 	c.resetTrayProgress()
 	c.setRunProgressTitle(-1)
+	c.notifyRun(err, elapsed, outputs, published, total)
 	switch err {
 	case nil:
 		c.status.SetText(formatRunSummary(elapsed, outputs, outputSizes(outputs)))
