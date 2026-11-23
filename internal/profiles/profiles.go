@@ -169,10 +169,30 @@ func Normalize(cfg *model.Config) error {
 	if err := Validate(cfg); err != nil {
 		return err
 	}
+	for i := range cfg.Profiles {
+		normalizeEnums(&cfg.Profiles[i])
+	}
 	if _, ok := Find(cfg.Profiles, cfg.DefaultProfile); !ok {
 		cfg.DefaultProfile = cfg.Profiles[0].Name
 	}
 	return nil
+}
+
+// normalizeEnums lowercases and trims the enum-like profile fields. Validation
+// accepts them case-insensitively, but command generation compares them
+// exactly, so a hand-edited "MP4" would otherwise validate and then produce
+// a command without faststart, skipped subtitles and an "MP4" extension.
+func normalizeEnums(p *model.Profile) {
+	for _, field := range []*string{
+		&p.Container,
+		&p.Video.Encoder,
+		&p.Video.FrameRateMode,
+		&p.Audio.Mode,
+		&p.Audio.Encoder,
+		&p.Subtitles.Mode,
+	} {
+		*field = strings.ToLower(strings.TrimSpace(*field))
+	}
 }
 
 // Validate enforces non-empty, unique profile names.

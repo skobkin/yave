@@ -149,3 +149,23 @@ func TestProfileMutationsKeepDefaultValid(t *testing.T) {
 		t.Fatal("default still references deleted profile")
 	}
 }
+
+func TestNormalizeLowercasesEnumFields(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Profiles = []model.Profile{{
+		Name:      "Mixed",
+		Container: " MP4 ",
+		Video:     model.VideoSettings{Encoder: "Libx265", FrameRateMode: "Source"},
+		Audio:     model.AudioSettings{Mode: "Copy", Encoder: "AAC"},
+		Subtitles: model.SubtitleSettings{Mode: "Copy"},
+	}}
+	cfg.DefaultProfile = "Mixed"
+	if err := Normalize(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Profiles[0]
+	if got.Container != "mp4" || got.Video.Encoder != "libx265" || got.Video.FrameRateMode != "source" ||
+		got.Audio.Mode != "copy" || got.Audio.Encoder != "aac" || got.Subtitles.Mode != "copy" {
+		t.Fatalf("enum fields not normalized: %#v", got)
+	}
+}
