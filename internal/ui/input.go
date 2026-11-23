@@ -102,6 +102,7 @@ func (c *Controller) detect() {
 	// write, and a slow earlier detection must not overwrite a newer one.
 	c.detectGeneration++
 	gen := c.detectGeneration
+	c.setDetecting(true)
 	cfg := c.config.FFmpeg
 	discover := c.discover
 	if discover == nil {
@@ -115,6 +116,7 @@ func (c *Controller) detect() {
 			if c.detectGeneration != gen {
 				return
 			}
+			c.setDetecting(false)
 			if err != nil {
 				c.caps = model.Capabilities{}
 				c.detection.SetText("Detection failed: " + err.Error())
@@ -173,4 +175,33 @@ func (c *Controller) applyDetection(caps model.Capabilities) {
 	c.reconcileDevices(false)
 	c.updateControlState()
 	c.selectRunnableProfile()
+}
+
+// setDetecting shows or hides the detection spinner and keeps the Retry
+// button off while a detection or a conversion is running.
+func (c *Controller) setDetecting(on bool) {
+	c.detecting = on
+	if c.detectActivity == nil {
+		return
+	}
+	if on {
+		c.detectActivity.Show()
+		c.detectActivity.Start()
+	} else {
+		c.detectActivity.Stop()
+		c.detectActivity.Hide()
+	}
+	c.updateRetryDetect()
+}
+
+// updateRetryDetect enables Retry detection only when nothing is running.
+func (c *Controller) updateRetryDetect() {
+	if c.retryDetect == nil {
+		return
+	}
+	if c.detecting || c.runControl != nil {
+		c.retryDetect.Disable()
+	} else {
+		c.retryDetect.Enable()
+	}
 }

@@ -28,7 +28,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	}
 	copyInfo := widget.NewButton("Copy", func() { fyne.CurrentApp().Clipboard().SetContent(c.mediaInfo.Text) })
 	inputBox := container.NewVBox(
-		widget.NewCard("FFmpeg", "", c.detection),
+		widget.NewCard("FFmpeg", "", container.NewVBox(c.detection, container.NewHBox(c.retryDetect, c.detectActivity))),
 		widget.NewCard("Input", "", container.NewBorder(nil, nil, nil, container.NewHBox(c.showAllFiles, recent, browse), c.inputEntry)),
 		widget.NewCard("Media information", "", container.NewBorder(nil, container.NewHBox(layout.NewSpacer(), copyInfo), nil, nil, c.mediaInfo)),
 	)

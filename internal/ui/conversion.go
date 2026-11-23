@@ -98,6 +98,7 @@ func (c *Controller) refresh() {
 	c.updateSegmentButtons()
 	c.updateSegmentList()
 	c.updatePlaybackControls()
+	c.updateRetryDetect()
 	c.updateStreamIncludeControls()
 	c.updateDefaultMarker()
 	c.updateProfileDirtyMarker()

@@ -125,6 +125,9 @@ type Controller struct {
 	showAllFiles           *widget.Check
 	shortcutHandlers       map[fyne.KeyName]func() // Ctrl+<key> handlers, also driven by tests
 	defaultMarker          *widget.Label
+	retryDetect            *widget.Button
+	detectActivity         *widget.Activity
+	detecting              bool
 	openFolder             *widget.Button
 	playOutput             *widget.Button
 	runResult              *widget.Label

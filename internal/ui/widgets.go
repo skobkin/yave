@@ -23,6 +23,9 @@ func (c *Controller) createWidgets() {
 	c.status.Truncation = fyne.TextTruncateEllipsis
 	c.detection = widget.NewLabel("Detecting FFmpeg...")
 	c.detection.Wrapping = fyne.TextWrapWord
+	c.retryDetect = widget.NewButton("Retry detection", c.detect)
+	c.detectActivity = widget.NewActivity()
+	c.detectActivity.Hide()
 	c.inputEntry = widget.NewEntry()
 	c.inputEntry.SetPlaceHolder("Select or drop a video file")
 	c.inputEntry.OnSubmitted = c.setInput

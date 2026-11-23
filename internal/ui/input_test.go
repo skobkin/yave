@@ -41,3 +41,42 @@ func TestDetectDropsStaleResults(t *testing.T) {
 		t.Fatalf("detection label = %q: a stale result overwrote the newer one", c.detection.Text)
 	}
 }
+
+func TestRetryDetectionRerunsDetectionAndTracksBusyState(t *testing.T) {
+	c, _, updates := exportTestController(t)
+	release := make(chan struct{})
+	calls := make(chan struct{}, 4)
+	c.discover = func(ctx context.Context, cfg model.FFmpegConfig) (model.Capabilities, error) {
+		calls <- struct{}{}
+		<-release
+		return model.Capabilities{}, errors.New("not installed")
+	}
+
+	c.retryDetect.OnTapped()
+	<-calls
+	if !c.detecting || !c.retryDetect.Disabled() || !c.detectActivity.Visible() {
+		t.Fatal("while detecting, Retry must be disabled and the spinner shown")
+	}
+	close(release)
+	pumpUntil(t, updates, func() bool { return !c.detecting }, "detection result")
+	if c.retryDetect.Disabled() || c.detectActivity.Visible() {
+		t.Fatal("after detection, Retry must be enabled and the spinner hidden")
+	}
+	if !strings.Contains(c.detection.Text, "not installed") {
+		t.Fatalf("diagnostics = %q, want the failure shown", c.detection.Text)
+	}
+}
+
+func TestRetryDetectionIsOffDuringARun(t *testing.T) {
+	c, _, _ := exportTestController(t)
+	c.runControl = &fakeConversionControl{}
+	c.updateRetryDetect()
+	if !c.retryDetect.Disabled() {
+		t.Fatal("Retry detection must be disabled while a conversion runs")
+	}
+	c.runControl = nil
+	c.updateRetryDetect()
+	if c.retryDetect.Disabled() {
+		t.Fatal("Retry detection must be available again after the run")
+	}
+}
