@@ -60,7 +60,11 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	audioTab := container.NewVBox(c.audioFormBox)
 
 	runTab := container.NewBorder(
-		container.NewVBox(widget.NewLabel("Command"), c.command, widget.NewLabel("Output")),
+		container.NewVBox(
+			container.NewHBox(widget.NewLabel("Command"), layout.NewSpacer(), c.copyCommand),
+			c.command,
+			container.NewHBox(widget.NewLabel("Output"), layout.NewSpacer(), c.logFollow, c.openLog),
+		),
 		nil, nil, nil,
 		c.log,
 	)

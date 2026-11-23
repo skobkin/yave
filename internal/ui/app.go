@@ -106,6 +106,9 @@ type Controller struct {
 	trimPlaySelection *widget.Button
 
 	trimEnable       *widget.Check
+	logFollow        *widget.Check
+	openLog          *widget.Button
+	copyCommand      *widget.Button
 	trimHint         *widget.Label // why trimming is unavailable
 	inspecting       bool          // ffprobe is running for the current input
 	trimTimeline     *timeline

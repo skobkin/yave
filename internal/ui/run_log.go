@@ -25,12 +25,21 @@ type runLog struct {
 	version   uint64
 }
 
-func openLastRunLog() (*runLog, error) {
+// lastRunLogPath returns where the log of the most recent conversion is
+// written.
+func lastRunLogPath() (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
-		return newRunLog("", nil), fmt.Errorf("find user cache directory: %w", err)
+		return "", fmt.Errorf("find user cache directory: %w", err)
 	}
-	path := filepath.Join(dir, "yave", "last-conversion.log")
+	return filepath.Join(dir, "yave", "last-conversion.log"), nil
+}
+
+func openLastRunLog() (*runLog, error) {
+	path, err := lastRunLogPath()
+	if err != nil {
+		return newRunLog("", nil), err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return newRunLog("", nil), fmt.Errorf("create log directory: %w", err)
 	}

@@ -235,6 +235,19 @@ func (c *Controller) createWidgets() {
 	// much better tradeoff for machine-generated output.
 	c.log.Wrapping = fyne.TextWrapOff
 	c.log.SetMinRowsVisible(12)
+	c.logFollow = widget.NewCheck("Follow output", nil)
+	c.logFollow.SetChecked(true)
+	c.openLog = widget.NewButton("Open log file", c.openLogFile)
+	c.openLog.Disable()
+	c.copyCommand = widget.NewButton("Copy command", c.copyCommandText)
+	c.copyCommand.Disable()
+	c.command.OnChanged = func(text string) {
+		if strings.TrimSpace(text) == "" {
+			c.copyCommand.Disable()
+		} else {
+			c.copyCommand.Enable()
+		}
+	}
 	c.start = widget.NewButton("Start", c.startConversion)
 	c.cancel = widget.NewButton("Cancel", c.cancelConversion)
 	c.cancel.Disable()

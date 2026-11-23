@@ -3,9 +3,13 @@ package ui
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
@@ -190,7 +194,7 @@ func (c *Controller) showRunError(status, message string) {
 	c.status.SetText(status)
 	c.progressInfo.SetText("")
 	c.progress.SetValue(0)
-	c.log.SetText(message)
+	c.setLogText(message)
 	c.tabs.Select(c.runTab)
 	c.setProgressVisible(false)
 }
@@ -241,6 +245,9 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 
 	runLog, logErr := openLastRunLog()
 	c.activeRunLog = runLog
+	if logErr == nil {
+		c.openLog.Enable()
+	}
 	if logErr != nil {
 		runLog.AppendLine("Warning: complete conversion log is unavailable: " + logErr.Error())
 	}
@@ -259,7 +266,7 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 	}
 	runLog.AppendLine("")
 	initialLog, _ := runLog.LiveSnapshot()
-	c.log.SetText(initialLog)
+	c.setLogText(initialLog)
 	stopLogUpdates := c.startRunLogUpdates(runLog, control)
 
 	published := 0
@@ -314,7 +321,7 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 			c.cancelSince = time.Time{}
 			c.cancel.SetText("Cancel")
 			c.cancel.Disable()
-			c.log.SetText(finalLog)
+			c.setLogText(finalLog)
 			c.setRunResult(err, published, len(job.outputs))
 			c.refresh()
 		})
@@ -343,7 +350,7 @@ func (c *Controller) startRunLogUpdates(runLog *runLog, control conversionContro
 				updatePending = true
 				c.dispatchUI(func() {
 					if c.runControl == control {
-						c.log.SetText(text)
+						c.setLogText(text)
 					}
 					completed <- struct{}{}
 				})
@@ -495,4 +502,45 @@ func issueMessages(result validation.Result) []string {
 		items = append(items, "Warning: "+issue.Message)
 	}
 	return items
+}
+
+// setLogText replaces the log view's text and, when "Follow output" is
+// checked, moves the cursor to the last line so the entry scrolls to it:
+// SetText alone leaves the viewport where it was.
+func (c *Controller) setLogText(text string) {
+	c.log.SetText(text)
+	if c.logFollow != nil && c.logFollow.Checked {
+		c.log.CursorRow, c.log.CursorColumn = lastLinePosition(text)
+		c.log.Refresh()
+	}
+}
+
+// lastLinePosition returns the cursor position at the end of text: the
+// row of the last line and its length in runes.
+func lastLinePosition(text string) (row, column int) {
+	text = strings.TrimSuffix(text, "\n")
+	row = strings.Count(text, "\n")
+	last := text[strings.LastIndex(text, "\n")+1:]
+	return row, len([]rune(last))
+}
+
+// openLogFile opens the last conversion's log in the system viewer.
+func (c *Controller) openLogFile() {
+	path, err := lastRunLogPath()
+	if err == nil {
+		_, err = os.Stat(path)
+	}
+	if err == nil {
+		err = fyne.CurrentApp().OpenURL(&url.URL{Scheme: "file", Path: filepath.ToSlash(path)})
+	}
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("open log file: %w", err), c.window)
+	}
+}
+
+// copyCommandText puts the previewed command on the clipboard.
+func (c *Controller) copyCommandText() {
+	if text := strings.TrimSpace(c.command.Text); text != "" {
+		fyne.CurrentApp().Clipboard().SetContent(text)
+	}
 }
