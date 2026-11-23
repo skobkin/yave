@@ -486,3 +486,41 @@ func TestIntelGraphicsVerdict(t *testing.T) {
 		})
 	}
 }
+
+func TestAnyDeviceEncodes(t *testing.T) {
+	nvidia := DeviceInfo{Path: "/dev/dri/renderD128", EntryPoints: map[Profile][]Entrypoint{
+		ProfileHEVCMain:    {EntrypointVLD},
+		ProfileVP9Profile0: {EntrypointVLD},
+	}}
+	amd := DeviceInfo{Path: "/dev/dri/renderD129", EntryPoints: map[Profile][]Entrypoint{
+		ProfileHEVCMain:    {EntrypointVLD, EntrypointEncSlice},
+		ProfileHEVCMain10:  {EntrypointVLD, EntrypointEncSlice},
+		ProfileVP9Profile0: {EntrypointVLD},
+	}}
+	broken := DeviceInfo{Path: "/dev/dri/renderD130", Err: "libva unavailable"}
+
+	tests := []struct {
+		name          string
+		devices       []DeviceInfo
+		required      []Profile
+		wantSupported bool
+		wantKnown     bool
+	}{
+		{"no devices", nil, []Profile{ProfileHEVCMain}, false, false},
+		{"all unknown", []DeviceInfo{broken}, []Profile{ProfileHEVCMain}, false, false},
+		{"decode-only device", []DeviceInfo{nvidia}, []Profile{ProfileHEVCMain}, false, true},
+		{"encode-capable device", []DeviceInfo{amd}, []Profile{ProfileHEVCMain10}, true, true},
+		{"union across GPUs", []DeviceInfo{nvidia, amd}, []Profile{ProfileHEVCMain}, true, true},
+		{"unknown device does not hide a known gap", []DeviceInfo{broken, amd}, []Profile{ProfileVP9Profile0}, false, true},
+		{"any required profile suffices", []DeviceInfo{amd}, []Profile{ProfileVP9Profile2, ProfileHEVCMain}, true, true},
+		{"empty requirement never matches", []DeviceInfo{amd}, nil, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			supported, known := AnyDeviceEncodes(tt.devices, tt.required)
+			if supported != tt.wantSupported || known != tt.wantKnown {
+				t.Errorf("AnyDeviceEncodes() = (%v, %v), want (%v, %v)", supported, known, tt.wantSupported, tt.wantKnown)
+			}
+		})
+	}
+}

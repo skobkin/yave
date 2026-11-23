@@ -100,6 +100,24 @@ func (d DeviceInfo) SupportsEncoding(p Profile) bool {
 	return hasEncodingEntrypoint(d.EntryPoints[p])
 }
 
+// AnyDeviceEncodes reports whether any probed device can encode at
+// least one of the required profiles. known is false when no device
+// has capability data (libva unavailable, every probe failed, no
+// devices at all): then supported is meaningless and callers must
+// fail open instead of hiding anything.
+func AnyDeviceEncodes(devices []DeviceInfo, required []Profile) (supported, known bool) {
+	for _, d := range devices {
+		if !d.Known() {
+			continue
+		}
+		known = true
+		if d.Encodes(required...) {
+			return true, true
+		}
+	}
+	return false, known
+}
+
 // HasAnyEncodingEntrypoint reports whether the device offers an
 // encoding entrypoint for any profile it listed — not necessarily one
 // of the required ones. Used to distinguish "cannot encode the
