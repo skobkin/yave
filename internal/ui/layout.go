@@ -63,7 +63,8 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		container.NewVBox(
 			container.NewHBox(widget.NewLabel("Command"), layout.NewSpacer(), c.copyCommand),
 			c.command,
-			container.NewHBox(widget.NewLabel("Output"), layout.NewSpacer(), c.logFollow, c.openLog),
+			container.NewHBox(widget.NewLabel("Output"), layout.NewSpacer(), c.openFolder, c.playOutput, c.logFollow, c.openLog),
+			c.runResult,
 		),
 		nil, nil, nil,
 		c.log,

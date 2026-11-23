@@ -21,24 +21,6 @@ import (
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
-func TestFormatProgressInfoIncludesOnlyRoundedTimeAndSpeed(t *testing.T) {
-	progress := model.Progress{
-		Frame:      1234,
-		OutTime:    80*time.Second + 400*time.Millisecond,
-		Speed:      "1.5x",
-		Percentage: 0.625,
-	}
-
-	got := formatProgressInfo(progress)
-
-	if got != "1m20s | 1.5x" {
-		t.Fatalf("progress info = %q, want %q", got, "1m20s | 1.5x")
-	}
-	if strings.Contains(got, "1234") || strings.Contains(got, "62.5") {
-		t.Fatalf("progress info includes frame count or percentage: %q", got)
-	}
-}
-
 func TestProgressInfoHasFixedWidthAndDoesNotResizeProgressBar(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
@@ -211,7 +193,7 @@ func TestSetRunResultSelectsRunTabOnFailure(t *testing.T) {
 	c.runTab = container.NewTabItem("Run", widget.NewLabel("run"))
 	c.tabs = container.NewAppTabs(otherTab, c.runTab)
 
-	c.setRunResult(errors.New("FFmpeg failed: exit status 1"), 0, 1)
+	c.setRunResult(errors.New("FFmpeg failed: exit status 1"), 0, 1, 0, nil)
 
 	if c.tabs.Selected() != c.runTab {
 		t.Fatal("Run tab was not selected")

@@ -234,6 +234,11 @@ func (c *Controller) createWidgets() {
 	c.log.SetMinRowsVisible(12)
 	c.logFollow = widget.NewCheck("Follow output", nil)
 	c.logFollow.SetChecked(true)
+	c.openFolder = widget.NewButton("Open folder", c.openOutputFolder)
+	c.playOutput = widget.NewButton("Play", c.playOutputFile)
+	c.runResult = widget.NewLabel("")
+	c.runResult.Wrapping = fyne.TextWrapWord
+	c.hideRunActions()
 	c.openLog = widget.NewButton("Open log file", c.openLogFile)
 	c.openLog.Disable()
 	c.copyCommand = widget.NewButton("Copy command", c.copyCommandText)

@@ -45,6 +45,12 @@ func (c *Controller) setInput(path string) {
 	c.inputPath = path
 	c.inputEntry.SetText(path)
 	c.inspecting = true
+	if c.runControl == nil {
+		// A finished run's status and output actions belong to the
+		// previous input.
+		c.status.SetText("Idle")
+		c.hideRunActions()
+	}
 	c.mediaInfo.SetText("Inspecting input...")
 	c.cancelTrimWork()
 	c.resetTrimForNewInput()

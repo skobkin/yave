@@ -116,6 +116,12 @@ type Controller struct {
 	userIncludeVideo       bool // the user's (saved) choice; the checkbox shows the effective state
 	userIncludeAudio       bool
 	applyingStreamOverride bool
+	openFolder             *widget.Button
+	playOutput             *widget.Button
+	runResult              *widget.Label
+	lastOutputs            []string
+	runPercent             int  // progress shown in the title while runShowing
+	runShowing             bool // a run is going and its progress is in the title
 	startHint              *widget.Label
 	logFollow              *widget.Check
 	openLog                *widget.Button

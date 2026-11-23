@@ -21,9 +21,8 @@ import (
 )
 
 const (
-	progressInfoWidthSample = "999h59m59s | 999.9x"
-	cancelGracePeriod       = 5 * time.Second
-	runLogFlushInterval     = 100 * time.Millisecond
+	cancelGracePeriod   = 5 * time.Second
+	runLogFlushInterval = 100 * time.Millisecond
 )
 
 type cancellationStage uint8
@@ -262,6 +261,16 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 	c.setTrayProgress(0)
 	c.progressInfo.SetText("")
 	c.setProgressVisible(true)
+	c.hideRunActions()
+	c.setRunProgressTitle(0)
+	runStarted := time.Now()
+	durationKnown := true
+	for _, stage := range job.stages {
+		if stage.Duration <= 0 {
+			durationKnown = false
+		}
+	}
+	stagesDone := 0
 
 	stages := job.stages
 	preview := stages[0].Plan.Preview
@@ -322,13 +331,16 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 				runLog.AppendLine(line)
 			},
 			OnProgress: func(p model.Progress) {
+				stage := stagesDone + 1
 				c.dispatchUI(func() {
 					c.progress.SetValue(p.Percentage)
 					c.setTrayProgress(p.Percentage)
-					c.progressInfo.SetText(formatProgressInfo(p))
+					c.progressInfo.SetText(runProgressText(p, time.Since(runStarted), stage, len(job.stages), durationKnown))
+					c.setRunProgressTitle(percentValue(p.Percentage))
 				})
 			},
 			OnStageDone: func(_ int, _ int, stage transcode.Stage, err error) {
+				stagesDone++
 				if err != nil {
 					// The failure is reported by the returned error and
 					// the status line; no per-stage line needed.
@@ -363,7 +375,7 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 			c.cancel.SetText("Cancel")
 			c.cancel.Disable()
 			c.setLogText(finalLog)
-			c.setRunResult(err, published, len(job.outputs))
+			c.setRunResult(err, published, len(job.outputs), time.Since(runStarted), job.outputs)
 			c.refresh()
 		})
 	}()
@@ -405,16 +417,14 @@ func (c *Controller) startRunLogUpdates(runLog *runLog, control conversionContro
 	return stop
 }
 
-func formatProgressInfo(progress model.Progress) string {
-	return fmt.Sprintf("%s | %s", progress.OutTime.Round(time.Second), progress.Speed)
-}
-
-func (c *Controller) setRunResult(err error, published, total int) {
+func (c *Controller) setRunResult(err error, published, total int, elapsed time.Duration, outputs []string) {
 	c.resetTrayProgress()
+	c.setRunProgressTitle(-1)
 	switch err {
 	case nil:
-		c.status.SetText("Completed")
+		c.status.SetText(formatRunSummary(elapsed, outputs, outputSizes(outputs)))
 		c.progress.SetValue(1)
+		c.showRunActions(outputs)
 	case context.Canceled: //nolint:errorlint // context.Canceled is a sentinel; == comparison is intentional
 		c.status.SetText(partialStatus("Canceled", published, total))
 	default:

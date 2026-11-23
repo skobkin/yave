@@ -1078,7 +1078,7 @@ func TestRunJobJoinOutputCounting(t *testing.T) {
 		status := runTestJob(t, c, updates, job, func(i int, _ transcode.Stage) error {
 			return nil
 		})
-		if status != "Completed" {
+		if !strings.HasPrefix(status, "Completed") {
 			t.Fatalf("status = %q, want Completed", status)
 		}
 		if got := readFile(t, resolved); got != "joined" {
@@ -1113,7 +1113,7 @@ func TestRunJobPublicationCleanupWarning(t *testing.T) {
 	status := runTestJob(t, c, updates, job, func(i int, _ transcode.Stage) error {
 		return nil
 	})
-	if status != "Completed" {
+	if !strings.HasPrefix(status, "Completed") {
 		t.Fatalf("status = %q, want Completed: the output published", status)
 	}
 	if got := readFile(t, resolved); got != "data" {

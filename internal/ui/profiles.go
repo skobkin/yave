@@ -377,16 +377,12 @@ func (c *Controller) updateProfileDirtyMarker() {
 	if c.profileLabel == nil {
 		return
 	}
-	title := windowTitle()
 	if c.profileDirty() {
 		c.profileLabel.SetText("Profile *:")
-		title += " *"
 	} else {
 		c.profileLabel.SetText("Profile:")
 	}
-	if c.window != nil {
-		c.window.SetTitle(title)
-	}
+	c.updateWindowTitle()
 }
 
 // guardUnsavedProfile runs proceed immediately when the editor is clean;
