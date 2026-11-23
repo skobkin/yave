@@ -50,6 +50,10 @@ func writeFakeFFmpeg(t *testing.T, dir, body string) string {
 	return writeExecutable(t, dir, "ffmpeg", script)
 }
 
+// writeExecutable must not run alongside other tests that spawn
+// processes: a concurrent fork inherits the still-open write descriptor
+// and the exec then fails with "text file busy". Tests that install and
+// run a fake executable therefore stay serial.
 func writeExecutable(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -71,7 +75,6 @@ func readArgs(t *testing.T, argsFile string) []string {
 }
 
 func TestThumbnailExtractsAndDecodes(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	jpegPath := writeJPEG(t, dir, "frame.jpg", 64, 32)
 	fake := writeFakeFFmpeg(t, dir, `cat `+strconv.Quote(jpegPath))
@@ -106,7 +109,6 @@ func TestThumbnailExtractsAndDecodes(t *testing.T) {
 }
 
 func TestPreviewPreservesAspectAndCapsWidth(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	jpegPath := writeJPEG(t, dir, "frame.jpg", 48, 16)
 	fake := writeFakeFFmpeg(t, dir, `cat `+strconv.Quote(jpegPath))
@@ -146,7 +148,6 @@ func TestExtractionGuards(t *testing.T) {
 }
 
 func TestExtractionFFmpegFailure(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	fake := writeFakeFFmpeg(t, dir, `echo 'some ffmpeg error' >&2
 exit 1`)
@@ -160,7 +161,6 @@ exit 1`)
 }
 
 func TestExtractionNonJPEGOutput(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	fake := writeFakeFFmpeg(t, dir, `printf 'definitely not a jpeg'`)
 	if _, err := NewExtractor(fake).Preview(context.Background(), "/tmp/in.mkv", 0, 320); err == nil {
@@ -169,7 +169,6 @@ func TestExtractionNonJPEGOutput(t *testing.T) {
 }
 
 func TestExtractionOversizedDimensions(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	// A JPEG header claiming huge dimensions: DecodeConfig must reject
 	// it before any large allocation. Crafting one by truncating a
@@ -182,7 +181,6 @@ func TestExtractionOversizedDimensions(t *testing.T) {
 }
 
 func TestExtractionCancellation(t *testing.T) {
-	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("test helper is a POSIX shell script")
 	}
@@ -218,7 +216,6 @@ sleep 5 >/dev/null 2>&1`)
 // bounding the call at roughly the grace instead of the descendant's
 // lifetime.
 func TestExtractionCancelWithPipeHoldingDescendant(t *testing.T) {
-	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("test helper is a POSIX shell script")
 	}
@@ -245,7 +242,6 @@ exec sleep 30`)
 }
 
 func TestExtractionStdoutOverflow(t *testing.T) {
-	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("test helper is a POSIX shell script")
 	}
