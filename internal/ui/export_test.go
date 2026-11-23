@@ -666,7 +666,7 @@ func TestPlanExportShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("no trim stays a direct single run", func(t *testing.T) {
+	t.Run("no trim is staged and published like one segment", func(t *testing.T) {
 		c, _, _ := exportTestController(t) // trimming disabled
 		resolved, err := c.resolveOutput(exportTestProfile(), time.Unix(0, 0))
 		if err != nil {
@@ -677,18 +677,22 @@ func TestPlanExportShapes(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer job.cleanup()
-		if job.tempDir != "" {
-			t.Fatalf("tempDir = %s, want no staging for a direct run", job.tempDir)
+		if job.tempDir == "" {
+			t.Fatal("a plain conversion must be staged so a failed run keeps the existing output")
 		}
-		if len(job.stages) != 1 || job.stages[0].Publish != nil {
-			t.Fatalf("stages = %d, want one unpublished direct stage", len(job.stages))
+		if len(job.stages) != 1 || job.stages[0].Publish == nil {
+			t.Fatalf("stages = %d, want one stage with a publication closure", len(job.stages))
 		}
-		if job.stages[0].OutputPath != resolved {
-			t.Fatalf("direct stage output = %s, want %s", job.stages[0].OutputPath, resolved)
+		stage := job.stages[0]
+		if stage.OutputPath != resolved {
+			t.Fatalf("stage output = %s, want %s", stage.OutputPath, resolved)
 		}
-		// Approval flows into the command the same way the old dialog did.
-		if !containsArg(job.stages[0].Plan.Args, "-y") {
-			t.Fatalf("approved direct run args = %v, want -y", job.stages[0].Plan.Args)
+		args := stage.Plan.Args
+		if got := args[len(args)-1]; filepath.Dir(got) != job.tempDir {
+			t.Fatalf("ffmpeg writes %s, want a path inside %s", got, job.tempDir)
+		}
+		if containsArg(args, "-y") {
+			t.Fatalf("args = %v: the staged encode must not carry -y; overwrite is decided at publication", args)
 		}
 	})
 }

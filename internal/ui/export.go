@@ -41,7 +41,7 @@ type trimExportJob struct {
 	stages      []transcode.Stage
 	outputs     []string        // user-visible targets, in publication order
 	approved    map[string]bool // per-path overwrite approval from the dialog
-	tempDir     string          // staging dir next to the output; "" for direct runs
+	tempDir     string          // staging dir next to the output; every export is staged
 	ffprobePath string          // config captured at build time
 	ffmpegPath  string          // ditto — stage closures never read c.config
 	warnings    exportWarnings  // publication cleanup warnings, drained at completion
@@ -167,12 +167,18 @@ type exportRequest struct {
 // os.MkdirTemp directory next to the output.
 func (c *Controller) planExport(req exportRequest) (exportPlan, error) {
 	trim := c.trimRequest()
+	staged := func(name string) string { return filepath.Join(req.stagingDir, name) }
+
+	// A plain conversion is staged exactly like a single trim segment:
+	// ffmpeg writes inside the staging directory and the result is
+	// published only after it succeeds, so a failed or cancelled run
+	// leaves an existing output untouched.
 	if !trim.Active() {
+		stagedPath := staged("final" + containerExt(req.profile.Container))
 		plan, err := ffmpeg.BuildCommand(ffmpeg.BuildRequest{
 			FFmpegPath: c.config.FFmpeg.FFmpegPath,
-			InputPath:  c.inputPath, OutputPath: req.baseOutput,
+			InputPath:  c.inputPath, OutputPath: stagedPath,
 			Profile: req.profile, Media: c.media,
-			Overwrite: req.approved[req.baseOutput],
 		})
 		if err != nil {
 			return exportPlan{}, err
@@ -184,12 +190,12 @@ func (c *Controller) planExport(req exportRequest) (exportPlan, error) {
 					Plan: plan, Duration: c.media.Duration,
 					Label: "conversion", OutputPath: req.baseOutput,
 				},
+				stagedPath: stagedPath,
 			}},
 			outputs: []string{req.baseOutput},
 		}, nil
 	}
 
-	staged := func(name string) string { return filepath.Join(req.stagingDir, name) }
 	segments := trim.Segments
 
 	// A single segment (either mode) is one staged encode published to
@@ -361,24 +367,22 @@ func (c *Controller) buildTrimExportJob(cp model.Profile, baseOutput string, app
 		ffmpegPath:  c.config.FFmpeg.FFmpegPath,
 		ffprobePath: c.config.FFmpeg.FFprobePath,
 	}
-	if c.trimRequest().Active() {
-		dir, err := os.MkdirTemp(filepath.Dir(baseOutput), stagingPattern)
-		if err != nil {
-			return nil, fmt.Errorf("create staging directory: %w", err)
-		}
-		// The concat demuxer resolves list entries against the list
-		// file's own directory, so every staged path must be absolute:
-		// a relative output (a template without {dir}) yields a relative
-		// staging directory, and an entry like "yave-export-X/part.mkv"
-		// would be re-resolved as "yave-export-X/yave-export-X/part.mkv"
-		// and the join pass could not open the intermediates. All staged
-		// paths derive from this one value.
-		if dir, err = filepath.Abs(dir); err != nil {
-			_ = os.RemoveAll(dir)
-			return nil, fmt.Errorf("resolve staging directory: %w", err)
-		}
-		job.tempDir = dir
+	dir, err := os.MkdirTemp(filepath.Dir(baseOutput), stagingPattern)
+	if err != nil {
+		return nil, fmt.Errorf("create staging directory: %w", err)
 	}
+	// The concat demuxer resolves list entries against the list
+	// file's own directory, so every staged path must be absolute:
+	// a relative output (a template without {dir}) yields a relative
+	// staging directory, and an entry like "yave-export-X/part.mkv"
+	// would be re-resolved as "yave-export-X/yave-export-X/part.mkv"
+	// and the join pass could not open the intermediates. All staged
+	// paths derive from this one value.
+	if dir, err = filepath.Abs(dir); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, fmt.Errorf("resolve staging directory: %w", err)
+	}
+	job.tempDir = dir
 	planned, err := c.planExport(exportRequest{
 		profile:     cp,
 		baseOutput:  baseOutput,
