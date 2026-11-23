@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
@@ -20,6 +22,10 @@ func (c *Controller) loadProfile(p model.Profile) {
 		c.loading = false
 		c.updateControlState()
 		c.reconcileDevices(true)
+		// The widgets normalize loaded values (defaults, dropdown
+		// fallbacks), so the dirty baseline is what they show now, not
+		// the raw profile — otherwise every load would look edited.
+		c.markProfileSaved()
 		c.refresh()
 	}()
 	c.profile.SetSelected(p.Name)
@@ -337,9 +343,90 @@ func (c *Controller) saveCurrentProfile() {
 		if c.config.Profiles[i].Name == p.Name {
 			c.config.Profiles[i] = p
 			c.saveConfig()
+			c.markProfileSaved()
+			c.refresh()
 			return
 		}
 	}
+}
+
+// markProfileSaved records the editor's current state as the saved one.
+func (c *Controller) markProfileSaved() {
+	if c.profile == nil || c.audioMode == nil {
+		return
+	}
+	c.savedProfile = c.profileFromWidgets()
+	c.hasSavedProfile = true
+}
+
+// profileDirty reports whether the editor differs from the saved profile.
+func (c *Controller) profileDirty() bool {
+	if !c.hasSavedProfile || c.profile == nil || c.audioMode == nil {
+		return false
+	}
+	return c.profileFromWidgets() != c.savedProfile
+}
+
+// updateProfileDirtyMarker shows an asterisk in the profile bar and the
+// window title while the editor has unsaved changes.
+func (c *Controller) updateProfileDirtyMarker() {
+	if c.profileLabel == nil {
+		return
+	}
+	title := windowTitle()
+	if c.profileDirty() {
+		c.profileLabel.SetText("Profile *:")
+		title += " *"
+	} else {
+		c.profileLabel.SetText("Profile:")
+	}
+	if c.window != nil {
+		c.window.SetTitle(title)
+	}
+}
+
+// guardUnsavedProfile runs proceed immediately when the editor is clean;
+// otherwise it asks whether to save, discard or cancel first.
+func (c *Controller) guardUnsavedProfile(proceed func()) {
+	if !c.profileDirty() {
+		proceed()
+		return
+	}
+	var d dialog.Dialog
+	save := widget.NewButton("Save", func() {
+		d.Hide()
+		c.saveCurrentProfile()
+		proceed()
+	})
+	save.Importance = widget.HighImportance
+	discard := widget.NewButton("Discard", func() {
+		d.Hide()
+		proceed()
+	})
+	message := widget.NewLabel(fmt.Sprintf("Profile %q has unsaved changes.", c.profile.Selected))
+	message.Wrapping = fyne.TextWrapWord
+	d = dialog.NewCustom("Unsaved changes", "Cancel", container.NewVBox(message, container.NewHBox(save, discard)), c.window)
+	d.Show()
+}
+
+// switchProfile handles a profile dropdown change: the selection has
+// already moved, so a dirty editor snaps it back and asks first.
+func (c *Controller) switchProfile(name string) {
+	if c.loading || name == c.savedProfile.Name {
+		return
+	}
+	target, ok := profiles.Find(c.config.Profiles, name)
+	if !ok {
+		return
+	}
+	if !c.profileDirty() {
+		c.loadProfile(target)
+		return
+	}
+	c.loading = true
+	c.profile.SetSelected(c.savedProfile.Name)
+	c.loading = false
+	c.guardUnsavedProfile(func() { c.loadProfile(target) })
 }
 
 func (c *Controller) saveAs(name string) {
@@ -363,13 +450,23 @@ func (c *Controller) renameProfile(name string) {
 	}
 	c.profile.Options = c.profileNames()
 	c.profile.Refresh()
+	// Select the new name without reloading the saved copy, which would
+	// discard unsaved edits; the edits move to the renamed profile.
+	c.loading = true
 	c.profile.SetSelected(name)
+	c.loading = false
+	c.savedProfile.Name = name
 	c.saveConfig()
+	c.refresh()
 }
 
 func (c *Controller) deleteProfile() {
 	name := c.profile.Selected
-	dialog.NewConfirm("Delete profile", "Delete profile "+name+"?", func(ok bool) {
+	message := "Delete profile " + name + "?"
+	if c.profileDirty() {
+		message += "\nIts unsaved changes will be lost."
+	}
+	dialog.NewConfirm("Delete profile", message, func(ok bool) {
 		if !ok {
 			return
 		}

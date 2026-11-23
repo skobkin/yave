@@ -15,7 +15,6 @@ import (
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
-	"git.skobk.in/skobkin/yave/internal/profiles"
 )
 
 func (c *Controller) createWidgets() {
@@ -31,12 +30,7 @@ func (c *Controller) createWidgets() {
 	c.mediaInfo.Wrapping = fyne.TextWrapWord
 
 	c.profile = widget.NewSelect(c.profileNames(), func(name string) {
-		if c.loading {
-			return
-		}
-		if p, ok := profiles.Find(c.config.Profiles, name); ok {
-			c.loadProfile(p)
-		}
+		c.switchProfile(name)
 	})
 	c.container = widget.NewSelect([]string{model.ContainerMKV, model.ContainerMP4, model.ContainerWebM}, c.changed)
 	c.output = widget.NewEntry()

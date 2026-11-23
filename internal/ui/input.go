@@ -121,6 +121,14 @@ func (c *Controller) detect() {
 // before that selection so "encode + Encoder=copy" can never exist
 // for it to trip over (the A3 silent-revert bug).
 func (c *Controller) applyDetection(caps model.Capabilities) {
+	// Detection reshapes dropdown options and may auto-select another
+	// profile; a clean editor must stay clean through that.
+	wasDirty := c.profileDirty()
+	defer func() {
+		if !wasDirty {
+			c.markProfileSaved()
+		}
+	}()
 	c.caps = caps
 	prevFFmpeg := c.config.FFmpeg.FFmpegPath
 	c.config.FFmpeg.FFmpegPath = caps.FFmpegPath

@@ -106,6 +106,9 @@ type Controller struct {
 	trimPlaySelection *widget.Button
 
 	trimEnable       *widget.Check
+	savedProfile     model.Profile // editor baseline for dirty tracking
+	hasSavedProfile  bool
+	profileLabel     *widget.Label
 	startHint        *widget.Label
 	logFollow        *widget.Check
 	openLog          *widget.Button
@@ -394,7 +397,7 @@ func (c *Controller) ShowAndRun() {
 
 func (c *Controller) requestQuit() {
 	if c.runControl == nil {
-		c.quitApplication()
+		c.guardUnsavedProfile(c.quitApplication)
 		return
 	}
 	if c.quitPrompt != nil {

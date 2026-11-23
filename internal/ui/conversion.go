@@ -99,6 +99,7 @@ func (c *Controller) refresh() {
 	c.updateTrimMessages(p.Video.Encoder, p.Audio)
 	c.updateSegmentButtons()
 	c.updatePlaybackControls()
+	c.updateProfileDirtyMarker()
 	startReason := startBlockReason(c.inputPath, c.inputEntry.Text, c.inspecting, c.caps.FFmpegPath != "", c.numericFieldProblems())
 	c.startHint.SetText(startReason)
 	if c.runControl == nil && startReason == "" {

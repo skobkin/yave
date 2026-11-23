@@ -224,5 +224,6 @@ func (c *Controller) profileBar() fyne.CanvasObject {
 		widget.NewButton("Set default", c.setDefault),
 		widget.NewButton("Settings", c.showSettings),
 	)
-	return container.NewBorder(nil, nil, widget.NewLabel("Profile:"), actions, c.profile)
+	c.profileLabel = widget.NewLabel("Profile:")
+	return container.NewBorder(nil, nil, c.profileLabel, actions, c.profile)
 }
