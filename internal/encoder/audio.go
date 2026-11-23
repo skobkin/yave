@@ -47,6 +47,12 @@ func (e *audioEncoder) BuildAudioArgs(a model.AudioSettings) ([]string, error) {
 		return nil, fmt.Errorf("audio encoder is empty")
 	}
 	args := []string{"-c:a", e.name}
+	if e.name == "opus" {
+		// The native Opus encoder is still flagged experimental; ffmpeg
+		// refuses to open it without -strict experimental. It is offered
+		// only when libopus is missing from the build.
+		args = append(args, "-strict", "experimental")
+	}
 	if e.compressionRange != nil {
 		args = append(args, "-compression_level", strconv.Itoa(a.Compression))
 	} else if strings.TrimSpace(a.Bitrate) != "" {

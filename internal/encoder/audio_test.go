@@ -90,7 +90,7 @@ func TestAudioEncoderBuildArgs(t *testing.T) {
 		{
 			name:     "opus with bitrate",
 			audio:    model.AudioSettings{Encoder: "opus", Bitrate: "96k"},
-			wantArgs: []string{"-c:a", "opus", "-b:a", "96k"},
+			wantArgs: []string{"-c:a", "opus", "-strict", "experimental", "-b:a", "96k"},
 		},
 		{
 			name:     "aac with bitrate",
