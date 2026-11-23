@@ -89,7 +89,7 @@ func (e *nvencEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo)
 	if err != nil {
 		return "", err
 	}
-	width, height, scale := targetDimensions(v, media)
+	width, height, scale := hwScaleDimensions(v, media)
 	if TenBitChain(e.name, v.Profile, media) {
 		filters = append(filters, "format=p010le", "hwupload_cuda")
 	} else {

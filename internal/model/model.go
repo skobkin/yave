@@ -168,6 +168,20 @@ type VideoStream struct {
 	FrameRate   string
 	PixelFormat string
 	ColorRange  string
+	// Rotation is the display rotation in degrees, normalized to
+	// [0, 360), from the display matrix side data or the legacy "rotate"
+	// tag. ffmpeg autorotates frames before filters run, so 90 and 270
+	// swap the width and height the filter chain sees.
+	Rotation int
+}
+
+// DisplaySize returns the frame dimensions after autorotation: Width and
+// Height swapped for 90 and 270 degree rotations.
+func (v VideoStream) DisplaySize() (width, height int) {
+	if v.Rotation == 90 || v.Rotation == 270 {
+		return v.Height, v.Width
+	}
+	return v.Width, v.Height
 }
 
 type AudioStream struct {

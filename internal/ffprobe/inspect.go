@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -42,6 +43,41 @@ type probeStream struct {
 	BitsPerSample    int               `json:"bits_per_sample"`
 	Tags             map[string]string `json:"tags"`
 	Disposition      map[string]int    `json:"disposition"`
+	SideDataList     []struct {
+		Rotation *float64 `json:"rotation"`
+	} `json:"side_data_list"`
+}
+
+// rotationDegrees returns the stream's display rotation normalized to
+// [0, 360). ffprobe reports the display matrix rotation as a signed
+// counter-clockwise angle in side data; older files carry a "rotate" tag
+// (clockwise). Both describe the same quarter-turn the player applies, so
+// only the magnitude modulo 180 matters for dimension swapping, but the
+// value is normalized for display.
+func rotationDegrees(stream probeStream) int {
+	var degrees float64
+	found := false
+	for _, data := range stream.SideDataList {
+		if data.Rotation != nil {
+			degrees, found = *data.Rotation, true
+			break
+		}
+	}
+	if !found {
+		if tag, ok := stream.Tags["rotate"]; ok {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(tag), 64); err == nil {
+				degrees, found = -v, true
+			}
+		}
+	}
+	if !found {
+		return 0
+	}
+	normalized := int(math.Round(degrees)) % 360
+	if normalized < 0 {
+		normalized += 360
+	}
+	return normalized
 }
 
 type probeChapter struct {
@@ -124,6 +160,7 @@ func Parse(data []byte) (model.MediaInfo, error) {
 				FrameRate:   parseFrameRate(stream.AverageRate, stream.RealRate),
 				PixelFormat: stream.PixelFormat,
 				ColorRange:  stream.ColorRange,
+				Rotation:    rotationDegrees(stream),
 			})
 		case "audio":
 			info.AudioStreams = append(info.AudioStreams, model.AudioStream{

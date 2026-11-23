@@ -25,32 +25,49 @@ func targetDimensions(v model.VideoSettings, media model.MediaInfo) (int, int, b
 	if v.MaxWidth <= 0 && v.MaxHeight <= 0 {
 		return 0, 0, false
 	}
-	src, ok := media.PrimaryVideo()
-	if !ok || src.Width <= 0 || src.Height <= 0 {
+	stream, ok := media.PrimaryVideo()
+	if !ok || stream.Width <= 0 || stream.Height <= 0 {
 		return even(v.MaxWidth), even(v.MaxHeight), v.MaxWidth > 0 && v.MaxHeight > 0
 	}
+	// ffmpeg autorotates frames before the filter graph, so size the
+	// target against the displayed orientation, not the coded one.
+	srcW, srcH := stream.DisplaySize()
 
 	maxW, maxH := v.MaxWidth, v.MaxHeight
 	if maxW <= 0 {
-		maxW = src.Width
+		maxW = srcW
 	}
 	if maxH <= 0 {
-		maxH = src.Height
+		maxH = srcH
 	}
-	if v.PreventUpscaling && src.Width <= maxW && src.Height <= maxH {
-		return src.Width, src.Height, false
+	if v.PreventUpscaling && srcW <= maxW && srcH <= maxH {
+		return srcW, srcH, false
 	}
 	if !v.KeepAspectRatio {
-		return even(maxW), even(maxH), src.Width != maxW || src.Height != maxH
+		return even(maxW), even(maxH), srcW != maxW || srcH != maxH
 	}
 
-	ratio := min(float64(maxW)/float64(src.Width), float64(maxH)/float64(src.Height))
+	ratio := min(float64(maxW)/float64(srcW), float64(maxH)/float64(srcH))
 	if v.PreventUpscaling {
 		ratio = min(ratio, 1)
 	}
-	w := even(int(float64(src.Width) * ratio))
-	h := even(int(float64(src.Height) * ratio))
-	return w, h, w != src.Width || h != src.Height
+	w := even(int(float64(srcW) * ratio))
+	h := even(int(float64(srcH) * ratio))
+	return w, h, w != srcW || h != srcH
+}
+
+// hwScaleDimensions wraps targetDimensions for the hardware scalers that
+// only take exact w/h (scale_cuda, scale_qsv). Without known source
+// dimensions an aspect-preserving request cannot be computed, and forcing
+// the requested box would stretch the picture, so scaling is skipped.
+func hwScaleDimensions(v model.VideoSettings, media model.MediaInfo) (int, int, bool) {
+	width, height, scale := targetDimensions(v, media)
+	if scale && v.KeepAspectRatio {
+		if stream, ok := media.PrimaryVideo(); !ok || stream.Width <= 0 || stream.Height <= 0 {
+			return 0, 0, false
+		}
+	}
+	return width, height, scale
 }
 
 // even rounds v down to the nearest even integer (or returns v when it

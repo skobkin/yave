@@ -285,3 +285,28 @@ func TestParseSeparatesAttachedPictures(t *testing.T) {
 		t.Fatal("an audio file with cover art has no primary video")
 	}
 }
+
+func TestParseVideoRotation(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream string
+		want   int
+	}{
+		{"none", `{"index":0,"codec_type":"video"}`, 0},
+		{"display matrix -90", `{"index":0,"codec_type":"video","side_data_list":[{"side_data_type":"Display Matrix","rotation":-90}]}`, 270},
+		{"display matrix 90", `{"index":0,"codec_type":"video","side_data_list":[{"side_data_type":"Display Matrix","rotation":90}]}`, 90},
+		{"side data without rotation", `{"index":0,"codec_type":"video","side_data_list":[{"side_data_type":"Other"}]}`, 0},
+		{"legacy rotate tag", `{"index":0,"codec_type":"video","tags":{"rotate":"90"}}`, 270},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Parse([]byte(`{"streams":[` + tc.stream + `],"format":{}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.VideoStreams[0].Rotation != tc.want {
+				t.Fatalf("rotation = %d, want %d", got.VideoStreams[0].Rotation, tc.want)
+			}
+		})
+	}
+}

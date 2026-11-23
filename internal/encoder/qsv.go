@@ -95,7 +95,7 @@ func (e *qsvEncoder) VideoFilter(v model.VideoSettings, media model.MediaInfo) (
 	if err != nil {
 		return "", err
 	}
-	width, height, scale := targetDimensions(v, media)
+	width, height, scale := hwScaleDimensions(v, media)
 	uploadFormat := "nv12"
 	if TenBitChain(e.name, v.Profile, media) {
 		uploadFormat = "p010le"

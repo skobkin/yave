@@ -43,11 +43,12 @@ func intText(value int) string {
 func dimensions(p model.Profile, media model.MediaInfo) (int, int) {
 	width, height := p.Video.MaxWidth, p.Video.MaxHeight
 	if source, ok := media.PrimaryVideo(); ok {
+		displayW, displayH := source.DisplaySize()
 		if width <= 0 {
-			width = source.Width
+			width = displayW
 		}
 		if height <= 0 {
-			height = source.Height
+			height = displayH
 		}
 	}
 	return width, height
