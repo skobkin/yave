@@ -304,6 +304,22 @@ func (id DeviceIdentity) FullNameWithBrand() string {
 	return id.Name
 }
 
+// BrandedName is DisplayName with a short vendor brand in front when the
+// pci.ids name resolved and the vendor is one of the known brands:
+// "NVIDIA GeForce GTX 1660 Ti Mobile", "AMD Renoir". Other identities
+// fall back to DisplayName unchanged (wordy pci.ids vendor names are
+// left out), and "" when nothing is known.
+func (id DeviceIdentity) BrandedName() string {
+	name := id.DisplayName()
+	if id.Name == "" {
+		return name
+	}
+	if brand, ok := knownVendorBrands[id.Vendor]; ok && !strings.HasPrefix(name, brand+" ") {
+		return brand + " " + name
+	}
+	return name
+}
+
 // identifyRenderNode is the seam Probe enriches devices through; tests
 // stub it to stay host-independent.
 var identifyRenderNode = identifyRenderNodeOS

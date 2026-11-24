@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
@@ -62,12 +63,41 @@ type badge struct {
 	widget.BaseWidget
 	text       string
 	importance widget.Importance
+	// tips/tip, when set, show tip in a hover tooltip.
+	tips *tooltipLayer
+	tip  string
 }
 
 func newBadge(text string, importance widget.Importance) *badge {
 	b := &badge{text: text, importance: importance}
 	b.ExtendBaseWidget(b)
 	return b
+}
+
+// newTipBadge is a badge with a hover tooltip.
+func newTipBadge(tips *tooltipLayer, text, tip string, importance widget.Importance) *badge {
+	b := newBadge(text, importance)
+	b.tips, b.tip = tips, tip
+	return b
+}
+
+var _ desktop.Hoverable = (*badge)(nil)
+
+// MouseIn starts the tooltip delay.
+func (b *badge) MouseIn(*desktop.MouseEvent) {
+	if b.tips != nil && b.tip != "" {
+		b.tips.schedule(b, func() string { return b.tip }, tooltipDelay)
+	}
+}
+
+// MouseMoved is required by desktop.Hoverable.
+func (b *badge) MouseMoved(*desktop.MouseEvent) {}
+
+// MouseOut hides the tooltip.
+func (b *badge) MouseOut() {
+	if b.tips != nil {
+		b.tips.cancel()
+	}
 }
 
 func (b *badge) CreateRenderer() fyne.WidgetRenderer {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/frames"
@@ -179,5 +180,57 @@ func TestFFmpegPanelStates(t *testing.T) {
 	c.setDetectionResult(caps)
 	if !strings.Contains(c.detection.String(), "FFmpeg 9.1") || !strings.Contains(c.detectionCopy, "/x/ffmpeg") {
 		t.Fatalf("result = %q / copy %q", c.detection.String(), c.detectionCopy)
+	}
+}
+
+func TestPosterSideLayout(t *testing.T) {
+	_, _, _ = exportTestController(t)
+	facts, poster := widget.NewLabel("facts"), widget.NewLabel("poster")
+	l := &posterSideLayout{}
+	for _, tt := range []struct {
+		width, wantW float32
+	}{
+		{1000, 300},            // a share of the panel
+		{400, posterMinWidth},  // clamped up
+		{2000, posterMaxWidth}, // clamped down
+	} {
+		l.Layout([]fyne.CanvasObject{facts, poster}, fyne.NewSize(tt.width, 200))
+		if poster.Size().Width != tt.wantW || poster.Size().Height != tt.wantW*9/16 {
+			t.Errorf("width %v: poster %v, want %vx16:9", tt.width, poster.Size(), tt.wantW)
+		}
+		if right := poster.Position().X + poster.Size().Width; right != tt.width {
+			t.Errorf("width %v: poster ends at %v, want flush right", tt.width, right)
+		}
+		if facts.Size().Width != tt.width-tt.wantW-posterGap {
+			t.Errorf("width %v: facts %v wide", tt.width, facts.Size().Width)
+		}
+		if minH := l.MinSize([]fyne.CanvasObject{facts, poster}).Height; minH < tt.wantW*9/16 {
+			t.Errorf("width %v: MinSize height %v would clip the poster", tt.width, minH)
+		}
+	}
+}
+
+func TestGPUPillsRenderWithTooltips(t *testing.T) {
+	c, _, _ := exportTestController(t)
+	c.setDetectionResult(vaapiDualGPUFixture())
+	var found []*badge
+	var walk func(o fyne.CanvasObject)
+	walk = func(o fyne.CanvasObject) {
+		switch v := o.(type) {
+		case *badge:
+			if v.tip != "" {
+				found = append(found, v)
+			}
+		case *fyne.Container:
+			for _, child := range v.Objects {
+				walk(child)
+			}
+		case *container.ThemeOverride:
+			walk(v.Content)
+		}
+	}
+	walk(c.detection.body)
+	if len(found) != 2 || !strings.Contains(found[0].tip, "/dev/dri/renderD128") || found[0].tips != c.tips {
+		t.Fatalf("GPU pills = %d with tooltips, want 2 carrying their render nodes", len(found))
 	}
 }

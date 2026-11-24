@@ -40,11 +40,14 @@ func (p *infoPanel) show(text string, content fyne.CanvasObject) {
 }
 
 const (
-	// posterSize is the media panel's thumbnail box; posterFetchHeight
-	// is the extracted frame height, twice the box for hi-DPI screens.
-	posterWidth       = 160
-	posterHeight      = 90
-	posterFetchHeight = 2 * posterHeight
+	// The media panel's preview box is 16:9 and posterWidthShare of the
+	// panel, between posterMinWidth and posterMaxWidth wide.
+	// posterFetchHeight is the extracted frame height: about twice the
+	// largest box, for hi-DPI screens.
+	posterMinWidth    = 160
+	posterMaxWidth    = 360
+	posterWidthShare  = 0.3
+	posterFetchHeight = 400
 	// emptyStateHeight keeps the drop-zone panel from collapsing to a
 	// single line while no input is selected.
 	emptyStateHeight = 180
@@ -56,27 +59,37 @@ func titleLabel(text string) *widget.Label {
 
 // infoTable renders rows as aligned columns: [icon,] muted label, bold
 // primary value (codec), details. Details wrap in the last column.
-func infoTable(rows []infoRow, withIcons bool) fyne.CanvasObject {
+func infoTable(rows []infoRow, withIcons bool, extra ...[]fyne.CanvasObject) fyne.CanvasObject {
 	cols := 3
 	if withIcons {
 		cols = 4
 	}
-	cells := make([]fyne.CanvasObject, 0, len(rows)*cols)
+	cells := make([]fyne.CanvasObject, 0, (len(rows)+len(extra))*cols)
 	for _, r := range rows {
 		if withIcons {
 			cells = append(cells, widget.NewIcon(rowIcon(r.Kind)))
-		}
-		primary := widget.NewLabelWithStyle(r.Primary, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-		if r.Primary == "" {
-			primary.Hide()
 		}
 		var details fyne.CanvasObject = plainText(r.Details, true)
 		if r.Muted {
 			details = mutedText(r.Details, true)
 		}
-		cells = append(cells, mutedText(r.Label, false), primary, details)
+		cells = append(cells, mutedText(r.Label, false), primaryText(r.Primary), details)
+	}
+	// extra rows are caller-built cells, cols per row.
+	for _, row := range extra {
+		cells = append(cells, row...)
 	}
 	return compact(container.New(tableLayout{cols: cols}, cells...))
+}
+
+// primaryText is the bold primary-value cell; hidden when empty so the
+// column takes no width for rows without one.
+func primaryText(text string) fyne.CanvasObject {
+	l := widget.NewLabelWithStyle(text, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	if text == "" {
+		l.Hide()
+	}
+	return l
 }
 
 func rowIcon(kind rowKind) fyne.Resource {
@@ -127,9 +140,24 @@ func (c *Controller) setDetectionResult(caps model.Capabilities) {
 		}
 		return widget.SuccessImportance
 	}))
+	var extra [][]fyne.CanvasObject
+	if len(view.GPUs) > 0 {
+		pills := make([]fyne.CanvasObject, len(view.GPUs))
+		for i, g := range view.GPUs {
+			importance := widget.MediumImportance
+			if g.Warning {
+				importance = widget.WarningImportance
+			}
+			pills[i] = newTipBadge(c.tips, g.Text, g.Tip, importance)
+		}
+		extra = append(extra, []fyne.CanvasObject{
+			mutedText("GPUs", false), primaryText(""),
+			container.New(layout.NewRowWrapLayoutWithCustomPadding(6, 4), pills...),
+		})
+	}
 	content := container.NewVBox(header)
-	if len(view.Rows) > 0 {
-		content.Add(infoTable(view.Rows, false))
+	if len(view.Rows) > 0 || len(extra) > 0 {
+		content.Add(infoTable(view.Rows, false, extra...))
 	}
 	c.detection.show(view.String(), content)
 }
@@ -188,11 +216,11 @@ func (c *Controller) setMediaResult(info model.MediaInfo) {
 		placeholder = theme.MediaMusicIcon()
 	}
 	c.posterIcon = widget.NewIcon(placeholder)
-	poster := container.NewGridWrap(fyne.NewSize(posterWidth, posterHeight), container.NewStack(
+	poster := container.NewStack(
 		newThemedRect(theme.ColorNameBackground),
 		container.NewCenter(container.NewGridWrap(fyne.NewSize(32, 32), c.posterIcon)),
 		c.posterImage,
-	))
+	)
 
 	title := titleLabel(view.Title)
 	title.SizeName = theme.SizeNameSubHeadingText
@@ -207,8 +235,36 @@ func (c *Controller) setMediaResult(info model.MediaInfo) {
 			return widget.MediumImportance
 		}))
 	}
-	header := container.NewBorder(nil, nil, container.NewVBox(poster), nil, compact(facts))
-	c.mediaInfo.show(view.String(), container.NewVBox(header, infoTable(view.Rows, true)))
+	details := container.NewVBox(compact(facts), infoTable(view.Rows, true))
+	c.mediaInfo.show(view.String(), container.New(&posterSideLayout{}, details, poster))
+}
+
+// posterSideLayout puts objects[0] (the media facts) on the left and
+// objects[1] (the preview) on the right, the preview a 16:9 box sized
+// by the panel width. MinSize reports the height of the box at the last
+// laid-out width, so a tall preview beside few facts is not clipped.
+type posterSideLayout struct{ width float32 }
+
+const posterGap = 12
+
+func posterBoxSize(width float32) fyne.Size {
+	w := min(max(width*posterWidthShare, posterMinWidth), posterMaxWidth)
+	return fyne.NewSize(w, w*9/16)
+}
+
+func (l *posterSideLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	l.width = size.Width
+	box := posterBoxSize(size.Width)
+	left := max(size.Width-box.Width-posterGap, 0)
+	objects[0].Move(fyne.NewPos(0, 0))
+	objects[0].Resize(fyne.NewSize(left, size.Height))
+	objects[1].Move(fyne.NewPos(left+posterGap, 0))
+	objects[1].Resize(box)
+}
+
+func (l *posterSideLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	facts := objects[0].MinSize()
+	return fyne.NewSize(facts.Width+posterGap+posterMinWidth, max(facts.Height, posterBoxSize(l.width).Height))
 }
 
 // --- poster frame ---

@@ -289,3 +289,23 @@ func TestIdentifyRenderNodeOS(t *testing.T) {
 		t.Errorf("identifyRenderNodeOS() = %+v, want %+v", id, want)
 	}
 }
+
+func TestBrandedName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		id   DeviceIdentity
+		want string
+	}{
+		{DeviceIdentity{Vendor: "10de", Device: "2191", Name: "TU116M [GeForce GTX 1660 Ti Mobile]"}, "NVIDIA GeForce GTX 1660 Ti Mobile"},
+		{DeviceIdentity{Vendor: "1002", Device: "1636", Name: "Renoir [Radeon Vega Series / Radeon Vega Mobile Series]"}, "AMD Renoir"},
+		{DeviceIdentity{Vendor: "8086", Device: "46a6", Name: "Intel Iris Xe Graphics"}, "Intel Iris Xe Graphics"},
+		{DeviceIdentity{Vendor: "1af4", Device: "1050", Name: "Virtio GPU", VendorName: "Red Hat, Inc."}, "Virtio GPU"},
+		{DeviceIdentity{Vendor: "1002", Device: "1636", Driver: "amdgpu"}, "amdgpu 1002:1636"},
+		{DeviceIdentity{}, ""},
+	}
+	for _, tt := range tests {
+		if got := tt.id.BrandedName(); got != tt.want {
+			t.Errorf("BrandedName(%+v) = %q, want %q", tt.id, got, tt.want)
+		}
+	}
+}
