@@ -91,6 +91,11 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe, probeD
 			nvencGPUs = n
 		}
 	}
+	if hw.qsv && noIntelGPU(vaapiDevices, adapters, adaptersComplete) {
+		// QSV needs Intel graphics; render nodes alone also exist on
+		// AMD/NVIDIA-only hosts, and Windows has no node probe at all.
+		hw.qsv = false
+	}
 	encoders := filterUnavailableHWEncoders(ParseEncoders(encodersOutput), hw)
 	narrowProfilesToBuild(ctx, ffmpegPath, encoders)
 	narrowVAAPIToDevices(encoders, vaapiDevices)
@@ -116,6 +121,30 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe, probeD
 		caps.Filters = ParseFilters(filtersOutput)
 	}
 	return caps, nil
+}
+
+// noIntelGPU reports whether the GPU inventory proves the host has no
+// Intel graphics, which rules out QSV. Proof needs every GPU's vendor:
+// on Linux each probed render node must have a known Intel verdict (PCI
+// vendor from sysfs, else the VA driver string — the same rule as the
+// QSV device hint); on Windows a complete, non-empty DXGI adapter list.
+// Anything less — an unidentified node, no inventory, an incomplete
+// enumeration, other platforms — fails open: hiding a working encoder
+// is worse than showing one that errors at run time.
+func noIntelGPU(devices []vaapi.DeviceInfo, adapters []model.GPUAdapter, adaptersComplete bool) bool {
+	if len(devices) > 0 {
+		for _, d := range devices {
+			isIntel, known := d.IntelGraphicsVerdict()
+			if !known || isIntel {
+				return false
+			}
+		}
+		return true
+	}
+	if adaptersComplete && len(adapters) > 0 {
+		return countVendorAdapters(adapters, VendorIntel) == 0
+	}
+	return false
 }
 
 // narrowProfilesToBuild filters each discovered video encoder's

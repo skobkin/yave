@@ -96,10 +96,9 @@ func devicePresent(fs fsProbe, path string) bool {
 }
 
 // renderNodes checks for DRM render nodes and returns them sorted.
-// QSV piggybacks on the same nodes on Linux, so this is an
-// approximation: an AMD-only box (render node present, no Intel media
-// driver) still reports QSV as available — the runtime FFmpeg error
-// makes the real gap obvious.
+// QSV piggybacks on the same nodes on Linux, so this alone is an
+// approximation: an AMD-only box also has render nodes. Discovery
+// narrows it with the probed GPU identities (see noIntelGPU).
 //
 // The bool reports availability with the same semantics the previous
 // renderNodePresent probe had: a glob error fails open (devicePresent

@@ -331,3 +331,93 @@ esac
 		t.Error("the rest of detection must still work")
 	}
 }
+
+func TestNoIntelGPU(t *testing.T) {
+	t.Parallel()
+	identified := func(vendor string) vaapi.DeviceInfo {
+		return vaapi.DeviceInfo{Path: "/dev/dri/renderD128", Identity: vaapi.DeviceIdentity{Vendor: vendor, Device: "0001"}}
+	}
+	amd, nvidia, intel := identified("1002"), identified("10de"), identified("8086")
+	unidentified := vaapi.DeviceInfo{Path: "/dev/dri/renderD130", Err: "libva unavailable"}
+	byDriver := vaapi.DeviceInfo{Path: "/dev/dri/renderD131", Driver: "Mesa Gallium driver (radeonsi)"}
+	tests := []struct {
+		name     string
+		devices  []vaapi.DeviceInfo
+		adapters []model.GPUAdapter
+		complete bool
+		want     bool
+	}{
+		{"AMD + NVIDIA render nodes", []vaapi.DeviceInfo{nvidia, amd}, nil, false, true},
+		{"an Intel node keeps QSV", []vaapi.DeviceInfo{amd, intel}, nil, false, false},
+		{"an unidentified node fails open", []vaapi.DeviceInfo{amd, unidentified}, nil, false, false},
+		{"a non-Intel VA driver string counts as identified", []vaapi.DeviceInfo{byDriver}, nil, false, true},
+		{"Windows adapters without Intel", nil, []model.GPUAdapter{{VendorID: 0x1002}, {VendorID: VendorNVIDIA}}, true, true},
+		{"Windows adapters with Intel", nil, []model.GPUAdapter{{VendorID: VendorIntel}}, true, false},
+		{"incomplete Windows enumeration fails open", nil, []model.GPUAdapter{{VendorID: 0x1002}}, false, false},
+		{"empty Windows enumeration fails open", nil, nil, true, false},
+		{"no inventory fails open", nil, nil, false, false},
+	}
+	for _, tt := range tests {
+		if got := noIntelGPU(tt.devices, tt.adapters, tt.complete); got != tt.want {
+			t.Errorf("%s: noIntelGPU() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestDiscoverDropsQSVWithoutIntelGraphics(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("render-node probing is Linux-only")
+	}
+	dir := t.TempDir()
+	ffmpegPath := writeExecutable(t, dir, "ffmpeg", `#!/bin/sh
+case "$2" in
+  -version) printf 'ffmpeg version test-1\n' ;;
+  -encoders) printf 'Encoders:\n V..... libx265 test\n V..... hevc_qsv test\n V..... hevc_vaapi test\n' ;;
+  -hwaccels) printf 'Hardware acceleration methods:\nvaapi\n' ;;
+  *) exit 2 ;;
+esac
+`)
+	ffprobePath := writeExecutable(t, dir, "ffprobe", "#!/bin/sh\nprintf 'ffprobe version test-2\\n'\n")
+	fs := fsProbe{
+		stat: func(string) error { return os.ErrNotExist },
+		glob: func(pattern string) ([]string, error) {
+			if pattern == driRenderPattern {
+				return []string{"/dev/dri/renderD128", "/dev/dri/renderD129"}, nil
+			}
+			return nil, nil
+		},
+	}
+	encodes := map[vaapi.Profile][]vaapi.Entrypoint{vaapi.ProfileHEVCMain: {vaapi.EntrypointEncSlice}}
+	devicesFor := func(vendors ...string) vaapiDeviceProber {
+		return func(_ context.Context, nodes []string) []vaapi.DeviceInfo {
+			out := make([]vaapi.DeviceInfo, len(nodes))
+			for i, n := range nodes {
+				out[i] = vaapi.DeviceInfo{Path: n, EntryPoints: encodes, Identity: vaapi.DeviceIdentity{Vendor: vendors[i], Device: "0001"}}
+			}
+			return out
+		}
+	}
+	cfg := model.FFmpegConfig{FFmpegPath: ffmpegPath, FFprobePath: ffprobePath}
+
+	got, err := discover(context.Background(), cfg, fs, devicesFor("10de", "1002"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HWQSVAvailable {
+		t.Error("QSV must be unavailable on an NVIDIA + AMD host")
+	}
+	if _, ok := got.Encoders["hevc_qsv"]; ok {
+		t.Error("hevc_qsv must be filtered out without Intel graphics")
+	}
+	if _, ok := got.Encoders["hevc_vaapi"]; !ok || !got.HWVAAPIAvailable {
+		t.Error("VAAPI must stay available")
+	}
+
+	got, err = discover(context.Background(), cfg, fs, devicesFor("10de", "8086"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Encoders["hevc_qsv"]; !ok || !got.HWQSVAvailable {
+		t.Error("an Intel GPU must keep QSV")
+	}
+}
