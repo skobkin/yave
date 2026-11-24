@@ -55,6 +55,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		c.trimMessage,
 		c.buildSegmentPanel(),
 		trimSegmentsRow(c),
+		trimScenesRow(c),
 		trimBoundariesRow(c),
 	)
 	trimTab := container.NewBorder(nil, controls, nil, nil, trimPreviewSection(c))
@@ -149,6 +150,19 @@ func trimSegmentsRow(c *Controller) fyne.CanvasObject {
 		widget.NewLabel("Export"), c.trimExport,
 		c.trimAdd, c.trimDelete, c.trimChapters,
 	)
+}
+
+// trimScenesRow holds the scene-detection controls: the detect/cancel
+// button, a status line, and the threshold slider once results exist.
+// The whole row is hidden unless the FFmpeg build has the filters the
+// detection needs, so it costs no space otherwise.
+func trimScenesRow(c *Controller) fyne.CanvasObject {
+	sliderCell := container.NewGridWrap(fyne.NewSize(200, c.sceneThreshold.MinSize().Height), c.sceneThreshold)
+	c.sceneThresholdBox = container.NewHBox(c.sceneThresholdLabel, sliderCell)
+	c.sceneThresholdBox.Hide()
+	c.trimScenesBox = container.NewHBox(c.sceneDetect, c.sceneThresholdBox, c.sceneStatus)
+	c.trimScenesBox.Hide()
+	return c.trimScenesBox
 }
 
 // trimBoundariesRow lays the boundary fields out on a single line: In

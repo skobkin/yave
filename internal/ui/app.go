@@ -125,6 +125,17 @@ type Controller struct {
 	// trimCopyVideo mirrors whether the effective video encoder is stream
 	// copy, and trimMsgEncoder/trimMsgAudio the inputs of the last trim
 	// message, so asynchronous keyframe results can refresh the message.
+	// Scene detection: the button, the live threshold slider, a status
+	// line, and the containers that hide them when the build lacks the
+	// needed filters or there are no results yet.
+	scenes              sceneState
+	sceneDetect         *tipButton
+	sceneThreshold      *widget.Slider
+	sceneThresholdLabel *widget.Label
+	sceneStatus         *widget.Label
+	trimScenesBox       *fyne.Container
+	sceneThresholdBox   *fyne.Container
+
 	trimCopyVideo  bool
 	trimMsgEncoder string
 	trimMsgAudio   model.AudioSettings

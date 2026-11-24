@@ -10,6 +10,7 @@
 - `internal/profiles`: YAML configuration and profile persistence under the user config directory.
 - `internal/templates`: output filename template expansion and path-safety checks.
 - `internal/validation`: profile, source stream, encoder, and container compatibility checks.
+- `internal/analysis`: background media analyses for the Trim tab (scene-cut detection) run through the configured FFmpeg, with cancellation and no GUI dependency.
 - `internal/transcode`: FFmpeg process execution, progress parsing, logging, and cancellation.
 - `internal/updates`: Forgejo release checks via go4updates; periodic and manual update verification.
 - `PRD.md`: MVP product requirements and the source of truth for intended behavior.

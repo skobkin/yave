@@ -49,6 +49,10 @@ type UIConfig struct {
 
 	WindowWidth  int `yaml:"window_width,omitempty"`
 	WindowHeight int `yaml:"window_height,omitempty"`
+
+	// SceneThreshold is the scene-cut score (0.1-0.9) at or above which a
+	// detected cut becomes a timeline marker. Nil means the default (0.3).
+	SceneThreshold *float64 `yaml:"scene_threshold,omitempty"`
 }
 
 type FFmpegConfig struct {
@@ -163,6 +167,11 @@ type Capabilities struct {
 	FFprobeVersion string
 	Encoders       map[string]Encoder
 	HWAccels       []string
+	// Filters is the set of filter names the FFmpeg build lists in
+	// `ffmpeg -filters`. It is nil when the listing could not be read,
+	// which hides features that depend on specific filters instead of
+	// failing detection.
+	Filters map[string]bool
 	// Hardware-availability probe results. Encoders whose backend device
 	// is absent are already filtered out of Encoders; these fields record
 	// the probe outcome for display.

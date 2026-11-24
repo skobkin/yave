@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -66,6 +67,11 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe, probeD
 		return model.Capabilities{}, fmt.Errorf("detect FFmpeg hardware accelerators: %w", err)
 	}
 
+	// The filter listing only gates optional features (scene detection),
+	// so a build that cannot list its filters still detects normally and
+	// simply offers none of them.
+	filtersOutput, filtersErr := commandOutput(ctx, ffmpegPath, "-hide_banner", "-filters")
+
 	hw := probeHWBackends(fs)
 	// Per-device VA-API probing runs inside the caller's detection
 	// budget; every failure mode degrades to Err-carrying entries, so
@@ -105,6 +111,9 @@ func discover(ctx context.Context, config model.FFmpegConfig, fs fsProbe, probeD
 	}
 	if adaptersComplete {
 		caps.GPUAdapters = adapters
+	}
+	if filtersErr == nil {
+		caps.Filters = ParseFilters(filtersOutput)
 	}
 	return caps, nil
 }
@@ -280,6 +289,25 @@ func ParseHWAccels(output string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+// filterLine matches one filter row of `ffmpeg -filters`: three capability
+// flag characters, the filter name, and the input/output type pair
+// ("V->V", "|->V" for sources, "V->N" for dynamic outputs). The legend
+// lines above the list ("T.. = Timeline support") have no type pair and
+// do not match.
+var filterLine = regexp.MustCompile(`^\s*[T.][S.][C.]\s+(\S+)\s+[AVN|]+->[AVN|]+(?:\s|$)`)
+
+// ParseFilters returns the set of filter names in `ffmpeg -filters`
+// output.
+func ParseFilters(output string) map[string]bool {
+	filters := make(map[string]bool)
+	for line := range strings.SplitSeq(output, "\n") {
+		if m := filterLine.FindStringSubmatch(line); m != nil {
+			filters[m[1]] = true
+		}
+	}
+	return filters
 }
 
 func commandOutput(ctx context.Context, executable string, args ...string) (string, error) {

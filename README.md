@@ -96,6 +96,15 @@ lands on markers and other segments' boundaries within about 8 pixels; hold
 **Alt** to move freely. Snapping applies to mouse gestures only — typed
 timecodes and keyboard stepping are never moved.
 
+**Detect scenes** (shown only when your FFmpeg build has the `select`,
+`metadata` and `scale` filters) scores the video in the background, with
+progress and a Cancel button, and marks scene cuts in cyan on the timeline.
+One pass records every cut above a low floor, so the **Threshold** slider
+(lower finds more cuts) filters them instantly and is remembered in
+`config.yaml` (`ui.scene_threshold`). Results are cached for the file while
+the app runs, snapping and the marker buttons include them, and an export
+cancels a running detection.
+
 With a stream-copy video profile, FFmpeg can only start a cut on a keyframe:
 the output begins at the keyframe at or before **In**, while the end follows
 **Out** to within a few frames. The timeline then shows keyframe ticks (grey,

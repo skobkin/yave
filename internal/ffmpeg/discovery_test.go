@@ -253,3 +253,81 @@ func TestNarrowVAAPIToDevices(t *testing.T) {
 		})
 	}
 }
+
+func TestParseFilters(t *testing.T) {
+	t.Parallel()
+	output := `Filters:
+  T.. = Timeline support
+  .S. = Slice threading
+  ..C = Command support
+  A = Audio input/output
+  V = Video input/output
+  N = Dynamic number and/or type of input/output
+  | = Source or sink filter
+ TSC aap               AA->A      Apply Affine Projection algorithm to first audio stream.
+ ... color             |->V       Provide an uniformly colored input.
+ T.. metadata          V->V       Manipulate video frame metadata.
+ ..C scale             V->V       Scale the input video size and/or convert the image format.
+ ... select            V->N       Select video frames to pass in output.
+ ... concat            N->N       Concatenate audio and video streams.
+ ... nullsink          V->|       Do absolutely nothing with the input video.
+`
+	got := ParseFilters(output)
+	for _, name := range []string{"aap", "color", "metadata", "scale", "select", "concat", "nullsink"} {
+		if !got[name] {
+			t.Errorf("filter %q not parsed: %v", name, got)
+		}
+	}
+	for _, bogus := range []string{"=", "Filters:", "T..", "A", "|", "scdet"} {
+		if got[bogus] {
+			t.Errorf("%q must not be reported as a filter", bogus)
+		}
+	}
+	if len(got) != 7 {
+		t.Errorf("parsed %d filters, want 7: %v", len(got), got)
+	}
+	if len(ParseFilters("")) != 0 || len(ParseFilters("garbage\nmore garbage")) != 0 {
+		t.Error("unparsable output must yield no filters")
+	}
+}
+
+func TestDiscoverReportsFiltersAndToleratesAMissingListing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	probe := writeExecutable(t, dir, "ffprobe", "#!/bin/sh\nprintf 'ffprobe version test-2\\n'\n")
+	script := func(filters string) string {
+		return `#!/bin/sh
+case "$2" in
+  -version) printf 'ffmpeg version test-1\n' ;;
+  -encoders) printf 'Encoders:\n V..... libx265 test\n' ;;
+  -hwaccels) printf 'Hardware acceleration methods:\n' ;;
+  -filters) ` + filters + ` ;;
+  *) exit 2 ;;
+esac
+`
+	}
+
+	withList := writeExecutable(t, dir, "ffmpeg-list",
+		script(`printf 'Filters:\n ..C scale             V->V       Scale.\n ... select            V->N       Select.\n'`))
+	got, err := Discover(context.Background(), model.FFmpegConfig{FFmpegPath: withList, FFprobePath: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Filters["scale"] || !got.Filters["select"] || got.Filters["metadata"] {
+		t.Errorf("filters = %v", got.Filters)
+	}
+
+	broken := writeExecutable(t, dir, "ffmpeg-broken", script("exit 3"))
+	got, err = Discover(context.Background(), model.FFmpegConfig{FFmpegPath: broken, FFprobePath: probe})
+	if err != nil {
+		t.Fatalf("a failing filter listing must not fail detection: %v", err)
+	}
+	if got.Filters != nil {
+		t.Errorf("filters = %v, want nil when the listing is unavailable", got.Filters)
+	}
+	if _, ok := got.Encoders["libx265"]; !ok {
+		t.Error("the rest of detection must still work")
+	}
+}

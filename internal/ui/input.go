@@ -91,6 +91,7 @@ func (c *Controller) setInput(path string) {
 				// trimming is enabled (see setTrimEnabled).
 				c.trimTimeline.SetDuration(info.Duration)
 				c.syncChapterMarkers()
+				c.loadCachedScenes()
 			}
 			c.refresh()
 		})

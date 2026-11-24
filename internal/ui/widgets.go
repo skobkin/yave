@@ -151,6 +151,26 @@ func (c *Controller) createWidgets() {
 		"Previous marker (chapter, scene or keyframe)", func() { c.jumpToMarker(-1) })
 	c.trimNextMarker = newTipButton(c.tips, resources.Icon(resources.IconNextMarker),
 		"Next marker (chapter, scene or keyframe)", func() { c.jumpToMarker(1) })
+	c.sceneDetect = newTipButtonFunc(c.tips, nil, func() string {
+		if c.scenes.running {
+			return "Stop looking for scene changes"
+		}
+		if reason := c.sceneBlockReason(); reason != "" {
+			return reason
+		}
+		return "Find scene changes and mark them on the timeline"
+	}, c.toggleSceneDetection)
+	c.sceneDetect.Text = "Detect scenes"
+	c.sceneDetect.Importance = widget.MediumImportance
+	c.sceneDetect.Disable()
+	c.sceneThresholdLabel = widget.NewLabel("")
+	c.sceneThreshold = widget.NewSlider(sceneThresholdMin, sceneThresholdMax)
+	c.sceneThreshold.Step = 0.01
+	c.sceneThreshold.SetValue(c.sceneThresholdValue())
+	c.sceneThreshold.OnChanged = c.onSceneThreshold
+	c.sceneThreshold.OnChangeEnded = func(float64) { c.saveSceneThreshold() }
+	c.sceneStatus = widget.NewLabel("")
+	setStatusLabel(c.sceneStatus, "")
 	c.trimChapters = widget.NewButton("Segments from chapters…", c.segmentsFromChapters)
 	c.trimChapters.Hide() // shown while the input has chapters
 	c.trimTimeline.onTogglePlay = c.togglePlayback

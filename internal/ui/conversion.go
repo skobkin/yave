@@ -94,6 +94,7 @@ func (c *Controller) refresh() {
 	// synchronized with every state change that flows through refresh().
 	c.updateTrimMessages(trimValidationInputs(p))
 	c.updateKeyframes()
+	c.updateSceneControls()
 	c.updateSegmentButtons()
 	c.updateSegmentList()
 	c.updatePlaybackControls()
@@ -277,6 +278,7 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 	// An export owns the CPU and the preview display: playback stops
 	// before it starts and stays unavailable until it finishes.
 	c.cancelPlayback()
+	c.cancelAnalysisWork()
 	control := transcode.NewRunControl()
 	c.runControl = control
 	// The input stays selectable during a run; notifications must name the
