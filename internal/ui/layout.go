@@ -47,7 +47,9 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		c.previewStatus,
 		// Transport buttons share the enable row so playback costs no
 		// extra vertical space.
-		container.NewHBox(c.trimEnable, c.trimHint, layout.NewSpacer(), c.trimPlay, c.trimPlaySelection),
+		container.NewHBox(c.trimEnable, c.trimHint, layout.NewSpacer(),
+			c.trimZoomOut, c.trimZoomIn, c.trimZoomFit, c.trimZoomSel,
+			c.trimPlay, c.trimPlaySelection),
 		c.trimTimeline,
 		c.trimMessage,
 		c.buildSegmentPanel(),

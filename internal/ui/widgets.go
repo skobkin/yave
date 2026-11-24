@@ -15,6 +15,7 @@ import (
 
 	"git.skobk.in/skobkin/yave/internal/encoder"
 	"git.skobk.in/skobkin/yave/internal/model"
+	"git.skobk.in/skobkin/yave/internal/resources"
 )
 
 func (c *Controller) createWidgets() {
@@ -135,11 +136,21 @@ func (c *Controller) createWidgets() {
 		return next, state == frameStepMoved
 	}
 	c.newPlaybackButtons()
+	c.tips = newTooltipLayer()
+	c.trimZoomOut = newTipButton(c.tips, resources.Icon(resources.IconZoomOut),
+		"Zoom out (Ctrl+wheel)", func() { c.trimTimeline.ZoomStep(1 / buttonZoomStepFactor) })
+	c.trimZoomIn = newTipButton(c.tips, resources.Icon(resources.IconZoomIn),
+		"Zoom in (Ctrl+wheel)", func() { c.trimTimeline.ZoomStep(buttonZoomStepFactor) })
+	c.trimZoomFit = newTipButton(c.tips, resources.Icon(resources.IconFit),
+		"Fit the whole video", c.trimTimeline.Fit)
+	c.trimZoomSel = newTipButton(c.tips, resources.Icon(resources.IconZoomToSelection),
+		"Zoom to the selected segment", c.trimTimeline.ZoomToSelection)
 	c.trimTimeline.onTogglePlay = c.togglePlayback
 	c.trimTimeline.onPlayhead = c.onTimelinePlayhead
 	c.trimTimeline.onSegments = c.onTimelineSegments
 	c.trimTimeline.onSelected = c.onTimelineSelected
 	c.trimTimeline.onHover = c.onTimelineHover
+	c.trimTimeline.onView = c.onTimelineView
 	// Ctrl+[ / Ctrl+] go through the same single-boundary handlers as
 	// the Set In/Out buttons, so both entry points keep the opposite
 	// entry's validity flag and in-progress text untouched.
@@ -218,6 +229,7 @@ func (c *Controller) createWidgets() {
 	c.trimControls = []fyne.CanvasObject{
 		c.trimTimeline, c.trimIn, c.trimOut, c.trimSetIn, c.trimSetOut, c.trimReset,
 		c.trimExport, c.trimAdd, c.trimDelete,
+		c.trimZoomOut, c.trimZoomIn, c.trimZoomFit, c.trimZoomSel,
 	}
 	for _, control := range c.trimControls {
 		if d, ok := control.(fyne.Disableable); ok {

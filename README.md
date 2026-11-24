@@ -75,6 +75,15 @@ dialog. Builds without a stamped version — including `go build -o yave
 ./cmd/yave` — are development builds and never check automatically; the tray
 action stays available.
 
+## Trim timeline zoom
+
+On long inputs the timeline can be zoomed for precise cuts: **Ctrl + mouse
+wheel** zooms around the pointer, the plain wheel scrolls the zoomed window,
+and dragging the thin overview bar along the bottom edge scrolls it too. The
+toolbar buttons zoom out/in, fit the whole video and zoom to the selected
+segment. The thumbnail strip is rebuilt for the visible range, and the zoom
+resets when another input is loaded.
+
 ## Trim playback
 
 The Trim tab can play the input while you choose cut boundaries: **Play** /

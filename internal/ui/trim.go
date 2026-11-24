@@ -31,8 +31,10 @@ const (
 	previewMaxEntryBytes = 4 << 20                // a single decoded preview frame (640-wide portrait ≈ 2.9 MiB)
 	previewImageWidth    = 640                    // the preview cell expands with the window; 320 would upscale
 	previewVeilAlpha     = 0x40                   // foreground veil tinting the stale frame while a fresh one extracts
-	thumbStripCount      = 10
-	thumbStripHeight     = 72 // matches the raised timelineMinHeight so cells do not upscale
+	thumbStripCount      = 10                     // target cells across the visible window
+	stripViewDebounce    = 150 * time.Millisecond // zoom/scroll storms rebuild the strip once
+	thumbCacheCap        = 600                    // decoded thumbnails kept across zoom levels
+	thumbStripHeight     = 72                     // matches the raised timelineMinHeight so cells do not upscale
 	thumbMaxWorkers      = 2
 	frameWindowLen       = 2 * time.Second // ffprobe -read_intervals window
 	frameWindowCap       = 4096            // max cached frame timestamps
@@ -183,6 +185,12 @@ func (c *Controller) resetTrimForNewInput() {
 	c.setPreviewStatus("")
 	c.previews.cache.Clear()
 	c.previews.stripRunning = false
+	c.previews.stripGrid = stripGrid{}
+	clear(c.previews.thumbCache)
+	if c.previews.stripTimer != nil {
+		c.previews.stripTimer.Stop()
+		c.previews.stripTimer = nil
+	}
 }
 
 // --- trim messages (validation + entry validity, one label) ---
@@ -616,6 +624,7 @@ func (c *Controller) ensureExtractor() *frames.Extractor {
 		c.previews.extractor = frames.NewExtractor(path)
 		c.previews.extractorPath = path
 		c.previews.cache.Clear()
+		clear(c.previews.thumbCache)
 	}
 	return c.previews.extractor
 }
@@ -857,43 +866,69 @@ func setStatusLabel(label *widget.Label, text string) {
 
 // --- thumbnail strip ---
 
-// scheduleStrip generates the timeline's thumbnails for the current
-// input: one input-side-seek ffmpeg process per slot, at most
-// thumbMaxWorkers in flight, slots rendering progressively. It runs
-// once per input (lazy — only after trimming is enabled) and reuses
-// results while the same input stays loaded.
+// scheduleStrip generates the timeline's thumbnails for the visible
+// window: one input-side-seek ffmpeg process per uncached cell, at most
+// thumbMaxWorkers in flight, cells rendering progressively. Cells sit on
+// a stable time grid (stripGridFor), so thumbnails already extracted at
+// the current zoom level are reused when the window scrolls or returns.
+// A request for the grid already shown is a no-op; a different grid
+// retires the previous generation's workers. It runs lazily — only after
+// trimming is enabled — and again (debounced) when the view changes.
 func (c *Controller) scheduleStrip() {
-	if c.inputPath == "" || c.media.Duration <= 0 || c.previews.stripRunning {
+	if c.inputPath == "" || c.media.Duration <= 0 {
 		return
 	}
+	start, end := c.trimTimeline.View().window()
+	grid := stripGridFor(start, end, c.media.Duration)
+	if grid.n == 0 || grid == c.previews.stripGrid {
+		return
+	}
+	c.previews.stripGrid = grid
 	c.previews.stripRunning = true
-	c.trimTimeline.SetThumbnails(make([]image.Image, thumbStripCount))
-	ctx, cancel := context.WithCancel(context.Background())
-	c.previews.stripCancel = cancel
+	c.trimTimeline.SetThumbnailGrid(grid.start, grid.cell, grid.n)
+	ctx, job := c.previews.strip.start(context.Background())
 	gen := c.inputGeneration
 	ext := c.ensureExtractor()
 	path := c.inputPath
-	// Midpoints avoid intro/black frames sitting exactly at 0.
-	positions := make([]time.Duration, thumbStripCount)
-	for i := range positions {
-		positions[i] = c.media.Duration * time.Duration(2*i+1) / time.Duration(2*thumbStripCount)
+	fetch := c.previews.thumbFetch
+	if fetch == nil {
+		fetch = func(ctx context.Context, ext *frames.Extractor, path string, at time.Duration, height int) (frames.Frame, error) {
+			return ext.Thumbnail(ctx, path, at, height)
+		}
 	}
+	if c.previews.thumbCache == nil {
+		c.previews.thumbCache = map[time.Duration]image.Image{}
+	}
+	duration := c.media.Duration
+
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, thumbMaxWorkers)
-	for slot, at := range positions {
+	for slot := range grid.n {
+		at := grid.sampleAt(slot, duration)
+		if img, ok := c.previews.thumbCache[at]; ok {
+			c.trimTimeline.SetThumbnail(slot, img)
+			continue
+		}
 		wg.Add(1)
 		go func(slot int, at time.Duration) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			frame, err := ext.Thumbnail(ctx, path, at, thumbStripHeight)
+			if ctx.Err() != nil {
+				return // retired while queued: skip the process entirely
+			}
+			frame, err := fetch(ctx, ext, path, at, thumbStripHeight)
 			c.dispatchUI(func() {
 				if c.inputGeneration != gen || c.ensureExtractor() != ext || ctx.Err() != nil {
 					return
 				}
 				if err != nil {
-					return // the slot keeps its placeholder; the next input retries
+					return // the slot keeps its placeholder; the next grid retries
 				}
+				if len(c.previews.thumbCache) >= thumbCacheCap {
+					clear(c.previews.thumbCache)
+				}
+				c.previews.thumbCache[at] = frame.Image
 				c.trimTimeline.SetThumbnail(slot, frame.Image)
 			})
 		}(slot, at)
@@ -901,11 +936,30 @@ func (c *Controller) scheduleStrip() {
 	go func() {
 		wg.Wait()
 		c.dispatchUI(func() {
-			if c.inputGeneration == gen {
+			if c.inputGeneration == gen && c.previews.strip.current(job) {
 				c.previews.stripRunning = false
 			}
 		})
 	}()
+}
+
+// onTimelineView reacts to a user zoom or scroll: the strip is rebuilt
+// for the new window once the gesture settles, retiring stale work.
+func (c *Controller) onTimelineView() {
+	if !c.trimEnabled {
+		return
+	}
+	if c.previews.stripTimer != nil {
+		c.previews.stripTimer.Stop()
+	}
+	gen := c.inputGeneration
+	c.previews.stripTimer = time.AfterFunc(stripViewDebounce, func() {
+		c.dispatchUI(func() {
+			if c.inputGeneration == gen && c.trimEnabled {
+				c.scheduleStrip()
+			}
+		})
+	})
 }
 
 // --- frame index (frame-accurate stepping) ---
@@ -1341,9 +1395,10 @@ func (c *Controller) cancelPreviewWork() {
 func (c *Controller) cancelTrimWork() {
 	c.cancelPlayback()
 	c.cancelPreviewWork()
-	if c.previews.stripCancel != nil {
-		c.previews.stripCancel()
-		c.previews.stripCancel = nil
+	c.previews.strip.stop()
+	if c.previews.stripTimer != nil {
+		c.previews.stripTimer.Stop()
+		c.previews.stripTimer = nil
 	}
 	if c.previews.indexCancel != nil {
 		c.previews.indexCancel()
@@ -1364,8 +1419,15 @@ type trimPreviews struct {
 	previewTimer  *time.Timer
 	hoverTimer    *time.Timer
 	previewCancel context.CancelFunc
-	stripCancel   context.CancelFunc
 	indexCancel   context.CancelFunc
+
+	// strip owns the thumbnail workers; stripTimer debounces view changes;
+	// stripGrid is the grid currently shown (zero: none) and thumbCache
+	// the decoded cells, keyed by sample time, reused across zoom levels.
+	strip      bgJob
+	stripTimer *time.Timer
+	stripGrid  stripGrid
+	thumbCache map[time.Duration]image.Image
 
 	// indexFetch reads one frame-timestamp window; seam over
 	// ffprobe.FrameTimes so tests can intercept the fetch. The second
@@ -1374,6 +1436,9 @@ type trimPreviews struct {
 	// previewFetch extracts one preview frame; seam over
 	// Extractor.Preview so tests can intercept (and block on) the fetch.
 	previewFetch func(ctx context.Context, ext *frames.Extractor, path string, at time.Duration, maxWidth int) (frames.Frame, error)
+	// thumbFetch extracts one strip thumbnail; seam over
+	// Extractor.Thumbnail so tests can intercept (and block on) the fetch.
+	thumbFetch func(ctx context.Context, ext *frames.Extractor, path string, at time.Duration, height int) (frames.Frame, error)
 
 	seq uint64 // newest request wins the display
 
@@ -1396,6 +1461,10 @@ func newTrimPreviews() trimPreviews {
 		cache:      frames.NewCache(previewCacheBytes, previewMaxEntryBytes),
 		index:      newFrameIndex(),
 		indexFetch: ffprobe.FrameTimes,
+		thumbCache: map[time.Duration]image.Image{},
+		thumbFetch: func(ctx context.Context, ext *frames.Extractor, path string, at time.Duration, height int) (frames.Frame, error) {
+			return ext.Thumbnail(ctx, path, at, height)
+		},
 		previewFetch: func(ctx context.Context, ext *frames.Extractor, path string, at time.Duration, maxWidth int) (frames.Frame, error) {
 			return ext.Preview(ctx, path, at, maxWidth)
 		},

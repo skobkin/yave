@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"image/color"
+	"math"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -26,6 +27,7 @@ const (
 	tlPlayhead
 	tlIn
 	tlOut
+	tlScroll // dragging the overview bar scrolls the zoomed window
 )
 
 const (
@@ -35,6 +37,17 @@ const (
 	handleBarWidth     = 4  // visible bars are narrower than their hit zones
 	playheadBarWidth   = 2
 	hoverMarkWidth     = 2 // ghost marker following the pointer while it previews
+	overviewHeight     = 8 // zoom overview bar along the bottom edge (shown only while zoomed)
+)
+
+// Wheel tuning: one notch is ±10 wheel units. A notch zooms by
+// wheelZoomPerNotch and scrolls the window by wheelScrollPerNotch of its
+// width.
+const (
+	wheelUnitsPerNotch   = 10.0
+	wheelZoomPerNotch    = 1.25
+	wheelScrollPerNotch  = 0.05
+	buttonZoomStepFactor = 2.0
 )
 
 // timeline is the trim tab's scrubber: a thumbnail strip with a playhead
@@ -70,6 +83,16 @@ type timeline struct {
 	selected int
 	thumbs   []image.Image
 	dragSeg  int // segment index for tlIn/tlOut drags; -1 otherwise
+
+	// view is the visible window; the unzoomed view shows the whole
+	// media. All x↔time mapping goes through it.
+	view timelineView
+	// thumbStart/thumbCell place thumbnail cell i at
+	// [thumbStart+i*thumbCell, thumbStart+(i+1)*thumbCell). A zero
+	// thumbCell is the legacy layout: len(thumbs) equal cells spread over
+	// the whole duration.
+	thumbStart time.Duration
+	thumbCell  time.Duration
 
 	focused      bool
 	enabled      bool
@@ -109,6 +132,13 @@ type timeline struct {
 	// onTogglePlay fires for Space so the controller can start or pause
 	// playback; nil leaves the key unhandled.
 	onTogglePlay func()
+	// onView fires when the visible window changes through user zoom or
+	// scroll (not for SetDuration resets), so the controller can rebuild
+	// the thumbnail strip for the new range.
+	onView func()
+	// modifiers reports the live keyboard modifiers; nil queries the
+	// desktop driver and falls back to the key-event tracked state.
+	modifiers func() fyne.KeyModifier
 }
 
 func newTimeline() *timeline {
@@ -125,6 +155,7 @@ func newTimeline() *timeline {
 var (
 	_ fyne.Disableable  = (*timeline)(nil)
 	_ fyne.Shortcutable = (*timeline)(nil)
+	_ fyne.Scrollable   = (*timeline)(nil)
 )
 
 // SetDuration replaces the media duration and clamps the existing
@@ -134,6 +165,12 @@ var (
 func (t *timeline) SetDuration(d time.Duration) {
 	if d < 0 {
 		d = 0
+	}
+	if d != t.duration {
+		// A different media starts unzoomed; re-applying the same duration
+		// (Reset) keeps the user's zoom.
+		t.view = newTimelineView(d)
+		t.thumbStart, t.thumbCell = 0, 0
 	}
 	t.duration = d
 	t.SetPlayhead(t.playhead)
@@ -146,6 +183,124 @@ func (t *timeline) SetDuration(d time.Duration) {
 
 // Duration returns the media duration the timeline shows.
 func (t *timeline) Duration() time.Duration { return t.duration }
+
+// View returns the visible window.
+func (t *timeline) View() timelineView { return t.viewNow() }
+
+// viewNow returns the view stamped with the widget's current duration:
+// the duration is the widget's own state (also assigned directly by
+// callers that bypass SetDuration), so the view never trusts its stored
+// copy.
+func (t *timeline) viewNow() timelineView {
+	v := t.view
+	v.duration = t.duration
+	return v
+}
+
+// SetView installs a new visible window and notifies the controller.
+func (t *timeline) SetView(v timelineView) {
+	v.duration = t.duration
+	v = v.normalized()
+	if v == t.viewNow() {
+		return
+	}
+	t.view = v
+	t.Refresh()
+	if t.onView != nil {
+		t.onView()
+	}
+}
+
+// ZoomAround zooms by factor (> 1 zooms in) keeping the media time under
+// x stable.
+func (t *timeline) ZoomAround(x float32, factor float64) {
+	t.SetView(t.viewNow().zoomAround(x, t.Size().Width, factor))
+}
+
+// ZoomStep zooms around the widget's center; the toolbar's zoom buttons
+// use it.
+func (t *timeline) ZoomStep(factor float64) {
+	t.ZoomAround(t.Size().Width/2, factor)
+}
+
+// ScrollBy scrolls the window by dx pixels.
+func (t *timeline) ScrollBy(dx float32) {
+	t.SetView(t.viewNow().scrollBy(dx, t.Size().Width))
+}
+
+// Fit shows the whole media.
+func (t *timeline) Fit() { t.SetView(t.viewNow().fit()) }
+
+// ZoomToSelection frames the selected segment with a small margin; a
+// missing or empty segment leaves the view unchanged.
+func (t *timeline) ZoomToSelection() {
+	if len(t.segments) == 0 {
+		return
+	}
+	seg := t.segments[t.Selected()]
+	t.SetView(t.viewNow().zoomTo(seg.Start, seg.End, 0.1))
+}
+
+// SetThumbnailGrid positions the strip's cells on the media timeline:
+// cell i covers [start+i*cell, start+(i+1)*cell). Existing thumbnails are
+// replaced by n empty slots.
+func (t *timeline) SetThumbnailGrid(start, cell time.Duration, n int) {
+	t.thumbStart, t.thumbCell = start, cell
+	t.thumbs = make([]image.Image, max(n, 0))
+	t.Refresh()
+}
+
+// keyModifiers reports the live modifiers: the injected provider first
+// (tests), then the desktop driver — Scrolled events carry no modifiers
+// and the widget may not hold focus while the wheel is used — and finally
+// the modifier state tracked from key events.
+func (t *timeline) keyModifiers() fyne.KeyModifier {
+	if t.modifiers != nil {
+		return t.modifiers()
+	}
+	if app := fyne.CurrentApp(); app != nil {
+		if d, ok := app.Driver().(desktop.Driver); ok {
+			return d.CurrentKeyModifiers()
+		}
+	}
+	var mods fyne.KeyModifier
+	if t.ctrlHeld {
+		mods |= fyne.KeyModifierControl
+	}
+	if t.shiftHeld {
+		mods |= fyne.KeyModifierShift
+	}
+	return mods
+}
+
+// Scrolled zooms around the pointer with Ctrl held and scrolls the
+// zoomed window horizontally otherwise.
+func (t *timeline) Scrolled(ev *fyne.ScrollEvent) {
+	if !t.enabled || t.duration <= 0 {
+		return
+	}
+	dx, dy := float64(ev.Scrolled.DX), float64(ev.Scrolled.DY)
+	if t.keyModifiers()&fyne.KeyModifierControl != 0 {
+		delta := dy
+		if delta == 0 {
+			delta = dx
+		}
+		if delta == 0 {
+			return
+		}
+		t.ZoomAround(ev.Position.X, math.Pow(wheelZoomPerNotch, delta/wheelUnitsPerNotch))
+		return
+	}
+	if !t.viewNow().zoomed() {
+		return
+	}
+	delta := dx
+	if delta == 0 {
+		delta = dy
+	}
+	// Wheel down (negative DY) reveals later media.
+	t.ScrollBy(float32(-delta / wheelUnitsPerNotch * wheelScrollPerNotch * float64(t.Size().Width)))
+}
 
 // SetSegments replaces the displayed segments, clamping every bound
 // into [0, duration], and fires onSegments with the clamped copy so
@@ -215,7 +370,20 @@ func (t *timeline) clampIndex(index int) int {
 // onPlayhead is not fired for programmatic moves.
 func (t *timeline) SetPlayhead(at time.Duration) {
 	t.playhead = t.clamp(at)
+	t.revealPlayhead()
 	t.Refresh()
+}
+
+// revealPlayhead re-centers a zoomed window on a playhead that moved out
+// of it (frame stepping, playback, Reset), so the playhead never
+// disappears from the strip.
+func (t *timeline) revealPlayhead() {
+	v := t.viewNow()
+	if !v.zoomed() || v.visible(t.playhead) {
+		return
+	}
+	span := v.Span()
+	t.SetView(timelineView{duration: t.duration, start: t.playhead - span/2, span: span})
 }
 
 // Playhead returns the committed playhead position.
@@ -470,6 +638,11 @@ func (t *timeline) MouseDown(ev *desktop.MouseEvent) {
 	if c := fyne.CurrentApp().Driver().CanvasForObject(t); c != nil {
 		c.Focus(t)
 	}
+	if t.inOverview(ev.Position) {
+		t.drag, t.dragSeg = tlScroll, -1
+		t.centerViewOn(ev.Position.X)
+		return
+	}
 	kind, seg := t.pickTarget(ev.Position.X)
 	switch kind {
 	case tlIn:
@@ -503,6 +676,10 @@ func (t *timeline) MouseUp(ev *desktop.MouseEvent) {
 // crossings; equality is allowed (adjacent segments).
 func (t *timeline) Dragged(ev *fyne.DragEvent) {
 	if !t.enabled || t.drag == tlNone || t.duration <= 0 {
+		return
+	}
+	if t.drag == tlScroll {
+		t.centerViewOn(ev.Position.X)
 		return
 	}
 	at := t.clamp(t.timeAt(ev.Position.X))
@@ -588,6 +765,24 @@ func (t *timeline) clampToEndUpper(at time.Duration, seg int) time.Duration {
 	return min(max(at, t.segments[seg].Start), upper)
 }
 
+// inOverview reports whether a pointer position lies on the zoom overview
+// bar, which only exists while the view is zoomed.
+func (t *timeline) inOverview(pos fyne.Position) bool {
+	return t.viewNow().zoomed() && pos.Y >= t.Size().Height-overviewHeight
+}
+
+// centerViewOn scrolls the window so its center sits at the media time the
+// overview bar position x represents.
+func (t *timeline) centerViewOn(x float32) {
+	width := t.Size().Width
+	if width <= 0 || t.duration <= 0 {
+		return
+	}
+	center := time.Duration(float64(min(max(x, 0), width)/width) * float64(t.duration))
+	span := t.viewNow().Span()
+	t.SetView(timelineView{duration: t.duration, start: center - span/2, span: span})
+}
+
 // pickTarget resolves the gesture target: handles first (nearest wins
 // when their hit zones overlap), then the playhead anywhere else,
 // together with the segment index the gesture grabbed (-1 for the
@@ -604,7 +799,7 @@ func (t *timeline) pickTarget(x float32) (tlDrag, int) {
 			kind tlDrag
 			at   time.Duration
 		}{{tlIn, seg.Start}, {tlOut, seg.End}} {
-			dist := absFloat32(x - t.xAt(candidate.at))
+			dist := absFloat32(x - t.xOf(candidate.at))
 			if dist > handleHitHalfWidth || dist >= bestDist {
 				continue
 			}
@@ -659,42 +854,23 @@ func (t *timeline) hover(x float32) {
 
 // --- coordinate mapping (pure, unit-tested) ---
 
-// timeAt maps an x position onto [0, duration], clamped.
+// timeAt maps an x position onto the visible window (and so onto
+// [0, duration]), clamped.
 func (t *timeline) timeAt(x float32) time.Duration {
-	if t.duration <= 0 {
-		return 0
-	}
-	width := t.Size().Width
-	if width <= 0 {
-		return 0
-	}
-	ratio := x / width
-	if ratio < 0 {
-		ratio = 0
-	}
-	if ratio > 1 {
-		ratio = 1
-	}
-	return time.Duration(float64(ratio) * float64(t.duration))
+	return t.viewNow().xToTime(x, t.Size().Width)
 }
 
-// xAt maps a timestamp onto the widget width, clamped.
+// xAt maps a timestamp onto the widget width, clamped to [0, width].
 func (t *timeline) xAt(d time.Duration) float32 {
-	if t.duration <= 0 {
-		return 0
-	}
 	width := t.Size().Width
-	if width <= 0 {
-		return 0
-	}
-	x := float32(float64(d) / float64(t.duration) * float64(width))
-	if x < 0 {
-		x = 0
-	}
-	if x > width {
-		x = width
-	}
-	return x
+	return min(max(t.viewNow().timeToX(d, width), 0), width)
+}
+
+// xOf maps a timestamp onto the widget width without clamping: positions
+// scrolled out of the visible window fall outside [0, width], so layers
+// can hide them and hit testing cannot grab them at an edge.
+func (t *timeline) xOf(d time.Duration) float32 {
+	return t.viewNow().timeToX(d, t.Size().Width)
 }
 
 func (t *timeline) clamp(d time.Duration) time.Duration {
@@ -730,21 +906,28 @@ type timelineRenderer struct {
 	t          *timeline
 	background *canvas.Rectangle
 	thumbs     []*canvas.Image
+	shownSrc   []image.Image     // source image each cell currently displays
+	shownRect  []image.Rectangle // crop applied to it (empty: uncropped)
 	dim        *canvas.Rectangle
 	fills      []*canvas.Rectangle
 	bars       []*canvas.Rectangle
 	hoverMark  *canvas.Rectangle
 	playhead   *canvas.Rectangle
 	focusRing  *canvas.Rectangle
+
+	overviewTrack *canvas.Rectangle
+	overviewThumb *canvas.Rectangle
 }
 
 func (t *timeline) CreateRenderer() fyne.WidgetRenderer {
 	r := &timelineRenderer{
-		t:          t,
-		background: canvas.NewRectangle(color.NRGBA{R: 32, G: 32, B: 32, A: 255}),
-		dim:        canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 110}),
-		hoverMark:  canvas.NewRectangle(color.Transparent),
-		playhead:   canvas.NewRectangle(color.NRGBA{R: 255, G: 255, B: 255, A: 255}),
+		t:             t,
+		background:    canvas.NewRectangle(color.NRGBA{R: 32, G: 32, B: 32, A: 255}),
+		dim:           canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 110}),
+		hoverMark:     canvas.NewRectangle(color.Transparent),
+		playhead:      canvas.NewRectangle(color.NRGBA{R: 255, G: 255, B: 255, A: 255}),
+		overviewTrack: canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 160}),
+		overviewThumb: canvas.NewRectangle(color.NRGBA{R: 255, G: 255, B: 255, A: 200}),
 		focusRing: &canvas.Rectangle{
 			StrokeColor: theme.Color(theme.ColorNamePrimary),
 			StrokeWidth: 2,
@@ -755,25 +938,90 @@ func (t *timeline) CreateRenderer() fyne.WidgetRenderer {
 }
 
 // syncThumbs matches the renderer's image objects to the widget's
-// thumbnail slots.
+// thumbnail slots; layoutThumbs assigns their content and geometry.
 func (r *timelineRenderer) syncThumbs() {
 	for len(r.thumbs) < len(r.t.thumbs) {
 		img := canvas.NewImageFromImage(nil)
 		img.FillMode = canvas.ImageFillContain
 		r.thumbs = append(r.thumbs, img)
+		r.shownSrc = append(r.shownSrc, nil)
+		r.shownRect = append(r.shownRect, image.Rectangle{})
 	}
-	for len(r.thumbs) > len(r.t.thumbs) {
-		r.thumbs = r.thumbs[:len(r.t.thumbs)]
+	if len(r.thumbs) > len(r.t.thumbs) {
+		n := len(r.t.thumbs)
+		r.thumbs, r.shownSrc, r.shownRect = r.thumbs[:n], r.shownSrc[:n], r.shownRect[:n]
 	}
-	for i, img := range r.t.thumbs {
-		if r.thumbs[i].Image != img {
-			r.thumbs[i].Image = img
+}
+
+// thumbSpan returns the media range cell i of n covers.
+func (t *timeline) thumbSpan(i, n int) (from, to time.Duration) {
+	if t.thumbCell > 0 {
+		return t.thumbStart + time.Duration(i)*t.thumbCell, t.thumbStart + time.Duration(i+1)*t.thumbCell
+	}
+	if n <= 0 {
+		return 0, 0
+	}
+	step := float64(t.duration) / float64(n)
+	return time.Duration(float64(i) * step), time.Duration(float64(i+1) * step)
+}
+
+// layoutThumbs places each thumbnail cell through the view. A cell
+// straddling the widget edge is cropped to its visible part (the image
+// is sub-imaged and stretched, so no pixels ever paint outside the
+// widget); cells fully outside, or partly outside without a croppable
+// image, are hidden.
+func (r *timelineRenderer) layoutThumbs(size fyne.Size) {
+	t := r.t
+	n := len(r.thumbs)
+	for i, obj := range r.thumbs {
+		from, to := t.thumbSpan(i, n)
+		x0, x1 := t.xOf(from), t.xOf(to)
+		vis0, vis1 := max(x0, 0), min(x1, size.Width)
+		if x1 <= x0 || vis1-vis0 < 1 {
+			obj.Hidden = true
+			continue
+		}
+		src := t.thumbs[i]
+		var crop image.Rectangle
+		display := src
+		fill := canvas.ImageFillContain
+		if vis0 != x0 || vis1 != x1 {
+			sub, ok := src.(interface {
+				SubImage(image.Rectangle) image.Image
+			})
+			if src != nil && !ok {
+				obj.Hidden = true
+				continue
+			}
+			if src != nil {
+				b := src.Bounds()
+				fx0 := float64((vis0 - x0) / (x1 - x0))
+				fx1 := float64((vis1 - x0) / (x1 - x0))
+				crop = image.Rect(
+					b.Min.X+int(math.Round(fx0*float64(b.Dx()))), b.Min.Y,
+					b.Min.X+int(math.Round(fx1*float64(b.Dx()))), b.Max.Y,
+				)
+				if crop.Dx() < 1 {
+					obj.Hidden = true
+					continue
+				}
+				display = sub.SubImage(crop)
+				fill = canvas.ImageFillStretch
+			}
+		}
+		obj.Hidden = false
+		obj.Move(fyne.NewPos(vis0, 0))
+		obj.Resize(fyne.NewSize(vis1-vis0, size.Height))
+		obj.FillMode = fill
+		if r.shownSrc[i] != src || r.shownRect[i] != crop {
+			r.shownSrc[i], r.shownRect[i] = src, crop
+			obj.Image = display
 			// A parent refresh re-lays-out children but does not
 			// invalidate a child canvas.Image's cached texture when the
 			// cell size is unchanged — thumbnails arriving after the
 			// empty slots were painted would stay blank until a resize.
 			// Refresh the image itself when its content changes.
-			r.thumbs[i].Refresh()
+			obj.Refresh()
 		}
 	}
 }
@@ -797,7 +1045,7 @@ func (r *timelineRenderer) Destroy() {}
 func (r *timelineRenderer) Objects() []fyne.CanvasObject {
 	r.syncThumbs()
 	r.syncSegments()
-	objects := make([]fyne.CanvasObject, 0, len(r.thumbs)+len(r.fills)+len(r.bars)+4)
+	objects := make([]fyne.CanvasObject, 0, len(r.thumbs)+len(r.fills)+len(r.bars)+6)
 	objects = append(objects, r.background)
 	for _, img := range r.thumbs {
 		objects = append(objects, img)
@@ -809,7 +1057,7 @@ func (r *timelineRenderer) Objects() []fyne.CanvasObject {
 	for _, bar := range r.bars {
 		objects = append(objects, bar)
 	}
-	return append(objects, r.hoverMark, r.playhead, r.focusRing)
+	return append(objects, r.hoverMark, r.playhead, r.overviewTrack, r.overviewThumb, r.focusRing)
 }
 
 func (r *timelineRenderer) MinSize() fyne.Size {
@@ -820,17 +1068,7 @@ func (r *timelineRenderer) Layout(size fyne.Size) {
 	r.syncThumbs()
 	r.syncSegments()
 	t := r.t
-	// Thumbnail cells stretch evenly across the width; ImageFillContain
-	// letterboxes each cell so the source aspect ratio is preserved.
-	cells := len(r.thumbs)
-	cellWidth := float32(0)
-	if cells > 0 {
-		cellWidth = size.Width / float32(cells)
-	}
-	for i, img := range r.thumbs {
-		img.Move(fyne.NewPos(float32(i)*cellWidth, 0))
-		img.Resize(fyne.NewSize(cellWidth, size.Height))
-	}
+	r.layoutThumbs(size)
 	r.dim.Move(fyne.NewPos(0, 0))
 	r.dim.Resize(size)
 	// Everything outside the segments reads dimmed: the single full-size
@@ -843,6 +1081,9 @@ func (r *timelineRenderer) Layout(size fyne.Size) {
 		fill := r.fills[i]
 		fill.Move(fyne.NewPos(startX, 0))
 		fill.Resize(fyne.NewSize(max(0, endX-startX), size.Height))
+		// A segment scrolled entirely out of view has nothing to fill (its
+		// clamped x range collapses onto an edge).
+		fill.Hidden = t.xOf(seg.End) < 0 || t.xOf(seg.Start) > size.Width
 		if i == t.selected {
 			fill.FillColor = selectedFill
 		} else {
@@ -854,15 +1095,31 @@ func (r *timelineRenderer) Layout(size fyne.Size) {
 		}
 		for j, at := range []time.Duration{seg.Start, seg.End} {
 			bar := r.bars[2*i+j]
-			barX := t.xAt(at)
+			barX := t.xOf(at)
+			bar.Hidden = barX < -handleBarWidth/2 || barX > size.Width+handleBarWidth/2
 			bar.Move(fyne.NewPos(barX-handleBarWidth/2, 0))
 			bar.Resize(fyne.NewSize(handleBarWidth, size.Height))
 			bar.FillColor = barColor
 		}
 	}
-	playX := t.xAt(t.playhead)
+	playX := t.xOf(t.playhead)
+	r.playhead.Hidden = playX < -playheadBarWidth/2 || playX > size.Width+playheadBarWidth/2
 	r.playhead.Move(fyne.NewPos(playX-playheadBarWidth/2, 0))
 	r.playhead.Resize(fyne.NewSize(playheadBarWidth, size.Height))
+	// Zoom overview: the visible window over the whole media, draggable
+	// to scroll. Only present while zoomed.
+	if t.viewNow().zoomed() && t.duration > 0 {
+		start, end := t.viewNow().window()
+		x0 := float32(float64(start) / float64(t.duration) * float64(size.Width))
+		x1 := float32(float64(end) / float64(t.duration) * float64(size.Width))
+		r.overviewTrack.Move(fyne.NewPos(0, size.Height-overviewHeight))
+		r.overviewTrack.Resize(fyne.NewSize(size.Width, overviewHeight))
+		r.overviewThumb.Move(fyne.NewPos(x0, size.Height-overviewHeight))
+		r.overviewThumb.Resize(fyne.NewSize(max(x1-x0, 4), overviewHeight))
+		r.overviewTrack.Hidden, r.overviewThumb.Hidden = false, false
+	} else {
+		r.overviewTrack.Hidden, r.overviewThumb.Hidden = true, true
+	}
 	// Ghost hover marker: follows the pointer while it is over the
 	// widget, accent-colored while the hovered frame's preview is still
 	// being extracted and neutral once it landed. It teaches that the

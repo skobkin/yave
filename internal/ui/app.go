@@ -109,6 +109,14 @@ type Controller struct {
 	trimPlay          *widget.Button
 	trimPlaySelection *widget.Button
 
+	// tips draws button tooltips over the window content (Fyne has none);
+	// the trim zoom buttons drive the timeline's visible window.
+	tips        *tooltipLayer
+	trimZoomOut *tipButton
+	trimZoomIn  *tipButton
+	trimZoomFit *tipButton
+	trimZoomSel *tipButton
+
 	trimEnable             *widget.Check
 	savedProfile           model.Profile // editor baseline for dirty tracking
 	hasSavedProfile        bool
@@ -286,7 +294,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 	c.previews = newTrimPreviews()
 	c.runStages = (transcode.Runner{}).RunSequence
 	c.createWidgets()
-	c.window.SetContent(c.buildLayout())
+	c.window.SetContent(c.withTooltips(c.buildLayout()))
 	c.registerShortcuts()
 	c.window.Resize(initialWindowSize(cfg.UI.WindowWidth, cfg.UI.WindowHeight))
 	c.window.CenterOnScreen()
