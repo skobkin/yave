@@ -87,9 +87,10 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	)
 
 	c.runTab = container.NewTabItem("Run", runTab)
+	c.trimTab = container.NewTabItem("Trim", trimTab)
 	c.tabs = container.NewAppTabs(
 		container.NewTabItem("Input", inputTab),
-		container.NewTabItem("Trim", trimTab),
+		c.trimTab,
 		container.NewTabItem("Output", outputTab),
 		container.NewTabItem("Video", videoTab),
 		container.NewTabItem("Audio & Subtitles", audioTab),

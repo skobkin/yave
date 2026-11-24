@@ -5,7 +5,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/profiles"
@@ -86,7 +85,7 @@ func volumeIconName(percent int, muted bool) string {
 type transportBar struct {
 	prev, play, next, playSel, mute *tipButton
 	fullscreen                      *tipButton
-	volume                          *widget.Slider
+	volume                          *playKeySlider
 	box                             *fyne.Container
 }
 
@@ -108,8 +107,7 @@ func (c *Controller) newTransportBar(overlay bool) *transportBar {
 		fullscreenIcon = resources.IconFullscreenExit
 	}
 	tb.fullscreen = newTipButtonFunc(c.tips, resources.Icon(fullscreenIcon), c.fullscreenTip, c.toggleFullscreen)
-	tb.volume = widget.NewSlider(0, 100)
-	tb.volume.Step = 1
+	tb.volume = newPlayKeySlider(0, 100, c.playFromKey)
 	tb.volume.SetValue(float64(c.volumePercent))
 	tb.volume.OnChanged = func(v float64) {
 		c.onVolumeSlider(v)

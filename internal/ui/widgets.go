@@ -131,7 +131,7 @@ func (c *Controller) createWidgets() {
 
 	// Trim tab: everything except the enable check lives in
 	// trimControls and stays disabled until trimming is turned on.
-	c.trimEnable = widget.NewCheck("Enable trimming", c.setTrimEnabled)
+	c.trimEnable = newClickCheck("Enable trimming", c.setTrimEnabled)
 	c.trimTimeline = newTimeline()
 	c.trimTimeline.stepFrame = func(at time.Duration, dir int) (time.Duration, bool) {
 		// Manual frame seeking takes over from playback: stop it and let
@@ -152,7 +152,7 @@ func (c *Controller) createWidgets() {
 		"Fit the whole video", c.trimTimeline.Fit)
 	c.trimZoomSel = newTipButton(c.tips, resources.Icon(resources.IconZoomToSelection),
 		"Zoom to the selected segment", c.trimTimeline.ZoomToSelection)
-	c.trimSnap = widget.NewCheck("Snap", func(on bool) { c.trimTimeline.snapEnabled = on })
+	c.trimSnap = newClickCheck("Snap", func(on bool) { c.trimTimeline.snapEnabled = on })
 	c.trimSnap.SetChecked(true)
 	c.trimPrevMarker = newTipButton(c.tips, resources.Icon(resources.IconPrevMarker),
 		"Previous marker (chapter, scene or keyframe)", func() { c.jumpToMarker(-1) })
@@ -171,7 +171,7 @@ func (c *Controller) createWidgets() {
 	c.sceneDetect.Importance = widget.MediumImportance
 	c.sceneDetect.Disable()
 	c.sceneThresholdLabel = widget.NewLabel("")
-	c.sceneThreshold = widget.NewSlider(sceneThresholdMin, sceneThresholdMax)
+	c.sceneThreshold = newPlayKeySlider(sceneThresholdMin, sceneThresholdMax, c.playFromKey)
 	c.sceneThreshold.Step = 0.01
 	c.sceneThreshold.SetValue(c.sceneThresholdValue())
 	c.sceneThreshold.OnChanged = c.onSceneThreshold
@@ -235,10 +235,10 @@ func (c *Controller) createWidgets() {
 	// The dropdown starts on the default (separate files) with its
 	// callback attached only afterwards: SetSelected at creation must
 	// mirror the field without counting as a user edit.
-	c.trimExport = widget.NewSelect([]string{
+	c.trimExport = newPlayKeySelect([]string{
 		model.TrimExportSeparate.String(),
 		model.TrimExportJoin.String(),
-	}, nil)
+	}, c.playFromKey)
 	c.trimExportMode = model.TrimExportSeparate
 	c.trimExport.SetSelected(c.trimExportMode.String())
 	c.trimExport.OnChanged = func(option string) {
@@ -334,6 +334,21 @@ func (c *Controller) changed(string) {
 	}
 	c.updateControlState()
 	c.refresh()
+}
+
+// fitSelectToOptions makes a Select's minimum width fit its widest option.
+// Fyne sizes a Select by its placeholder, not by its options, so one
+// laid out at its minimum width (in an HBox) truncated "Separate files"
+// to "Separate fil…". The placeholder is shown only while nothing is
+// selected.
+func fitSelectToOptions(s *widget.Select) {
+	textSize := theme.TextSize()
+	var widest float32
+	for _, option := range s.Options {
+		if w := fyne.MeasureText(option, textSize, fyne.TextStyle{}).Width; w > widest {
+			widest, s.PlaceHolder = w, option
+		}
+	}
 }
 
 // trimExportModeFromOption maps a trimExport dropdown option back to its

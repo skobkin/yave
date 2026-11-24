@@ -145,7 +145,7 @@ type Controller struct {
 	trimZoomSel *tipButton
 
 	// Snap toggle, marker navigation and "Segments from chapters…".
-	trimSnap       *widget.Check
+	trimSnap       *clickCheck
 	trimPrevMarker *tipButton
 	trimNextMarker *tipButton
 	trimChapters   *widget.Button
@@ -157,7 +157,7 @@ type Controller struct {
 	// needed filters or there are no results yet.
 	scenes              sceneState
 	sceneDetect         *tipButton
-	sceneThreshold      *widget.Slider
+	sceneThreshold      *playKeySlider
 	sceneThresholdLabel *widget.Label
 	sceneStatus         *widget.Label
 	trimScenesBox       *fyne.Container
@@ -178,7 +178,7 @@ type Controller struct {
 	confirmHook       func(title, message string, onYes func())
 	chapterPickerHook func(onPicked func(picked []int))
 
-	trimEnable             *widget.Check
+	trimEnable             *clickCheck
 	savedProfile           model.Profile // editor baseline for dirty tracking
 	hasSavedProfile        bool
 	profileLabel           *widget.Label
@@ -223,7 +223,7 @@ type Controller struct {
 	trimSetIn              *widget.Button
 	trimSetOut             *widget.Button
 	trimReset              *widget.Button
-	trimExport             *widget.Select
+	trimExport             *playKeySelect
 	trimAdd                *widget.Button
 	trimDelete             *widget.Button
 	trimDuration           *widget.Label
@@ -336,6 +336,7 @@ type Controller struct {
 	cancel       *widget.Button
 	tabs         *container.AppTabs
 	runTab       *container.TabItem
+	trimTab      *container.TabItem // Space plays while it is shown
 }
 
 func New(a fyne.App, initialInput string) (*Controller, error) {
