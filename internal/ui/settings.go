@@ -86,10 +86,14 @@ func (c *Controller) showSettings() {
 	form.Show()
 }
 
-func (c *Controller) saveConfig() {
+// saveConfig persists the configuration, showing an error dialog on
+// failure. It reports whether the write succeeded.
+func (c *Controller) saveConfig() bool {
 	if err := profiles.Save(c.configPath, c.config); err != nil {
 		dialog.ShowError(err, c.window)
+		return false
 	}
+	return true
 }
 
 // pathWithBrowse puts a Browse… button beside an executable path entry.

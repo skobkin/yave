@@ -343,17 +343,27 @@ func (c *Controller) populateProfileOptions(preferred string) {
 }
 
 func (c *Controller) saveCurrentProfile() {
+	c.persistCurrentProfile()
+}
+
+// persistCurrentProfile writes the editor's profile to the configuration
+// file. The profile is marked saved only after the write succeeded, so a
+// failed save keeps the unsaved-changes state. It reports success.
+func (c *Controller) persistCurrentProfile() bool {
 	p := c.profileFromWidgets()
 	for i := range c.config.Profiles {
 		if c.config.Profiles[i].Name == p.Name {
 			c.config.Profiles[i] = p
-			c.saveConfig()
+			if !c.saveConfig() {
+				return false
+			}
 			c.markProfileSaved()
 			c.status.SetText(fmt.Sprintf("Profile %q saved", p.Name))
 			c.refresh()
-			return
+			return true
 		}
 	}
+	return false
 }
 
 // markProfileSaved records the editor's current state as the saved one.
@@ -397,8 +407,9 @@ func (c *Controller) guardUnsavedProfile(proceed func()) {
 	var d dialog.Dialog
 	save := widget.NewButton("Save", func() {
 		d.Hide()
-		c.saveCurrentProfile()
-		proceed()
+		if c.persistCurrentProfile() {
+			proceed()
+		}
 	})
 	save.Importance = widget.HighImportance
 	discard := widget.NewButton("Discard", func() {

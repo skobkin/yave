@@ -426,6 +426,11 @@ func (c *Controller) requestQuit() {
 	}
 	if c.quitPrompt != nil {
 		c.quitPrompt.Show()
+		// The unsaved-changes prompt lives on the window; a hidden window
+		// (tray Quit) would leave it unanswerable.
+		if c.profileDirty() {
+			c.revealMainWindowIfHidden()
+		}
 		return
 	}
 
