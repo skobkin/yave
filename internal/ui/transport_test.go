@@ -315,7 +315,7 @@ func TestMovingTheSliderUnmutes(t *testing.T) {
 
 func TestEveryTransportBarStaysInSync(t *testing.T) {
 	c := newPlaybackHarness(t).c
-	second := c.newTransportBar() // e.g. the full-screen overlay
+	second := c.newTransportBar(false) // e.g. the full-screen overlay
 	if len(c.transports) != 2 {
 		t.Fatalf("transports = %d, want 2", len(c.transports))
 	}
@@ -347,7 +347,7 @@ func TestVolumePersistsInTheConfig(t *testing.T) {
 
 	// A drag: live ticks update the playback and every bar, but must not
 	// touch the disk (a second bar is synced programmatically each tick).
-	c.newTransportBar()
+	c.newTransportBar(false)
 	c.onVolumeSlider(40)
 	c.onVolumeSlider(41)
 	c.onVolumeSlider(40)
@@ -380,7 +380,7 @@ func TestVolumeIsRestoredFromTheConfig(t *testing.T) {
 	if c.volumePercent != 35 || !c.muted {
 		t.Fatalf("loaded %d muted=%v", c.volumePercent, c.muted)
 	}
-	bar := c.newTransportBar() // a bar built after loading reflects it
+	bar := c.newTransportBar(false) // a bar built after loading reflects it
 	if bar.volume.Value != 35 || bar.mute.Icon != resources.Icon(resources.IconVolumeOff) {
 		t.Errorf("new bar: volume %v", bar.volume.Value)
 	}
@@ -402,7 +402,7 @@ func TestVolumeIsRestoredFromTheConfig(t *testing.T) {
 func TestVolumeSyncAcrossBarsDoesNotWriteTheConfig(t *testing.T) {
 	c := newPlaybackHarness(t).c
 	c.configPath = filepath.Join(t.TempDir(), "config.yaml")
-	c.newTransportBar()
+	c.newTransportBar(false)
 	c.onVolumeSlider(20)
 	c.applyVolume()
 	if _, err := os.Stat(c.configPath); err == nil {

@@ -30,7 +30,9 @@ func initialWindowSize(width, height int) fyne.Size {
 // is ignored because there is nothing useful to tell the user at that
 // point.
 func (c *Controller) rememberWindowSize() {
-	if c.window == nil {
+	// In full-screen the canvas is as big as the screen: remembering it
+	// would reopen the app at screen size, not at the user's window size.
+	if c.window == nil || c.fs.active {
 		return
 	}
 	size := c.window.Canvas().Size()

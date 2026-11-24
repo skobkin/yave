@@ -85,14 +85,16 @@ func volumeIconName(percent int, muted bool) string {
 // and every bar the controller built is kept in sync.
 type transportBar struct {
 	prev, play, next, playSel, mute *tipButton
+	fullscreen                      *tipButton
 	volume                          *widget.Slider
 	box                             *fyne.Container
 }
 
 // newTransportBar builds a bar wired to the controller and registers it
 // for state updates. Its buttons start disabled; updatePlaybackControls
-// owns their state from then on.
-func (c *Controller) newTransportBar() *transportBar {
+// owns their state from then on. The full-screen overlay's bar (overlay)
+// shows the exit icon on its last button.
+func (c *Controller) newTransportBar(overlay bool) *transportBar {
 	tb := &transportBar{}
 	tb.prev = newTipButtonFunc(c.tips, resources.Icon(resources.IconPrevSegment),
 		func() string { return c.segmentNavTip(-1) }, func() { c.jumpToSegment(-1) })
@@ -101,10 +103,18 @@ func (c *Controller) newTransportBar() *transportBar {
 		func() string { return c.segmentNavTip(1) }, func() { c.jumpToSegment(1) })
 	tb.playSel = newTipButtonFunc(c.tips, resources.Icon(resources.IconPlaySelection), c.playSelectionTip, c.playSelection)
 	tb.mute = newTipButtonFunc(c.tips, resources.Icon(volumeIconName(c.volumePercent, c.muted)), c.muteTip, c.toggleMute)
+	fullscreenIcon := resources.IconFullscreen
+	if overlay {
+		fullscreenIcon = resources.IconFullscreenExit
+	}
+	tb.fullscreen = newTipButtonFunc(c.tips, resources.Icon(fullscreenIcon), c.fullscreenTip, c.toggleFullscreen)
 	tb.volume = widget.NewSlider(0, 100)
 	tb.volume.Step = 1
 	tb.volume.SetValue(float64(c.volumePercent))
-	tb.volume.OnChanged = c.onVolumeSlider
+	tb.volume.OnChanged = func(v float64) {
+		c.onVolumeSlider(v)
+		c.fullscreenActivity()
+	}
 	// Fyne also fires OnChangeEnded for programmatic SetValue calls; only a
 	// user's release may write the config, or syncing another bar's slider
 	// during a drag would save on every tick.
@@ -113,11 +123,12 @@ func (c *Controller) newTransportBar() *transportBar {
 			c.saveVolume()
 		}
 	}
-	for _, b := range []*tipButton{tb.prev, tb.play, tb.next, tb.playSel} {
+	for _, b := range []*tipButton{tb.prev, tb.play, tb.next, tb.playSel, tb.fullscreen} {
 		b.Disable()
 	}
 	tb.box = container.NewHBox(tb.prev, tb.play, tb.next, tb.playSel, tb.mute,
-		container.NewGridWrap(fyne.NewSize(volumeSliderWidth, tb.volume.MinSize().Height), tb.volume))
+		container.NewGridWrap(fyne.NewSize(volumeSliderWidth, tb.volume.MinSize().Height), tb.volume),
+		tb.fullscreen)
 	c.transports = append(c.transports, tb)
 	return tb
 }
@@ -214,6 +225,8 @@ func (c *Controller) updateTransports() {
 		setEnabled(tb.playSel, canPlay && c.selectedSegmentPlayable())
 		setEnabled(tb.prev, navigable)
 		setEnabled(tb.next, navigable)
+		// Leaving full-screen must always be possible.
+		setEnabled(tb.fullscreen, c.fs.active || c.fullscreenBlockReason() == "")
 	}
 }
 

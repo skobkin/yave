@@ -130,6 +130,10 @@ type tipButton struct {
 	widget.Button
 	tips *tooltipLayer
 	tip  func() string
+	// activity, when set, is called on every pointer movement over the
+	// button; the full-screen overlay uses it to stay visible while the
+	// pointer is on its controls.
+	activity func()
 }
 
 // newTipButton builds an icon button with a fixed tooltip.
@@ -157,9 +161,20 @@ var (
 	_ fyne.Disableable  = (*tipButton)(nil)
 )
 
+// MouseMoved reports pointer activity.
+func (b *tipButton) MouseMoved(e *desktop.MouseEvent) {
+	b.Button.MouseMoved(e)
+	if b.activity != nil {
+		b.activity()
+	}
+}
+
 // MouseIn starts the tooltip delay.
 func (b *tipButton) MouseIn(e *desktop.MouseEvent) {
 	b.Button.MouseIn(e)
+	if b.activity != nil {
+		b.activity()
+	}
 	if b.tips != nil && b.tip != nil {
 		b.tips.schedule(b, b.tip, tooltipDelay)
 	}

@@ -100,12 +100,21 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	return container.NewBorder(c.profileBar(), c.buildStatusBar(), nil, nil, c.tabs)
 }
 
-// trimPreviewSection composes the frame preview: the image fills the
-// whole cell — ImageFillContain letterboxes the frame inside it and
-// centers it, so the cell can follow the window size — with the
-// rendered-frame and hover timestamps drawn on a translucent chip
-// pinned to the image's top edge instead of on their own row below it.
+// trimPreviewSection composes the frame preview for the Trim tab: the
+// preview layers with a transparent double-tap layer on top, which opens
+// the full-screen preview.
 func trimPreviewSection(c *Controller) fyne.CanvasObject {
+	return c.previewLayers(newPreviewSurface(c.toggleFullscreen, nil))
+}
+
+// previewLayers stacks the frame preview: the image fills the whole cell —
+// ImageFillContain letterboxes the frame inside it and centers it, so the
+// cell can follow the window size — with the rendered-frame and hover
+// timestamps drawn on a translucent chip pinned to the image's top edge
+// instead of on their own row below it. extra objects (the double-tap
+// layer, the full-screen strip) are stacked on top. The Trim tab and the
+// full-screen view both build their stack from the same widgets.
+func (c *Controller) previewLayers(extra ...fyne.CanvasObject) *fyne.Container {
 	chip := container.NewStack(
 		overlayChipRectangle(),
 		container.NewPadded(container.NewHBox(
@@ -118,12 +127,13 @@ func trimPreviewSection(c *Controller) fyne.CanvasObject {
 	// The tint veil sits directly over the image (under the chip), and
 	// the spinner floats over the image's center as further layers, so
 	// showing them never reflows the image.
-	return container.NewStack(
+	layers := []fyne.CanvasObject{
 		c.previewImage,
 		c.previewVeil,
 		container.NewVBox(chip),
 		container.NewCenter(c.previewSpinner),
-	)
+	}
+	return container.NewStack(append(layers, extra...)...)
 }
 
 // overlayChipRectangle is the translucent background behind the preview

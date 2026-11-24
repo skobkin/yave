@@ -1211,9 +1211,9 @@ func TestResetRefreshesCommittedPreview(t *testing.T) {
 	c := testTrimController(t)
 	c.trimEnabled = true
 	stale := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	c.previews.cache.Put(5*time.Minute, stale)
+	c.previews.cache.Put(5*time.Minute, previewImageWidth, stale)
 	c.displayPreview(stale, 5*time.Minute)
-	c.previews.cache.Put(0, image.NewRGBA(image.Rect(0, 0, 3, 3)))
+	c.previews.cache.Put(0, previewImageWidth, image.NewRGBA(image.Rect(0, 0, 3, 3)))
 
 	c.resetTrimSelection()
 
@@ -1598,7 +1598,7 @@ func TestResetTrimForNewInputClearsState(t *testing.T) {
 	c := testTrimController(t)
 	c.trimEnable.SetChecked(true)
 	c.previews.index.applyWindow(0, time.Second, []time.Duration{0, time.Second}, c.media.Duration, c.media.Duration)
-	c.previews.cache.Put(time.Second, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	c.previews.cache.Put(time.Second, previewImageWidth, image.NewRGBA(image.Rect(0, 0, 2, 2)))
 	c.previews.stripRunning = true
 
 	c.resetTrimForNewInput()
@@ -1614,7 +1614,7 @@ func TestResetTrimForNewInputClearsState(t *testing.T) {
 	if c.previews.index.covers(time.Second) {
 		t.Fatal("frame index must be reset")
 	}
-	if _, ok := c.previews.cache.Get(time.Second); ok {
+	if _, ok := c.previews.cache.Get(time.Second, previewImageWidth); ok {
 		t.Fatal("preview cache must be cleared")
 	}
 	if c.previews.stripRunning {
@@ -2433,7 +2433,7 @@ func TestPreviewPendingIndication(t *testing.T) {
 
 	// A committed request resolving from cache clears the cue and the
 	// target instantly, and records the displayed position.
-	c.previews.cache.Put(time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	c.previews.cache.Put(time.Second, previewImageWidth, image.NewRGBA(image.Rect(0, 0, 4, 4)))
 	c.requestPreview(time.Second)
 	if c.previews.pendingPreview || c.previews.pendingAt != nil {
 		t.Fatal("a cache hit must resolve the pending state")
@@ -2497,7 +2497,7 @@ func TestPreviewPendingAsyncLifecycle(t *testing.T) {
 	if c.previewImage.Image == nil {
 		t.Fatal("the extracted frame must be displayed")
 	}
-	if _, ok := c.previews.cache.Get(time.Second); !ok {
+	if _, ok := c.previews.cache.Get(time.Second, previewImageWidth); !ok {
 		t.Fatal("the landed frame must be cached")
 	}
 
@@ -2505,7 +2505,7 @@ func TestPreviewPendingAsyncLifecycle(t *testing.T) {
 	// central path.
 	c.requestHover(7 * time.Second)
 	c.previews.hoverTimer.Stop()
-	c.previews.cache.Put(7*time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	c.previews.cache.Put(7*time.Second, previewImageWidth, image.NewRGBA(image.Rect(0, 0, 4, 4)))
 	c.launchPreview(7*time.Second, c.previews.seq)
 	if c.previews.pendingPreview || c.previews.pendingAt != nil {
 		t.Fatal("a launch-time cache hit must resolve the pending state")
@@ -2517,7 +2517,7 @@ func TestPreviewPendingAsyncLifecycle(t *testing.T) {
 	c.previews.hoverTimer.Stop()
 	c.launchPreview(5*time.Second, c.previews.seq)
 	<-spy.entered
-	c.previews.cache.Put(2*time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	c.previews.cache.Put(2*time.Second, previewImageWidth, image.NewRGBA(image.Rect(0, 0, 4, 4)))
 	c.requestPreview(2 * time.Second) // committed hit resolves pending
 	if c.previews.pendingPreview {
 		t.Fatal("the committed hit must resolve pending")
@@ -2534,7 +2534,7 @@ func TestPreviewPendingAsyncLifecycle(t *testing.T) {
 
 func TestTrimDisableDuringDebounce(t *testing.T) {
 	c, updates := previewTestController(t)
-	c.previews.cache.Put(time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	c.previews.cache.Put(time.Second, previewImageWidth, image.NewRGBA(image.Rect(0, 0, 4, 4)))
 
 	c.requestHover(3 * time.Second)
 	if !c.previews.pendingPreview || c.previews.hoverTimer == nil {
@@ -2551,7 +2551,7 @@ func TestTrimDisableDuringDebounce(t *testing.T) {
 	if !c.previewVeil.Hidden || c.previewSpinner.Visible() || c.trimTimeline.hoverPending {
 		t.Fatal("disable must clear the visual cue")
 	}
-	if _, ok := c.previews.cache.Get(time.Second); !ok {
+	if _, ok := c.previews.cache.Get(time.Second, previewImageWidth); !ok {
 		t.Fatal("disable must keep the frame cache")
 	}
 	select {
@@ -2610,7 +2610,7 @@ func TestFFmpegChangeDuringDebounce(t *testing.T) {
 	if !c.previews.pendingPreview || c.previews.pendingAt == nil || *c.previews.pendingAt != time.Second {
 		t.Fatal("pending must carry over at the requested position")
 	}
-	if _, ok := c.previews.cache.Get(time.Second); ok {
+	if _, ok := c.previews.cache.Get(time.Second, previewImageWidth); ok {
 		t.Fatal("the old extractor's cache must be cleared")
 	}
 	if c.previews.extractorPath != "/opt/new/ffmpeg" {
@@ -2678,7 +2678,7 @@ func TestFFmpegChangeWhileHoveringOtherFrame(t *testing.T) {
 	c.previews.previewFetch = spy.fetch
 
 	// A committed frame at 1s is displayed.
-	c.previews.cache.Put(time.Second, image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	c.previews.cache.Put(time.Second, previewImageWidth, image.NewRGBA(image.Rect(0, 0, 4, 4)))
 	c.requestPreview(time.Second)
 	if c.previews.displayedAt == nil || *c.previews.displayedAt != time.Second {
 		t.Fatalf("displayedAt = %v, want 1s", c.previews.displayedAt)

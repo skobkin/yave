@@ -152,6 +152,7 @@ func (c *Controller) startPlayback(from, until time.Duration) {
 		FrameRate:  video.FrameRate,
 		HasAudio:   len(c.media.AudioStreams) > 0,
 		Gain:       &gain,
+		MaxWidth:   c.playbackWidth(),
 	}
 	session, err := c.play.starter()(context.Background(), opts, c.play.audioSink())
 	if err != nil {

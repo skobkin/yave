@@ -12,7 +12,7 @@ import (
 var allIcons = []string{
 	IconZoomIn, IconZoomOut, IconFit, IconZoomToSelection, IconPrevMarker, IconNextMarker,
 	IconPlay, IconPause, IconPrevSegment, IconNextSegment, IconPlaySelection,
-	IconVolumeHigh, IconVolumeLow, IconVolumeOff,
+	IconVolumeHigh, IconVolumeLow, IconVolumeOff, IconFullscreen, IconFullscreenExit,
 }
 
 func TestIconsLoad(t *testing.T) {

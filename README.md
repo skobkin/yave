@@ -133,7 +133,17 @@ In to Out), and **mute** with a **volume** slider. Every button has a tooltip,
 which also says why a button is unavailable (no video, trimming off, an export
 running). Clicking or dragging the timeline seeks while playing. Volume and mute
 apply to live playback and are remembered in `config.yaml`
-(`ui.playback_volume`, `ui.playback_muted`). Frames and audio are decoded by
+(`ui.playback_volume`, `ui.playback_muted`).
+
+The **full-screen** button at the end of the strip (or a double-click on the
+preview) puts the window into full-screen with just the preview, the time and
+an auto-hiding control strip; **Esc**, another double-click or the strip's exit
+button leaves it, restoring the window, its layout and keyboard focus. Playback
+is never interrupted by entering or leaving. Space (play/pause), ←/→ (one
+frame, or one second with Shift) and Ctrl+[ / Ctrl+] (set In / Out) work as in
+the Trim tab. While full-screen, still frames are decoded wider (up to 1920 px,
+matching the screen) and newly started playback up to 1280 px, instead of the
+usual 640 px. Frames and audio are decoded by
 the configured FFmpeg into a scaled preview (up to 640 px wide and 30 fps),
 so no extra media libraries are needed.
 

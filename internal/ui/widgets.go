@@ -137,7 +137,7 @@ func (c *Controller) createWidgets() {
 	}
 	c.tips = newTooltipLayer()
 	c.loadVolume()
-	c.transport = c.newTransportBar()
+	c.transport = c.newTransportBar(false)
 	c.trimPlay, c.trimPlaySelection = c.transport.play, c.transport.playSel
 	c.trimZoomOut = newTipButton(c.tips, resources.Icon(resources.IconZoomOut),
 		"Zoom out (Ctrl+wheel)", func() { c.trimTimeline.ZoomStep(1 / buttonZoomStepFactor) })

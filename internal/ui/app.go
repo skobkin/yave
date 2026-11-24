@@ -120,6 +120,9 @@ type Controller struct {
 	muted         bool
 	syncingVolume bool
 
+	// fs is the full-screen preview state.
+	fs fullscreenState
+
 	// tips draws button tooltips over the window content (Fyne has none);
 	// the trim zoom buttons drive the timeline's visible window.
 	tips        *tooltipLayer

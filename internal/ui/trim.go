@@ -28,7 +28,7 @@ const (
 	hoverDebounce        = 200 * time.Millisecond // hover previews trail the pointer
 	hoverQuantum         = 250 * time.Millisecond // hover previews may approximate
 	previewCacheBytes    = 64 << 20               // 64 MiB of decoded frames
-	previewMaxEntryBytes = 4 << 20                // a single decoded preview frame (640-wide portrait ≈ 2.9 MiB)
+	previewMaxEntryBytes = 12 << 20               // a single decoded preview frame (a 1920-wide 4:3 frame ≈ 11 MiB)
 	previewImageWidth    = 640                    // the preview cell expands with the window; 320 would upscale
 	previewVeilAlpha     = 0x40                   // foreground veil tinting the stale frame while a fresh one extracts
 	thumbStripCount      = 10                     // target cells across the visible window
@@ -97,6 +97,7 @@ func (c *Controller) setTrimEnabled(enabled bool) {
 	}
 	c.trimEnabled = enabled
 	if !enabled {
+		c.exitFullscreen() // the preview it shows is going away
 		// Disabling retires all pending preview work immediately: the
 		// launch guards would otherwise silently drop a pending request
 		// and leave the stale-frame indication stuck on. The frame cache
@@ -146,6 +147,7 @@ func (c *Controller) resetTrimSelection() {
 // synchronously from setInput so stale selections, thumbnails, or
 // previews cannot survive an input change.
 func (c *Controller) resetTrimForNewInput() {
+	c.exitFullscreen() // its preview belongs to the old input
 	c.trimEnabled = false
 	c.trimSelection = model.TrimSelection{}
 	c.trimSelected = 0
@@ -687,7 +689,7 @@ func (c *Controller) requestPreview(at time.Duration) {
 		return
 	}
 	c.previews.seq++
-	if img, ok := c.previews.cache.Get(at); ok {
+	if img, ok := c.previews.cache.Get(at, c.previewWidth()); ok {
 		c.displayPreview(img, at)
 		return
 	}
@@ -711,7 +713,7 @@ func (c *Controller) requestHover(at time.Duration) {
 		return
 	}
 	c.previews.seq++
-	if img, ok := c.previews.cache.Get(q); ok {
+	if img, ok := c.previews.cache.Get(q, c.previewWidth()); ok {
 		c.displayPreview(img, q)
 		return
 	}
@@ -728,7 +730,7 @@ func (c *Controller) restoreCommittedPreview() {
 	}
 	at := c.trimTimeline.Playhead()
 	c.previews.seq++ // retire any in-flight hover result
-	if img, ok := c.previews.cache.Get(at); ok {
+	if img, ok := c.previews.cache.Get(at, c.previewWidth()); ok {
 		c.displayPreview(img, at)
 		return
 	}
@@ -756,7 +758,8 @@ func (c *Controller) launchPreview(at time.Duration, seq uint64) {
 	if !c.trimEnabled || c.previews.seq != seq {
 		return
 	}
-	if img, ok := c.previews.cache.Get(at); ok {
+	width := c.previewWidth()
+	if img, ok := c.previews.cache.Get(at, width); ok {
 		c.displayPreview(img, at)
 		return
 	}
@@ -770,7 +773,7 @@ func (c *Controller) launchPreview(at time.Duration, seq uint64) {
 	path := c.inputPath
 	fetch := c.previews.previewFetch
 	go func() {
-		frame, err := fetch(ctx, ext, path, at, previewImageWidth)
+		frame, err := fetch(ctx, ext, path, at, width)
 		c.dispatchUI(func() {
 			if c.inputGeneration != gen {
 				return // the new input's reset owns the display
@@ -800,7 +803,7 @@ func (c *Controller) launchPreview(at time.Duration, seq uint64) {
 				return
 			}
 			c.setPreviewStatus("")
-			c.previews.cache.Put(at, frame.Image)
+			c.previews.cache.Put(at, width, frame.Image)
 			c.displayPreview(frame.Image, at)
 		})
 	}()

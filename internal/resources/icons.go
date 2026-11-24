@@ -26,6 +26,8 @@ const (
 	IconVolumeHigh      = "volume_up"
 	IconVolumeLow       = "volume_down"
 	IconVolumeOff       = "volume_off"
+	IconFullscreen      = "fullscreen"
+	IconFullscreenExit  = "fullscreen_exit"
 )
 
 //go:embed icons/*.svg

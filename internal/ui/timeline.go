@@ -554,7 +554,18 @@ func (t *timeline) TypedKey(ev *fyne.KeyEvent) {
 }
 
 func (t *timeline) step(dir int) {
-	if t.shiftHeld {
+	t.StepBy(dir, t.shiftHeld)
+}
+
+// StepBy moves the playhead one frame (or, with big, one second) in a
+// direction. It is the single implementation behind the arrow keys on the
+// timeline and the full-screen preview's key routing, so both behave the
+// same.
+func (t *timeline) StepBy(dir int, big bool) {
+	if !t.enabled || t.duration <= 0 {
+		return
+	}
+	if big {
 		t.movePlayhead(t.playhead + time.Duration(dir)*time.Second)
 		return
 	}
@@ -563,6 +574,20 @@ func (t *timeline) step(dir int) {
 	}
 	if next, ok := t.stepFrame(t.playhead, dir); ok {
 		t.movePlayhead(next)
+	}
+}
+
+// SetInToPlayhead and SetOutToPlayhead are the Ctrl+[ / Ctrl+] actions,
+// exported for the full-screen preview's key routing.
+func (t *timeline) SetInToPlayhead() {
+	if t.enabled && t.duration > 0 {
+		t.setInToPlayhead()
+	}
+}
+
+func (t *timeline) SetOutToPlayhead() {
+	if t.enabled && t.duration > 0 {
+		t.setOutToPlayhead()
 	}
 }
 
