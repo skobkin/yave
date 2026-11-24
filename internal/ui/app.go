@@ -140,6 +140,7 @@ type Controller struct {
 	startHint              *widget.Label
 	logFollow              *widget.Check
 	logPending             string
+	runInput               string
 	logPendingSet          bool
 	openLog                *widget.Button
 	copyCommand            *widget.Button

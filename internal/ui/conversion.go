@@ -278,6 +278,10 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 	c.cancelPlayback()
 	control := transcode.NewRunControl()
 	c.runControl = control
+	// The input stays selectable during a run; notifications must name the
+	// file this job is converting, not whatever is selected at the end.
+	c.runInput = c.inputPath
+	c.updateRetryDetect()
 	c.cancelStage = cancellationRunning
 	c.cancelSince = time.Time{}
 	c.start.Disable()

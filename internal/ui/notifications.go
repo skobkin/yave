@@ -73,7 +73,11 @@ func (c *Controller) notifyRun(err error, elapsed time.Duration, outputs []strin
 	if c.notifier == nil {
 		return
 	}
-	kind, summary, body := runNotification(err, c.inputPath, elapsed, outputs, published, total)
+	input := c.runInput
+	if input == "" {
+		input = c.inputPath
+	}
+	kind, summary, body := runNotification(err, input, elapsed, outputs, published, total)
 	if !notificationEnabled(c.config.Notifications, kind) {
 		return
 	}

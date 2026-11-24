@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -26,5 +27,14 @@ func TestNotifyRunDoesNotBlockCaller(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("notifyRun blocked on a slow notification service")
+	}
+}
+
+func TestNotifyRunNamesTheRunningInput(t *testing.T) {
+	fake := &fakeNotifier{}
+	c := &Controller{notifier: fake, inputPath: "/in/B.mkv", runInput: "/in/A.mkv", notifyGo: func(f func()) { f() }}
+	c.notifyRun(errors.New("boom"), 0, nil, 0, 1)
+	if len(fake.sent) != 1 || fake.sent[0][1] != "A.mkv: boom" {
+		t.Fatalf("sent = %v, want the running input A.mkv", fake.sent)
 	}
 }
