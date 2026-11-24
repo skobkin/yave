@@ -105,6 +105,14 @@ One pass records every cut above a low floor, so the **Threshold** slider
 the app runs, snapping and the marker buttons include them, and an export
 cancels a running detection.
 
+For inputs with audio, a **waveform** is drawn under the thumbnails once
+trimming is enabled, to help place cuts at silences and speech boundaries. It
+is computed by one background FFmpeg pass over the first audio stream (reduced
+to a min/max envelope while it streams, so memory stays bounded for long
+files), fills in progressively, follows the timeline zoom, is cached per file
+while the app runs, and does not depend on the selected profile. A new input
+or an export cancels it; after an export it restarts by itself.
+
 With a stream-copy video profile, FFmpeg can only start a cut on a keyframe:
 the output begins at the keyframe at or before **In**, while the end follows
 **Out** to within a few frames. The timeline then shows keyframe ticks (grey,

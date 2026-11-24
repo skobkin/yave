@@ -49,14 +49,14 @@ func (t *tail) String() string {
 	return string(t.buf)
 }
 
-// run executes FFmpeg and feeds its output to the line callbacks: onOut
-// for every stdout line, onErr for every stderr line. Lines that onErr
-// does not claim (it returns false) are kept in a bounded tail that
-// becomes the diagnostic of a failure. The subprocess runs in its own
+// run executes FFmpeg and hands its stdout to onOut (which must read it to
+// the end) and every stderr line to onErr. Lines that onErr does not
+// claim (it returns false) are kept in a bounded tail that becomes the
+// diagnostic of a failure. The subprocess runs in its own
 // process group and is killed when ctx ends; pipes are force-closed after
 // a grace period so a wrapper script whose descendants inherited them
 // cannot block the caller. A cancelled context returns ctx.Err().
-func run(ctx context.Context, path string, args []string, onOut func(line string), onErr func(line string) bool) error {
+func run(ctx context.Context, path string, args []string, onOut func(stdout io.Reader), onErr func(line string) bool) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("FFmpeg path is empty")
 	}
@@ -81,7 +81,9 @@ func run(ctx context.Context, path string, args []string, onOut func(line string
 	readers.Add(2)
 	go func() {
 		defer readers.Done()
-		scanLines(stdout, func(line string) { onOut(line) })
+		onOut(stdout)
+		// Whatever onOut left unread must not block FFmpeg on a full pipe.
+		_, _ = io.Copy(io.Discard, stdout) //nolint:errcheck // draining after the consumer is done
 	}()
 	go func() {
 		defer readers.Done()

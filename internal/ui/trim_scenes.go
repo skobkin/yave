@@ -214,11 +214,13 @@ func (c *Controller) cancelSceneDetection(status string) {
 
 // cancelAnalysisWork stops the background analyses that compete with an
 // export for CPU and disk. Scene detection is left cancelled for the user
-// to restart; later analyses (the waveform) restart themselves.
+// to restart; the waveform restarts itself once the export is over
+// (updateWaveform runs from refresh and sees trimming still enabled).
 func (c *Controller) cancelAnalysisWork() {
 	if c.scenes.running {
 		c.cancelSceneDetection("Scene detection cancelled: an export started")
 	}
+	c.cancelWaveform("")
 }
 
 // clearScenes drops the current input's results for a new input.

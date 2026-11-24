@@ -171,6 +171,8 @@ func (c *Controller) createWidgets() {
 	c.sceneThreshold.OnChangeEnded = func(float64) { c.saveSceneThreshold() }
 	c.sceneStatus = widget.NewLabel("")
 	setStatusLabel(c.sceneStatus, "")
+	c.waveStatus = widget.NewLabel("")
+	setStatusLabel(c.waveStatus, "")
 	c.trimChapters = widget.NewButton("Segments from chapters…", c.segmentsFromChapters)
 	c.trimChapters.Hide() // shown while the input has chapters
 	c.trimTimeline.onTogglePlay = c.togglePlayback

@@ -92,6 +92,7 @@ func (c *Controller) setInput(path string) {
 				c.trimTimeline.SetDuration(info.Duration)
 				c.syncChapterMarkers()
 				c.loadCachedScenes()
+				c.loadCachedWaveform()
 			}
 			c.refresh()
 		})

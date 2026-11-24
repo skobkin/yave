@@ -174,6 +174,7 @@ func (c *Controller) resetTrimForNewInput() {
 	c.trimTimeline.SetMarkers(markerKeyframe, nil)
 	c.previews.keyframes.clear()
 	c.clearScenes()
+	c.clearWaveform()
 	c.trimTimeline.SetThumbnails(nil)
 	c.trimTimeline.SetPlayhead(0)
 	c.previewImage.Image = nil
@@ -1417,6 +1418,8 @@ func (c *Controller) cancelTrimWork() {
 	c.previews.keyframes.stop()
 	c.scenes.job.stop()
 	c.scenes.running = false
+	c.waves.job.stop()
+	c.waves.running = false
 	c.previews.strip.stop()
 	if c.previews.stripTimer != nil {
 		c.previews.stripTimer.Stop()

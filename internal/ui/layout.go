@@ -56,9 +56,11 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		c.buildSegmentPanel(),
 		trimSegmentsRow(c),
 		trimScenesRow(c),
+		c.waveStatus,
 		trimBoundariesRow(c),
 	)
 	trimTab := container.NewBorder(nil, controls, nil, nil, trimPreviewSection(c))
+	c.trimControlsBox, c.trimTabBox = controls, trimTab
 
 	outputTab := container.NewVBox(
 		widget.NewForm(

@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"git.skobk.in/skobkin/yave/internal/analysis"
 	"git.skobk.in/skobkin/yave/internal/model"
 )
 
@@ -100,6 +101,14 @@ type timeline struct {
 	// markerHasEnd marks layers whose markers carry range ends (chapters);
 	// their ends are extra snap targets.
 	markerHasEnd [markerKindCount]bool
+
+	// wave is the audio envelope drawn in the lane under the thumbnails;
+	// waveLane reserves the lane's space, waveScale is the amplitude drawn
+	// at full lane height and waveVersion invalidates the lane's raster.
+	wave        analysis.Waveform
+	waveLane    bool
+	waveScale   float64
+	waveVersion uint64
 	// snapEnabled turns magnetic snapping of pointer gestures on.
 	snapEnabled bool
 
@@ -929,6 +938,12 @@ type timelineRenderer struct {
 	overviewThumb *canvas.Rectangle
 
 	markerRects []*canvas.Rectangle
+
+	waveRaster *canvas.Raster
+	waveSig    waveSignature
+	// waveRefreshes counts raster re-renders; tests assert it stays put
+	// while only the playhead moves.
+	waveRefreshes int
 }
 
 func (t *timeline) CreateRenderer() fyne.WidgetRenderer {
@@ -946,6 +961,7 @@ func (t *timeline) CreateRenderer() fyne.WidgetRenderer {
 			FillColor:   color.Transparent,
 		},
 	}
+	r.waveRaster = newWaveRaster(t)
 	return r
 }
 
@@ -1057,12 +1073,12 @@ func (r *timelineRenderer) Destroy() {}
 func (r *timelineRenderer) Objects() []fyne.CanvasObject {
 	r.syncThumbs()
 	r.syncSegments()
-	objects := make([]fyne.CanvasObject, 0, len(r.thumbs)+len(r.fills)+len(r.bars)+len(r.markerRects)+6)
+	objects := make([]fyne.CanvasObject, 0, len(r.thumbs)+len(r.fills)+len(r.bars)+len(r.markerRects)+7)
 	objects = append(objects, r.background)
 	for _, img := range r.thumbs {
 		objects = append(objects, img)
 	}
-	objects = append(objects, r.dim)
+	objects = append(objects, r.waveRaster, r.dim)
 	for _, fill := range r.fills {
 		objects = append(objects, fill)
 	}
@@ -1076,14 +1092,26 @@ func (r *timelineRenderer) Objects() []fyne.CanvasObject {
 }
 
 func (r *timelineRenderer) MinSize() fyne.Size {
-	return fyne.NewSize(timelineMinWidth, timelineMinHeight)
+	height := float32(timelineMinHeight)
+	if r.t.waveLane {
+		height += waveformLaneHeight
+	}
+	return fyne.NewSize(timelineMinWidth, height)
 }
 
 func (r *timelineRenderer) Layout(size fyne.Size) {
 	r.syncThumbs()
 	r.syncSegments()
 	t := r.t
-	r.layoutThumbs(size)
+	// The thumbnails take the top of the widget; the waveform lane, when
+	// shown, sits under them. Everything else (dimming, segments, markers,
+	// playhead) spans both.
+	stripHeight := size.Height
+	if t.waveLane {
+		stripHeight = max(size.Height-waveformLaneHeight, 0)
+	}
+	r.layoutThumbs(fyne.NewSize(size.Width, stripHeight))
+	r.layoutWaveform(size, stripHeight)
 	r.dim.Move(fyne.NewPos(0, 0))
 	r.dim.Resize(size)
 	// Everything outside the segments reads dimmed: the single full-size

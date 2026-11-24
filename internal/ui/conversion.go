@@ -95,6 +95,7 @@ func (c *Controller) refresh() {
 	c.updateTrimMessages(trimValidationInputs(p))
 	c.updateKeyframes()
 	c.updateSceneControls()
+	c.updateWaveform()
 	c.updateSegmentButtons()
 	c.updateSegmentList()
 	c.updatePlaybackControls()

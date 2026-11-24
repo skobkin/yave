@@ -136,6 +136,14 @@ type Controller struct {
 	trimScenesBox       *fyne.Container
 	sceneThresholdBox   *fyne.Container
 
+	// Waveform lane: its analysis state, a status line, and the trim-tab
+	// containers to re-lay-out when the lane changes the timeline's
+	// minimum height.
+	waves           waveState
+	waveStatus      *widget.Label
+	trimControlsBox *fyne.Container
+	trimTabBox      *fyne.Container
+
 	trimCopyVideo  bool
 	trimMsgEncoder string
 	trimMsgAudio   model.AudioSettings

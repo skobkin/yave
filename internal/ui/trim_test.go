@@ -1929,14 +1929,17 @@ func TestTrimTabLayout(t *testing.T) {
 		t.Fatal("the enable check and the Play buttons must share one row container")
 	}
 	// The controls VBox is glued to the bottom edge, in this order; the
-	// transport buttons ride on the enable check's row. The scene row is
-	// hidden (and so costs no space) unless the FFmpeg build can detect
-	// scenes.
+	// transport buttons ride on the enable check's row. The scene row and
+	// the waveform status line are hidden (and so cost no space) until
+	// they have something to say.
 	if c.trimScenesBox == nil || !c.trimScenesBox.Hidden {
 		t.Fatal("the scene-detection row must start hidden")
 	}
+	if !c.waveStatus.Hidden {
+		t.Fatal("the waveform status line must start hidden")
+	}
 	wantControls := []fyne.CanvasObject{
-		c.previewStatus, transport, c.trimTimeline, c.trimMessage, c.segmentPanel, segments, c.trimScenesBox, boundaries,
+		c.previewStatus, transport, c.trimTimeline, c.trimMessage, c.segmentPanel, segments, c.trimScenesBox, c.waveStatus, boundaries,
 	}
 	if len(controls.Objects) != len(wantControls) {
 		t.Fatalf("bottom controls hold %d rows, want %d", len(controls.Objects), len(wantControls))

@@ -3,6 +3,7 @@ package analysis
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -83,7 +84,7 @@ func DetectScenes(ctx context.Context, o SceneOptions, progress func(done time.D
 	}
 	parser := sceneParser{floor: o.floor()}
 	err := run(ctx, o.FFmpegPath, SceneArgs(o),
-		parser.line,
+		func(stdout io.Reader) { scanLines(stdout, parser.line) },
 		func(line string) bool {
 			done, ok := parseProgressLine(line)
 			if ok && progress != nil {
