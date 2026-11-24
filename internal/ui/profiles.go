@@ -2,13 +2,13 @@ package ui
 
 import (
 	"fmt"
-	"fyne.io/fyne/v2/storage"
 	"slices"
 	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/encoder"

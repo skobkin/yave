@@ -1031,7 +1031,7 @@ func TestBuildCommandStreamExclusion(t *testing.T) {
 		}
 		return plan.Args
 	}
-	has := func(args []string, want string) bool { return slices.Contains(args, want) }
+	has := slices.Contains[[]string]
 
 	t.Run("normal keeps both", func(t *testing.T) {
 		args := build(t, func(*model.Profile) {}, model.TrimSelection{})
