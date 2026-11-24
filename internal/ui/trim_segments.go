@@ -6,6 +6,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -33,13 +34,17 @@ type segmentRow struct {
 	view   fyne.CanvasObject
 }
 
+// segmentRowGap is the space between list rows: the theme's padding
+// would double the height of a list of one-line rows.
+const segmentRowGap = 2
+
 // buildSegmentPanel creates the list under the timeline: a header and a
 // scrolling column of rows, each with a select-and-seek button and a
 // delete button. Its height is capped so many segments scroll instead of
 // growing the window.
 func (c *Controller) buildSegmentPanel() fyne.CanvasObject {
 	c.segmentHeader = widget.NewLabel("")
-	c.segmentRows = container.NewVBox()
+	c.segmentRows = container.New(layout.NewCustomPaddedVBoxLayout(segmentRowGap))
 	scroll := container.NewVScroll(c.segmentRows)
 	scroll.SetMinSize(fyne.NewSize(0, 96))
 	c.segmentPanel = container.NewVBox(c.segmentHeader, scroll)
@@ -96,7 +101,9 @@ func (c *Controller) newSegmentRow(index int) segmentRow {
 		c.deleteTrimSegment()
 	})
 	remove.Importance = widget.LowImportance
-	return segmentRow{pick: pick, remove: remove, view: container.NewBorder(nil, nil, nil, remove, pick)}
+	// The compact theme trims the buttons' inner padding: a row is one
+	// line of text, not a full-height button.
+	return segmentRow{pick: pick, remove: remove, view: compact(container.NewBorder(nil, nil, nil, remove, pick))}
 }
 
 // selectSegment selects a segment from the list and moves the playhead
