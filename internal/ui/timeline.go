@@ -84,6 +84,9 @@ type timeline struct {
 	selected int
 	thumbs   []image.Image
 	dragSeg  int // segment index for tlIn/tlOut drags; -1 otherwise
+	// dragOrigin is the dragged segment as the gesture found it: a handle
+	// pushed along by its partner returns towards it (see dragBoundary).
+	dragOrigin model.TimeRange
 
 	// view is the visible window; the unzoomed view shows the whole
 	// media. All x↔time mapping goes through it.
@@ -688,14 +691,10 @@ func (t *timeline) MouseDown(ev *desktop.MouseEvent) {
 	}
 	kind, seg := t.pickTarget(ev.Position.X)
 	switch kind {
-	case tlIn:
-		t.drag, t.dragSeg = tlIn, seg
+	case tlIn, tlOut:
+		t.drag, t.dragSeg, t.dragOrigin = kind, seg, t.segments[seg]
 		t.selectViaPointer(seg)
-		t.segments[seg].Start = t.clampToStartLower(t.snapped(t.timeAt(ev.Position.X), tlIn, seg), seg)
-	case tlOut:
-		t.drag, t.dragSeg = tlOut, seg
-		t.selectViaPointer(seg)
-		t.segments[seg].End = t.clampToEndUpper(t.snapped(t.timeAt(ev.Position.X), tlOut, seg), seg)
+		t.dragBoundary(t.snapped(t.timeAt(ev.Position.X), kind, seg))
 	default:
 		t.drag, t.dragSeg = tlPlayhead, -1
 		at := t.snapped(t.timeAt(ev.Position.X), tlPlayhead, -1)
@@ -733,10 +732,8 @@ func (t *timeline) Dragged(ev *fyne.DragEvent) {
 		if t.onPlayhead != nil {
 			t.onPlayhead(t.playhead)
 		}
-	case tlIn:
-		t.segments[t.dragSeg].Start = t.clampToStartLower(t.snapped(at, tlIn, t.dragSeg), t.dragSeg)
-	case tlOut:
-		t.segments[t.dragSeg].End = t.clampToEndUpper(t.snapped(at, tlOut, t.dragSeg), t.dragSeg)
+	case tlIn, tlOut:
+		t.dragBoundary(t.snapped(at, t.drag, t.dragSeg))
 	}
 	t.Refresh()
 }
@@ -785,28 +782,33 @@ func (t *timeline) selectSegmentContaining(at time.Duration) {
 	// click lands in a gap and changes nothing.
 }
 
-// clampToStartLower clamps a dragged Start into [prevEnd, seg.End].
-func (t *timeline) clampToStartLower(at time.Duration, seg int) time.Duration {
+// dragBoundary moves the handle being dragged (t.drag of segment
+// t.dragSeg) to at, clamped into [prevEnd, nextStart] so a drag never
+// overlaps a neighbor. A handle dragged past its partner pushes it along
+// (In drags Out forward, Out drags In back); the pushed handle follows
+// back towards where it was when the gesture started, so overshooting
+// within one drag loses nothing.
+func (t *timeline) dragBoundary(at time.Duration) {
+	seg := t.dragSeg
 	if seg < 0 || seg >= len(t.segments) {
-		return t.clamp(at)
+		return
 	}
-	lower := time.Duration(0)
+	lower, upper := time.Duration(0), t.duration
 	if seg > 0 {
 		lower = t.segments[seg-1].End
 	}
-	return min(max(at, lower), t.segments[seg].End)
-}
-
-// clampToEndUpper clamps a dragged End into [seg.Start, nextStart].
-func (t *timeline) clampToEndUpper(at time.Duration, seg int) time.Duration {
-	if seg < 0 || seg >= len(t.segments) {
-		return t.clamp(at)
-	}
-	upper := t.duration
 	if seg+1 < len(t.segments) {
 		upper = t.segments[seg+1].Start
 	}
-	return min(max(at, t.segments[seg].Start), upper)
+	at = min(max(at, lower), upper)
+	switch t.drag {
+	case tlIn:
+		t.segments[seg].Start = at
+		t.segments[seg].End = max(t.dragOrigin.End, at)
+	case tlOut:
+		t.segments[seg].End = at
+		t.segments[seg].Start = min(t.dragOrigin.Start, at)
+	}
 }
 
 // inOverview reports whether a pointer position lies on the zoom overview

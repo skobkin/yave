@@ -2216,6 +2216,73 @@ func TestTimelineDragClampsToNeighbors(t *testing.T) {
 	}
 }
 
+func TestTimelineDragPushesThePartnerHandle(t *testing.T) {
+	grab := func(tl *timeline, at time.Duration) {
+		tl.MouseDown(&desktop.MouseEvent{
+			Button:     desktop.MouseButtonPrimary,
+			PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(at), 0)},
+		})
+	}
+	drag := func(tl *timeline, at time.Duration) {
+		tl.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(tl.xAt(at), 0)}})
+	}
+	// Pointer positions map to time through float pixels: allow 1ms.
+	nearRange := func(got model.TimeRange, start, end time.Duration) bool {
+		return absDuration(got.Start-start) < time.Millisecond && absDuration(got.End-end) < time.Millisecond
+	}
+	setup := func(t *testing.T) (*timeline, *[]model.TimeRange) {
+		tl := newSizedTimeline(t)
+		tl.SetDuration(30 * time.Second)
+		tl.snapEnabled = false
+		tl.SetSegmentsSilent([]model.TimeRange{
+			{Start: time.Second, End: 5 * time.Second},
+			{Start: 8 * time.Second, End: 12 * time.Second},
+			{Start: 15 * time.Second, End: 20 * time.Second},
+		})
+		var committed []model.TimeRange
+		tl.onSegments = func(segments []model.TimeRange, _ int) { committed = segments }
+		return tl, &committed
+	}
+
+	t.Run("In pushes Out forward, up to the next segment", func(t *testing.T) {
+		tl, committed := setup(t)
+		grab(tl, 8*time.Second)
+		drag(tl, 13*time.Second)
+		if got := tl.Segments()[1]; !nearRange(got, 13*time.Second, 13*time.Second) {
+			t.Fatalf("segment 1 = %v, want In and Out at 13s", got)
+		}
+		drag(tl, 18*time.Second) // past segment 2's Start
+		if got := tl.Segments()[1]; !nearRange(got, 15*time.Second, 15*time.Second) {
+			t.Fatalf("segment 1 = %v, want both clamped to 15s (segment 2 Start)", got)
+		}
+		tl.DragEnd()
+		if got := (*committed)[1]; !nearRange(got, 15*time.Second, 15*time.Second) {
+			t.Fatalf("committed segment 1 = %v, want the pushed pair", got)
+		}
+	})
+	t.Run("Out pushes In back, down to the previous segment", func(t *testing.T) {
+		tl, _ := setup(t)
+		grab(tl, 12*time.Second)
+		drag(tl, 6*time.Second)
+		if got := tl.Segments()[1]; !nearRange(got, 6*time.Second, 6*time.Second) {
+			t.Fatalf("segment 1 = %v, want In and Out at 6s", got)
+		}
+		drag(tl, 2*time.Second) // past segment 0's End
+		if got := tl.Segments()[1]; !nearRange(got, 5*time.Second, 5*time.Second) {
+			t.Fatalf("segment 1 = %v, want both clamped to 5s (segment 0 End)", got)
+		}
+	})
+	t.Run("a pushed handle returns within the same drag", func(t *testing.T) {
+		tl, _ := setup(t)
+		grab(tl, 8*time.Second)
+		drag(tl, 14*time.Second)
+		drag(tl, 10*time.Second)
+		if got := tl.Segments()[1]; !nearRange(got, 10*time.Second, 12*time.Second) {
+			t.Fatalf("segment 1 = %v, want Out back at its original 12s", got)
+		}
+	})
+}
+
 func TestTimelineSelectionViaRegionClickAndHandleGrab(t *testing.T) {
 	tl := newSizedTimeline(t)
 	tl.SetDuration(30 * time.Second)
