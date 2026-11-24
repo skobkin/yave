@@ -81,8 +81,13 @@ func (c *Controller) updateStreamIncludeControls() {
 	defer func() { c.applyingStreamOverride = false }()
 	syncInclude(c.includeVideo, c.includeVideoHint, c.videoFormBox, c.userIncludeVideo, noVideo,
 		"Input has no video stream", "Video is not written to the output")
-	syncInclude(c.includeAudio, c.includeAudioHint, c.audioFormBox, c.userIncludeAudio, noAudio,
+	// The audio form box is rebuilt below instead of hidden: it also holds
+	// the subtitle selector, which stays usable without audio.
+	syncInclude(c.includeAudio, c.includeAudioHint, nil, c.userIncludeAudio, noAudio,
 		"Input has no audio stream", "Audio is not written to the output")
+	if c.audioMode != nil && c.audioFormBox != nil {
+		c.rebuildAudioForm()
+	}
 }
 
 func syncInclude(check *widget.Check, hint *widget.Label, form *fyne.Container, user, missing bool, missingText, excludedText string) {

@@ -73,6 +73,14 @@ func (c *Controller) rebuildAudioForm() {
 // across rebuilds, so no widget state is copied — only the row set
 // moves between Form instances.
 func (c *Controller) audioFormItems() []*widget.FormItem {
+	if c.includeAudio != nil && !c.includeAudio.Checked {
+		// Audio is not written: only the subtitle selector stays, and
+		// only while video is (subtitles are not processed without it).
+		if c.includeVideo != nil && !c.includeVideo.Checked {
+			return nil
+		}
+		return []*widget.FormItem{widget.NewFormItem("Subtitles", c.subtitles)}
+	}
 	items := []*widget.FormItem{
 		widget.NewFormItem("Mode", c.audioMode),
 	}

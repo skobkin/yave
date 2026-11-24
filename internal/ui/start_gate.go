@@ -38,6 +38,10 @@ func startBlockReason(inputPath, entryText string, inspecting, ffmpegDetected bo
 // number. atoi would turn such text into 0, which means "no limit" or
 // "default", so a typo like "720p" must block the run instead.
 func (c *Controller) numericFieldProblems() []string {
+	// Fields of an excluded video stream are neither validated nor used.
+	if c.includeVideo != nil && !c.includeVideo.Checked {
+		return nil
+	}
 	var problems []string
 	for _, field := range []struct {
 		label string
