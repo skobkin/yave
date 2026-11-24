@@ -16,6 +16,8 @@ const (
 	IconZoomOut         = "zoom_out"
 	IconFit             = "fit_screen"
 	IconZoomToSelection = "zoom_in_map"
+	IconPrevMarker      = "keyboard_double_arrow_left"
+	IconNextMarker      = "keyboard_double_arrow_right"
 )
 
 //go:embed icons/*.svg

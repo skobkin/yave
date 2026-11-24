@@ -117,6 +117,15 @@ type Controller struct {
 	trimZoomFit *tipButton
 	trimZoomSel *tipButton
 
+	// Snap toggle, marker navigation and "Segments from chapters…".
+	trimSnap       *widget.Check
+	trimPrevMarker *tipButton
+	trimNextMarker *tipButton
+	trimChapters   *widget.Button
+	// confirmHook and chapterPickerHook replace the real dialogs in tests.
+	confirmHook       func(title, message string, onYes func())
+	chapterPickerHook func(onPicked func(picked []int))
+
 	trimEnable             *widget.Check
 	savedProfile           model.Profile // editor baseline for dirty tracking
 	hasSavedProfile        bool

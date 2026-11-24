@@ -94,6 +94,12 @@ type timeline struct {
 	thumbStart time.Duration
 	thumbCell  time.Duration
 
+	// markers are the marker layers drawn over the strip (chapters, scene
+	// cuts, keyframes); they double as snap targets.
+	markers [markerKindCount][]timelineMarker
+	// snapEnabled turns magnetic snapping of pointer gestures on.
+	snapEnabled bool
+
 	focused      bool
 	enabled      bool
 	shiftHeld    bool
@@ -648,18 +654,19 @@ func (t *timeline) MouseDown(ev *desktop.MouseEvent) {
 	case tlIn:
 		t.drag, t.dragSeg = tlIn, seg
 		t.selectViaPointer(seg)
-		t.segments[seg].Start = t.clampToStartLower(t.timeAt(ev.Position.X), seg)
+		t.segments[seg].Start = t.clampToStartLower(t.snapped(t.timeAt(ev.Position.X), tlIn, seg), seg)
 	case tlOut:
 		t.drag, t.dragSeg = tlOut, seg
 		t.selectViaPointer(seg)
-		t.segments[seg].End = t.clampToEndUpper(t.timeAt(ev.Position.X), seg)
+		t.segments[seg].End = t.clampToEndUpper(t.snapped(t.timeAt(ev.Position.X), tlOut, seg), seg)
 	default:
 		t.drag, t.dragSeg = tlPlayhead, -1
-		t.SetPlayhead(t.timeAt(ev.Position.X))
+		at := t.snapped(t.timeAt(ev.Position.X), tlPlayhead, -1)
+		t.SetPlayhead(at)
 		if t.onPlayhead != nil {
 			t.onPlayhead(t.playhead)
 		}
-		if at := t.timeAt(ev.Position.X); at > 0 || len(t.segments) > 0 {
+		if at > 0 || len(t.segments) > 0 {
 			t.selectSegmentContaining(at)
 		}
 	}
@@ -685,14 +692,14 @@ func (t *timeline) Dragged(ev *fyne.DragEvent) {
 	at := t.clamp(t.timeAt(ev.Position.X))
 	switch t.drag {
 	case tlPlayhead:
-		t.SetPlayhead(at)
+		t.SetPlayhead(t.snapped(at, tlPlayhead, -1))
 		if t.onPlayhead != nil {
 			t.onPlayhead(t.playhead)
 		}
 	case tlIn:
-		t.segments[t.dragSeg].Start = t.clampToStartLower(at, t.dragSeg)
+		t.segments[t.dragSeg].Start = t.clampToStartLower(t.snapped(at, tlIn, t.dragSeg), t.dragSeg)
 	case tlOut:
-		t.segments[t.dragSeg].End = t.clampToEndUpper(at, t.dragSeg)
+		t.segments[t.dragSeg].End = t.clampToEndUpper(t.snapped(at, tlOut, t.dragSeg), t.dragSeg)
 	}
 	t.Refresh()
 }
@@ -917,6 +924,8 @@ type timelineRenderer struct {
 
 	overviewTrack *canvas.Rectangle
 	overviewThumb *canvas.Rectangle
+
+	markerRects []*canvas.Rectangle
 }
 
 func (t *timeline) CreateRenderer() fyne.WidgetRenderer {
@@ -1045,7 +1054,7 @@ func (r *timelineRenderer) Destroy() {}
 func (r *timelineRenderer) Objects() []fyne.CanvasObject {
 	r.syncThumbs()
 	r.syncSegments()
-	objects := make([]fyne.CanvasObject, 0, len(r.thumbs)+len(r.fills)+len(r.bars)+6)
+	objects := make([]fyne.CanvasObject, 0, len(r.thumbs)+len(r.fills)+len(r.bars)+len(r.markerRects)+6)
 	objects = append(objects, r.background)
 	for _, img := range r.thumbs {
 		objects = append(objects, img)
@@ -1056,6 +1065,9 @@ func (r *timelineRenderer) Objects() []fyne.CanvasObject {
 	}
 	for _, bar := range r.bars {
 		objects = append(objects, bar)
+	}
+	for _, rect := range r.markerRects {
+		objects = append(objects, rect)
 	}
 	return append(objects, r.hoverMark, r.playhead, r.overviewTrack, r.overviewThumb, r.focusRing)
 }
@@ -1102,6 +1114,7 @@ func (r *timelineRenderer) Layout(size fyne.Size) {
 			bar.FillColor = barColor
 		}
 	}
+	r.layoutMarkers(size)
 	playX := t.xOf(t.playhead)
 	r.playhead.Hidden = playX < -playheadBarWidth/2 || playX > size.Width+playheadBarWidth/2
 	r.playhead.Move(fyne.NewPos(playX-playheadBarWidth/2, 0))

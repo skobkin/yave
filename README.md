@@ -84,6 +84,18 @@ toolbar buttons zoom out/in, fit the whole video and zoom to the selected
 segment. The thumbnail strip is rebuilt for the visible range, and the zoom
 resets when another input is loaded.
 
+Chapters in the input (MKV, MP4, …) appear as amber markers on the timeline,
+and hovering shows the chapter title next to the timestamp. **Segments from
+chapters…** (visible only for inputs that have chapters) opens a checklist and
+replaces the segment list with the chosen chapters; it asks first when that
+would discard segments you edited. The previous/next marker buttons jump the
+playhead between markers.
+
+With **Snap** on (the default), dragging the playhead or a boundary handle
+lands on markers and other segments' boundaries within about 8 pixels; hold
+**Alt** to move freely. Snapping applies to mouse gestures only — typed
+timecodes and keyboard stepping are never moved.
+
 ## Trim playback
 
 The Trim tab can play the input while you choose cut boundaries: **Play** /

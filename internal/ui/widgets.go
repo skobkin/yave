@@ -145,6 +145,14 @@ func (c *Controller) createWidgets() {
 		"Fit the whole video", c.trimTimeline.Fit)
 	c.trimZoomSel = newTipButton(c.tips, resources.Icon(resources.IconZoomToSelection),
 		"Zoom to the selected segment", c.trimTimeline.ZoomToSelection)
+	c.trimSnap = widget.NewCheck("Snap", func(on bool) { c.trimTimeline.snapEnabled = on })
+	c.trimSnap.SetChecked(true)
+	c.trimPrevMarker = newTipButton(c.tips, resources.Icon(resources.IconPrevMarker),
+		"Previous marker (chapter, scene or keyframe)", func() { c.jumpToMarker(-1) })
+	c.trimNextMarker = newTipButton(c.tips, resources.Icon(resources.IconNextMarker),
+		"Next marker (chapter, scene or keyframe)", func() { c.jumpToMarker(1) })
+	c.trimChapters = widget.NewButton("Segments from chapters…", c.segmentsFromChapters)
+	c.trimChapters.Hide() // shown while the input has chapters
 	c.trimTimeline.onTogglePlay = c.togglePlayback
 	c.trimTimeline.onPlayhead = c.onTimelinePlayhead
 	c.trimTimeline.onSegments = c.onTimelineSegments
@@ -230,6 +238,7 @@ func (c *Controller) createWidgets() {
 		c.trimTimeline, c.trimIn, c.trimOut, c.trimSetIn, c.trimSetOut, c.trimReset,
 		c.trimExport, c.trimAdd, c.trimDelete,
 		c.trimZoomOut, c.trimZoomIn, c.trimZoomFit, c.trimZoomSel,
+		c.trimSnap, c.trimPrevMarker, c.trimNextMarker, c.trimChapters,
 	}
 	for _, control := range c.trimControls {
 		if d, ok := control.(fyne.Disableable); ok {

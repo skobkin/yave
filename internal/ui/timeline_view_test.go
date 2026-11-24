@@ -178,10 +178,3 @@ func TestTimelineViewVisibleAndPerPixel(t *testing.T) {
 		t.Errorf("perPixel(0) = %s, want 0", got)
 	}
 }
-
-func absDuration(d time.Duration) time.Duration {
-	if d < 0 {
-		return -d
-	}
-	return d
-}

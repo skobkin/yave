@@ -5,10 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"git.skobk.in/skobkin/yave/internal/model"
 )
 
 func TestParseCompleteDocument(t *testing.T) {
@@ -330,5 +333,218 @@ func TestParseStreamDetails(t *testing.T) {
 	}
 	if s.Language != "fra" || s.Title != "Forced" {
 		t.Fatalf("subtitle details: %#v", s)
+	}
+}
+
+func TestParseChapters(t *testing.T) {
+	t.Parallel()
+	chapter := func(start, end, title string) string {
+		tags := ""
+		if title != "" {
+			tags = `, "tags": {"title": "` + title + `"}`
+		}
+		endField := ""
+		if end != "" {
+			endField = `, "end_time": "` + end + `"`
+		}
+		return `{"id": 1, "time_base": "1/1000", "start_time": "` + start + `"` + endField + tags + `}`
+	}
+	doc := func(startTime string, chapters ...string) []byte {
+		return []byte(`{"streams": [], "format": {"format_name": "matroska,webm", "duration": "100.000", "start_time": "` +
+			startTime + `"}, "chapters": [` + strings.Join(chapters, ",") + `]}`)
+	}
+	s := time.Second
+	tests := []struct {
+		name         string
+		data         []byte
+		want         []model.Chapter
+		wantReported int
+	}{
+		{
+			name: "titled chapters",
+			data: doc("0.000000", chapter("0.000", "10.000", "Intro"), chapter("10.000", "60.000", "Main")),
+			want: []model.Chapter{{Title: "Intro", Start: 0, End: 10 * s}, {Title: "Main", Start: 10 * s, End: 60 * s}},
+
+			wantReported: 2,
+		},
+		{
+			name:         "missing titles stay empty",
+			data:         doc("0.000000", chapter("0.000", "5.000", ""), chapter("5.000", "9.000", "  ")),
+			want:         []model.Chapter{{Start: 0, End: 5 * s}, {Start: 5 * s, End: 9 * s}},
+			wantReported: 2,
+		},
+		{
+			name: "start_time is subtracted so Start is the -ss that lands on the chapter",
+			data: doc("1.500000", chapter("2.000", "5.000", "A")),
+			want: []model.Chapter{{Title: "A", Start: 500 * time.Millisecond, End: 3500 * time.Millisecond}},
+
+			wantReported: 1,
+		},
+		{
+			name: "a negative start_time shifts chapters later",
+			data: doc("-0.023000", chapter("0.000", "2.000", "A")),
+			want: []model.Chapter{{Title: "A", Start: 23 * time.Millisecond, End: 2023 * time.Millisecond}},
+
+			wantReported: 1,
+		},
+		{
+			name: "chapters before the origin clamp to zero",
+			data: doc("3.000000", chapter("1.000", "6.000", "A")),
+			want: []model.Chapter{{Title: "A", Start: 0, End: 3 * s}},
+
+			wantReported: 1,
+		},
+		{
+			name:         "unsorted input is sorted by start",
+			data:         doc("0", chapter("20.000", "30.000", "B"), chapter("0.000", "20.000", "A")),
+			want:         []model.Chapter{{Title: "A", Start: 0, End: 20 * s}, {Title: "B", Start: 20 * s, End: 30 * s}},
+			wantReported: 2,
+		},
+		{
+			name: "a missing end runs to the next chapter, the last one to the media end",
+			data: doc("0", chapter("0.000", "N/A", "A"), chapter("40.000", "", "B")),
+			want: []model.Chapter{{Title: "A", Start: 0, End: 40 * s}, {Title: "B", Start: 40 * s, End: 100 * s}},
+
+			wantReported: 2,
+		},
+		{
+			name:         "an end before the start counts as missing",
+			data:         doc("0", chapter("10.000", "5.000", "A"), chapter("30.000", "", "B")),
+			want:         []model.Chapter{{Title: "A", Start: 10 * s, End: 30 * s}, {Title: "B", Start: 30 * s, End: 100 * s}},
+			wantReported: 2,
+		},
+		{
+			name:         "zero-length chapters are kept as markers",
+			data:         doc("0", chapter("10.000", "10.000", "Marker")),
+			want:         []model.Chapter{{Title: "Marker", Start: 10 * s, End: 10 * s}},
+			wantReported: 1,
+		},
+		{
+			name:         "overlapping chapters are reported as they are",
+			data:         doc("0", chapter("0.000", "30.000", "A"), chapter("20.000", "50.000", "B")),
+			want:         []model.Chapter{{Title: "A", Start: 0, End: 30 * s}, {Title: "B", Start: 20 * s, End: 50 * s}},
+			wantReported: 2,
+		},
+		{
+			name:         "ends clamp to the media duration",
+			data:         doc("0", chapter("90.000", "250.000", "Tail")),
+			want:         []model.Chapter{{Title: "Tail", Start: 90 * s, End: 100 * s}},
+			wantReported: 1,
+		},
+		{
+			name:         "unusable chapters are dropped but still counted as reported",
+			data:         doc("0", chapter("N/A", "5.000", "Bad"), chapter("150.000", "160.000", "Past the end"), chapter("1.000", "2.000", "Good")),
+			want:         []model.Chapter{{Title: "Good", Start: 1 * s, End: 2 * s}},
+			wantReported: 3,
+		},
+		{
+			name:         "no chapters",
+			data:         doc("0"),
+			want:         nil,
+			wantReported: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := Parse(tt.data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.Chapters, tt.want) {
+				t.Errorf("chapters = %#v\nwant       %#v", got.Chapters, tt.want)
+			}
+			if got.ChapterCount != tt.wantReported {
+				t.Errorf("ChapterCount = %d, want %d", got.ChapterCount, tt.wantReported)
+			}
+		})
+	}
+}
+
+func TestParseWithoutChaptersKeyHasNone(t *testing.T) {
+	t.Parallel()
+	got, err := Parse([]byte(`{"streams": [], "format": {"format_name": "mp4", "duration": "5"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Chapters != nil || got.ChapterCount != 0 {
+		t.Fatalf("absent chapters must yield none: %#v", got)
+	}
+}
+
+// TestInspectChaptersFollowStartTime pins the chapter timeline against
+// real files: ffprobe reports chapter times on the container clock, and
+// the chapter at 2.000s must land where ffmpeg's input-side -ss reaches
+// it — container time minus format.start_time — for both Matroska and
+// MP4, with and without a timestamp offset (which moves start_time to
+// ~1.98s while the authored chapter times stay put).
+func TestInspectChaptersFollowStartTime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test (real ffmpeg + ffprobe)")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+
+	dir := t.TempDir()
+	meta := dir + "/chapters.txt"
+	const metadata = ";FFMETADATA1\n" +
+		"[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=2000\ntitle=Intro\n" +
+		"[CHAPTER]\nTIMEBASE=1/1000\nSTART=2000\nEND=5000\ntitle=Main\n" +
+		"[CHAPTER]\nTIMEBASE=1/1000\nSTART=5000\nEND=8000\n"
+	if err := os.WriteFile(meta, []byte(metadata), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ext := range []string{"mkv", "mp4"} {
+		for _, offset := range []string{"0", "2"} {
+			t.Run(ext+" offset "+offset, func(t *testing.T) {
+				input := dir + "/in-" + offset + "." + ext
+				generate := exec.CommandContext(context.Background(), ffmpegPath, //nolint:gosec // G204: locally discovered FFmpeg on t.TempDir files
+					"-hide_banner", "-loglevel", "error", "-y",
+					"-f", "lavfi", "-i", "testsrc2=duration=8:size=160x120:rate=10",
+					"-f", "lavfi", "-i", "sine=duration=8",
+					"-i", meta, "-map_metadata", "2", "-map", "0:v", "-map", "1:a",
+					"-c:v", "mpeg4", "-c:a", "aac", "-output_ts_offset", offset, input)
+				if out, err := generate.CombinedOutput(); err != nil {
+					t.Fatalf("generating test media: %v: %s", err, out)
+				}
+				probe := exec.CommandContext(context.Background(), ffprobePath, //nolint:gosec // G204: locally discovered ffprobe
+					"-v", "error", "-show_entries", "format=start_time", "-of", "default=nw=1:nk=1", input)
+				out, err := probe.Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				startTime, ok := parseSeconds(strings.TrimSpace(string(out)))
+				if !ok {
+					t.Fatalf("unparsable start_time %q", out)
+				}
+
+				info, err := Inspect(context.Background(), ffprobePath, input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(info.Chapters) != 3 {
+					t.Fatalf("chapters = %#v, want 3", info.Chapters)
+				}
+				if got := info.Chapters[0].Title; got != "Intro" {
+					t.Errorf("first title = %q", got)
+				}
+				want := 2*time.Second - startTime
+				if got := info.Chapters[1].Start; got < want-2*time.Millisecond || got > want+2*time.Millisecond {
+					t.Errorf("chapter 2 starts at %s, want %s (2s - start_time %s)", got, want, startTime)
+				}
+				for i, c := range info.Chapters {
+					if c.End < c.Start || c.End > info.Duration {
+						t.Errorf("chapter %d range [%s, %s] outside [start, duration %s]", i, c.Start, c.End, info.Duration)
+					}
+				}
+			})
+		}
 	}
 }

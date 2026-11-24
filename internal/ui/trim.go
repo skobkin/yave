@@ -170,6 +170,7 @@ func (c *Controller) resetTrimForNewInput() {
 	c.setTrimMessage("")
 	c.trimDuration.SetText("")
 	c.trimTimeline.SetDuration(0)
+	c.trimTimeline.SetMarkers(markerChapter, nil)
 	c.trimTimeline.SetThumbnails(nil)
 	c.trimTimeline.SetPlayhead(0)
 	c.previewImage.Image = nil
@@ -456,6 +457,15 @@ func (c *Controller) deleteTrimSegment() {
 // is disabled there rather than silently doing nothing. Called from
 // refresh() — the recompute point every segment mutation flows through.
 func (c *Controller) updateSegmentButtons() {
+	// "Segments from chapters…" exists only for inputs that have chapters,
+	// and works only while trimming is on (the box layout collapses it
+	// otherwise).
+	if len(c.media.Chapters) > 0 {
+		c.trimChapters.Show()
+	} else {
+		c.trimChapters.Hide()
+	}
+	setEnabled(c.trimChapters, c.trimEnabled && len(c.media.Chapters) > 0)
 	if c.trimEnabled && c.trimSelection.Active() && len(c.trimSelection.Segments) > 1 {
 		c.trimDelete.Enable()
 		return
@@ -609,7 +619,11 @@ func (c *Controller) onTimelineHover(at *time.Duration) {
 		c.restoreCommittedPreview()
 		return
 	}
-	c.hoverTimeLabel.SetText(formatTimestamp(*at))
+	text := formatTimestamp(*at)
+	if title, ok := c.chapterTitleAt(*at); ok {
+		text += "  ·  " + title
+	}
+	c.hoverTimeLabel.SetText(text)
 	c.requestHover(*at)
 }
 

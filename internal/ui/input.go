@@ -90,6 +90,7 @@ func (c *Controller) setInput(path string) {
 				// Thumbnails and previews stay lazy: they start when
 				// trimming is enabled (see setTrimEnabled).
 				c.trimTimeline.SetDuration(info.Duration)
+				c.syncChapterMarkers()
 			}
 			c.refresh()
 		})

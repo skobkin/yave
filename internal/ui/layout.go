@@ -49,6 +49,7 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		// extra vertical space.
 		container.NewHBox(c.trimEnable, c.trimHint, layout.NewSpacer(),
 			c.trimZoomOut, c.trimZoomIn, c.trimZoomFit, c.trimZoomSel,
+			c.trimSnap, c.trimPrevMarker, c.trimNextMarker,
 			c.trimPlay, c.trimPlaySelection),
 		c.trimTimeline,
 		c.trimMessage,
@@ -146,7 +147,7 @@ const trimEntryWidth = 140
 func trimSegmentsRow(c *Controller) fyne.CanvasObject {
 	return container.NewHBox(
 		widget.NewLabel("Export"), c.trimExport,
-		c.trimAdd, c.trimDelete,
+		c.trimAdd, c.trimDelete, c.trimChapters,
 	)
 }
 

@@ -9,7 +9,7 @@ import (
 
 // allIcons lists every exported icon name; keep it in sync with the
 // constants in icons.go.
-var allIcons = []string{IconZoomIn, IconZoomOut, IconFit, IconZoomToSelection}
+var allIcons = []string{IconZoomIn, IconZoomOut, IconFit, IconZoomToSelection, IconPrevMarker, IconNextMarker}
 
 func TestIconsLoad(t *testing.T) {
 	for _, name := range allIcons {

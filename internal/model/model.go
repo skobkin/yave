@@ -212,7 +212,24 @@ type MediaInfo struct {
 	CoverArtStreams []VideoStream
 	AudioStreams    []AudioStream
 	SubtitleStreams []SubtitleStream
-	ChapterCount    int
+	// ChapterCount is the number of chapters ffprobe reported; Chapters
+	// holds the usable ones. They differ only when a chapter carries no
+	// parsable start time or begins at or past the end of the media.
+	ChapterCount int
+	// Chapters are the container chapters sorted by Start, on the
+	// input-relative timeline ffmpeg's input-side -ss uses (the
+	// container's own clock minus its start_time). Empty when the input
+	// has none.
+	Chapters []Chapter
+}
+
+// Chapter is one container chapter. End >= Start: a chapter without a
+// usable end runs to the next chapter's start (or the media end), and a
+// zero-length chapter (End == Start) is a plain marker.
+type Chapter struct {
+	Title string // empty when the container carries no title
+	Start time.Duration
+	End   time.Duration
 }
 
 type VideoStream struct {

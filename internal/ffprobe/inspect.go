@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -145,12 +146,14 @@ func Parse(data []byte) (model.MediaInfo, error) {
 	}
 
 	duration := normalizeDuration(document.Format.Duration, document.Format.StartTime, document.Format.FormatName)
+	origin, _ := parseSeconds(document.Format.StartTime) // unknown origin: 0
 	info := model.MediaInfo{
 		Format:       document.Format.FormatName,
 		Duration:     duration,
 		Bitrate:      parseInt64(document.Format.BitRate),
 		Size:         parseInt64(document.Format.Size),
 		ChapterCount: len(document.Chapters),
+		Chapters:     parseChapters(document.Chapters, origin, duration),
 	}
 	for _, stream := range document.Streams {
 		switch stream.CodecType {
@@ -198,6 +201,61 @@ func Parse(data []byte) (model.MediaInfo, error) {
 		}
 	}
 	return info, nil
+}
+
+// parseChapters converts ffprobe's chapters onto the input-relative
+// timeline. Chapter times are on the container's own clock, while ffmpeg's
+// input-side -ss (and so every position the UI works in) is measured from
+// the container's start_time: a file whose first packet sits at 1.977s
+// reports a chapter at 2.000s that -ss 0.023 reaches. Subtracting the
+// origin — as the frame index does — makes a chapter's Start the -ss value
+// that lands on it (verified against MKV and MP4 files with a timestamp
+// offset by TestInspectChaptersFollowStartTime). Chapters without a
+// parsable start, or starting at or past the media end, are dropped; the
+// rest are sorted, clamped into the media, and given a usable end.
+func parseChapters(raw []probeChapter, origin, duration time.Duration) []model.Chapter {
+	type parsed struct {
+		chapter model.Chapter
+		hasEnd  bool
+	}
+	items := make([]parsed, 0, len(raw))
+	for _, c := range raw {
+		start, ok := parseSeconds(c.StartTime)
+		if !ok {
+			continue
+		}
+		start = max(start-origin, 0)
+		if duration > 0 && start >= duration {
+			continue
+		}
+		item := parsed{chapter: model.Chapter{Title: strings.TrimSpace(streamTag(c.Tags, "title")), Start: start}}
+		if end, ok := parseSeconds(c.EndTime); ok && end-origin >= start {
+			item.chapter.End, item.hasEnd = end-origin, true
+		}
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].chapter.Start < items[j].chapter.Start })
+	chapters := make([]model.Chapter, len(items))
+	for i, item := range items {
+		chapter := item.chapter
+		if !item.hasEnd {
+			// ffmpeg derives a missing end from the next chapter; do the
+			// same for the cases it leaves open.
+			chapter.End = duration
+			if i+1 < len(items) {
+				chapter.End = items[i+1].chapter.Start
+			}
+		}
+		if duration > 0 {
+			chapter.End = min(chapter.End, duration)
+		}
+		chapter.End = max(chapter.End, chapter.Start)
+		chapters[i] = chapter
+	}
+	return chapters
 }
 
 func parseDuration(value string) time.Duration {
