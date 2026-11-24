@@ -3,6 +3,7 @@
 package notify
 
 import (
+	"context"
 	"errors"
 
 	"fyne.io/fyne/v2"
@@ -24,7 +25,7 @@ func newPlatform(string) (Notifier, error) {
 }
 
 // Notify implements Notifier.
-func (Fyne) Notify(summary, body string) error {
+func (Fyne) Notify(_ context.Context, summary, body string) error {
 	fyne.CurrentApp().SendNotification(fyne.NewNotification(summary, body))
 
 	return nil

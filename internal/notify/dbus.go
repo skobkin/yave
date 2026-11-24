@@ -3,6 +3,7 @@
 package notify
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
@@ -34,8 +35,8 @@ func newPlatform(appName string) (Notifier, error) {
 // fyne.App.SendNotification hardcodes expire_timeout 0, which the
 // freedesktop spec reads as "never expire", so this service is addressed
 // directly.
-func (d *DBus) Notify(summary, body string) error {
-	return d.obj.Call("org.freedesktop.Notifications.Notify", 0,
+func (d *DBus) Notify(ctx context.Context, summary, body string) error {
+	return d.obj.CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0,
 		d.appName,
 		uint32(0), // replaces_id: no dedup, every message stands alone
 		"",        // app_icon: theme icon via the desktop entry

@@ -77,10 +77,25 @@ func (c *Controller) notifyRun(err error, elapsed time.Duration, outputs []strin
 	if !notificationEnabled(c.config.Notifications, kind) {
 		return
 	}
-	if nerr := c.notifier.Notify(summary, body); nerr != nil {
-		slog.Warn("send desktop notification", "error", nerr)
+	notifier := c.notifier
+	send := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
+		defer cancel()
+		if nerr := notifier.Notify(ctx, summary, body); nerr != nil {
+			slog.Warn("send desktop notification", "error", nerr)
+		}
 	}
+	// The notification service can be slow or hung; the UI callback that
+	// reports completion must never wait for it.
+	if c.notifyGo != nil {
+		c.notifyGo(send)
+		return
+	}
+	go send()
 }
+
+// notifyTimeout bounds one desktop notification call.
+const notifyTimeout = 5 * time.Second
 
 // setupNotifier picks the platform notification backend, falling back to
 // a no-op sender when none is available.

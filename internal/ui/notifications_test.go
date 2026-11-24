@@ -11,7 +11,7 @@ import (
 
 type fakeNotifier struct{ sent [][2]string }
 
-func (f *fakeNotifier) Notify(summary, body string) error {
+func (f *fakeNotifier) Notify(_ context.Context, summary, body string) error {
 	f.sent = append(f.sent, [2]string{summary, body})
 	return nil
 }
@@ -61,7 +61,7 @@ func TestRunNotificationText(t *testing.T) {
 
 func TestNotifyRunHonorsSettings(t *testing.T) {
 	fake := &fakeNotifier{}
-	c := &Controller{notifier: fake, inputPath: "/in/a.mkv"}
+	c := &Controller{notifier: fake, inputPath: "/in/a.mkv", notifyGo: func(f func()) { f() }}
 	c.notifyRun(nil, time.Second, nil, 1, 1)
 	if len(fake.sent) != 1 {
 		t.Fatalf("sent = %v, want one completed notification", fake.sent)

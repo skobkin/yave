@@ -21,6 +21,9 @@ import (
 )
 
 type Controller struct {
+	// notifyGo runs a notification send; nil means a new goroutine. Tests
+	// run it inline.
+	notifyGo   func(func())
 	app        fyne.App
 	window     fyne.Window
 	configPath string

@@ -5,9 +5,12 @@
 // other platform keeps the default Fyne API.
 package notify
 
-// Notifier posts one desktop notification.
+import "context"
+
+// Notifier posts one desktop notification. The context bounds how long a
+// slow or unresponsive notification service may hold the caller.
 type Notifier interface {
-	Notify(summary, body string) error
+	Notify(ctx context.Context, summary, body string) error
 }
 
 // New picks the platform sender. An error means no usable notification
@@ -21,4 +24,4 @@ func New(appName string) (Notifier, error) {
 type Nop struct{}
 
 // Notify implements Notifier, discarding the message.
-func (Nop) Notify(string, string) error { return nil }
+func (Nop) Notify(context.Context, string, string) error { return nil }
