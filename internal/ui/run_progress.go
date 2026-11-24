@@ -203,8 +203,21 @@ func (c *Controller) hideRunActions() {
 	c.runResult.Hide()
 }
 
+// fileURL builds an absolute file:// URL: a relative path would turn its
+// first element into the URL host.
+func fileURL(path string) *url.URL {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	slashed := filepath.ToSlash(path)
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed // Windows drive paths: file:///C:/...
+	}
+	return &url.URL{Scheme: "file", Path: slashed}
+}
+
 func openFile(path string) error {
-	return fyne.CurrentApp().OpenURL(&url.URL{Scheme: "file", Path: filepath.ToSlash(path)})
+	return fyne.CurrentApp().OpenURL(fileURL(path))
 }
 
 func (c *Controller) openOutputFolder() {

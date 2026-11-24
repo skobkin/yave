@@ -3,9 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -432,7 +430,7 @@ func (c *Controller) startRunLogUpdates(runLog *runLog, control conversionContro
 				updatePending = true
 				c.dispatchUI(func() {
 					if c.runControl == control {
-						c.setLogText(text)
+						c.setLiveLogText(text)
 					}
 					completed <- struct{}{}
 				})
@@ -589,10 +587,31 @@ func issueMessages(result validation.Result) []string {
 // checked, moves the cursor to the last line so the entry scrolls to it:
 // SetText alone leaves the viewport where it was.
 func (c *Controller) setLogText(text string) {
+	c.logPending, c.logPendingSet = "", false
 	c.log.SetText(text)
 	if c.logFollow != nil && c.logFollow.Checked {
 		c.log.CursorRow, c.log.CursorColumn = lastLinePosition(text)
 		c.log.Refresh()
+	}
+}
+
+// setLiveLogText applies a streaming update. With "Follow output" off the
+// view is left untouched: every Entry refresh scrolls back to the cursor,
+// so rewriting the text would yank a reader away from the lines they
+// scrolled to. The latest text is kept and shown when following resumes
+// or the run ends.
+func (c *Controller) setLiveLogText(text string) {
+	if c.logFollow != nil && !c.logFollow.Checked {
+		c.logPending, c.logPendingSet = text, true
+		return
+	}
+	c.setLogText(text)
+}
+
+// flushPendingLog shows the update held back while following was off.
+func (c *Controller) flushPendingLog() {
+	if c.logPendingSet {
+		c.setLogText(c.logPending)
 	}
 }
 
@@ -612,7 +631,7 @@ func (c *Controller) openLogFile() {
 		_, err = os.Stat(path)
 	}
 	if err == nil {
-		err = fyne.CurrentApp().OpenURL(&url.URL{Scheme: "file", Path: filepath.ToSlash(path)})
+		err = openFile(path)
 	}
 	if err != nil {
 		dialog.ShowError(fmt.Errorf("open log file: %w", err), c.window)

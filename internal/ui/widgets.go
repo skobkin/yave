@@ -239,6 +239,11 @@ func (c *Controller) createWidgets() {
 	c.log.SetMinRowsVisible(12)
 	c.logFollow = widget.NewCheck("Follow output", nil)
 	c.logFollow.SetChecked(true)
+	c.logFollow.OnChanged = func(on bool) {
+		if on {
+			c.flushPendingLog()
+		}
+	}
 	c.openFolder = widget.NewButton("Open folder", c.openOutputFolder)
 	c.playOutput = widget.NewButton("Play", c.playOutputFile)
 	c.runResult = widget.NewLabel("")

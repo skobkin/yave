@@ -139,6 +139,8 @@ type Controller struct {
 	runShowing             bool // a run is going and its progress is in the title
 	startHint              *widget.Label
 	logFollow              *widget.Check
+	logPending             string
+	logPendingSet          bool
 	openLog                *widget.Button
 	copyCommand            *widget.Button
 	trimHint               *widget.Label // why trimming is unavailable
@@ -424,16 +426,16 @@ func (c *Controller) ShowAndRun() {
 
 func (c *Controller) requestQuit() {
 	if c.runControl == nil {
-		c.guardUnsavedProfile(c.quitApplication)
-		return
-	}
-	if c.quitPrompt != nil {
-		c.quitPrompt.Show()
 		// The unsaved-changes prompt lives on the window; a hidden window
 		// (tray Quit) would leave it unanswerable.
 		if c.profileDirty() {
 			c.revealMainWindowIfHidden()
 		}
+		c.guardUnsavedProfile(c.quitApplication)
+		return
+	}
+	if c.quitPrompt != nil {
+		c.quitPrompt.Show()
 		return
 	}
 
