@@ -1888,7 +1888,7 @@ func TestTrimTabLayout(t *testing.T) {
 		if containsAll(box.Objects, c.trimExport, c.trimAdd, c.trimDelete) {
 			segments = box
 		}
-		if containsAll(box.Objects, c.trimEnable, c.trimPlay, c.trimPlaySelection) {
+		if containsAll(box.Objects, c.trimEnable, c.transport.box) {
 			transport = box
 		}
 		for _, obj := range box.Objects {
@@ -1938,8 +1938,11 @@ func TestTrimTabLayout(t *testing.T) {
 	if !c.waveStatus.Hidden {
 		t.Fatal("the waveform status line must start hidden")
 	}
+	if !c.trimHint.Hidden {
+		t.Fatal("the trim hint line must start hidden")
+	}
 	wantControls := []fyne.CanvasObject{
-		c.previewStatus, transport, c.trimTimeline, c.trimMessage, c.segmentPanel, segments, c.trimScenesBox, c.waveStatus, boundaries,
+		c.previewStatus, c.trimHint, transport, c.trimTimeline, c.trimMessage, c.segmentPanel, segments, c.trimScenesBox, c.waveStatus, boundaries,
 	}
 	if len(controls.Objects) != len(wantControls) {
 		t.Fatalf("bottom controls hold %d rows, want %d", len(controls.Objects), len(wantControls))

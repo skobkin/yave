@@ -53,6 +53,12 @@ type UIConfig struct {
 	// SceneThreshold is the scene-cut score (0.1-0.9) at or above which a
 	// detected cut becomes a timeline marker. Nil means the default (0.3).
 	SceneThreshold *float64 `yaml:"scene_threshold,omitempty"`
+
+	// PlaybackVolume is the trim playback volume in percent (0-100); nil
+	// means 100. PlaybackMuted silences playback without losing the volume
+	// to restore when it is unmuted.
+	PlaybackVolume *int `yaml:"playback_volume,omitempty"`
+	PlaybackMuted  bool `yaml:"playback_muted,omitempty"`
 }
 
 type FFmpegConfig struct {

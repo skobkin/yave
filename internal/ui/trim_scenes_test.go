@@ -206,7 +206,7 @@ func TestSceneThresholdFiltersLiveWithoutRerunningAndPersists(t *testing.T) {
 	if count() != 1 {
 		t.Errorf("markers at 0.5 = %d, want 1", count())
 	}
-	c.sceneThreshold.SetValue(0.9)
+	c.onSceneThreshold(0.9) // a live drag tick: markers follow, nothing is saved
 	if count() != 0 {
 		t.Errorf("markers at 0.9 = %d, want 0", count())
 	}
@@ -402,5 +402,23 @@ func TestSceneMarkersJoinMarkerNavigation(t *testing.T) {
 	c.jumpToMarker(1)
 	if got := c.trimTimeline.Playhead(); got != 40*time.Second {
 		t.Errorf("next marker = %s, want the first visible scene cut at 40s", got)
+	}
+}
+
+func TestProgrammaticSceneSliderSyncDoesNotWriteTheConfig(t *testing.T) {
+	// Fyne fires OnChangeEnded for SetValue too: restoring cached scenes or
+	// finishing a detection moves the slider and must not save the config.
+	f := &fakeScenes{scenes: threeScenes()}
+	c, _ := sceneController(t, f)
+	c.configPath = filepath.Join(t.TempDir(), "config.yaml")
+	threshold := 0.55
+	c.config.UI.SceneThreshold = &threshold
+	c.scenes.scenes, c.scenes.have = threeScenes(), true
+	c.syncSceneMarkers()
+	if _, err := os.Stat(c.configPath); err == nil {
+		t.Fatal("syncing the slider wrote the config file")
+	}
+	if got := c.sceneThreshold.Value; got != 0.55 {
+		t.Errorf("slider = %v, want the configured 0.55", got)
 	}
 }

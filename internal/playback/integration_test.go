@@ -66,7 +66,7 @@ func TestSessionIntegration(t *testing.T) {
 // ahead and make every video frame look late.
 type pacedSink struct{ consumed chan int64 }
 
-func (p *pacedSink) Start(r io.Reader) (AudioPlayback, error) {
+func (p *pacedSink) Start(r io.Reader, _ float64) (AudioPlayback, error) {
 	go func() {
 		const chunk = AudioSampleRate * AudioBytesPerFrame / 40 // 25ms
 		buf := make([]byte, chunk)

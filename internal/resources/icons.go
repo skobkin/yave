@@ -18,6 +18,14 @@ const (
 	IconZoomToSelection = "zoom_in_map"
 	IconPrevMarker      = "keyboard_double_arrow_left"
 	IconNextMarker      = "keyboard_double_arrow_right"
+	IconPlay            = "play_arrow"
+	IconPause           = "pause"
+	IconPrevSegment     = "skip_previous"
+	IconNextSegment     = "skip_next"
+	IconPlaySelection   = "play_circle"
+	IconVolumeHigh      = "volume_up"
+	IconVolumeLow       = "volume_down"
+	IconVolumeOff       = "volume_off"
 )
 
 //go:embed icons/*.svg

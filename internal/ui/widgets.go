@@ -135,8 +135,10 @@ func (c *Controller) createWidgets() {
 		c.applyFrameStep(next, state)
 		return next, state == frameStepMoved
 	}
-	c.newPlaybackButtons()
 	c.tips = newTooltipLayer()
+	c.loadVolume()
+	c.transport = c.newTransportBar()
+	c.trimPlay, c.trimPlaySelection = c.transport.play, c.transport.playSel
 	c.trimZoomOut = newTipButton(c.tips, resources.Icon(resources.IconZoomOut),
 		"Zoom out (Ctrl+wheel)", func() { c.trimTimeline.ZoomStep(1 / buttonZoomStepFactor) })
 	c.trimZoomIn = newTipButton(c.tips, resources.Icon(resources.IconZoomIn),
@@ -168,7 +170,13 @@ func (c *Controller) createWidgets() {
 	c.sceneThreshold.Step = 0.01
 	c.sceneThreshold.SetValue(c.sceneThresholdValue())
 	c.sceneThreshold.OnChanged = c.onSceneThreshold
-	c.sceneThreshold.OnChangeEnded = func(float64) { c.saveSceneThreshold() }
+	// Fyne fires OnChangeEnded for programmatic SetValue too; only a
+	// release by the user may write the config.
+	c.sceneThreshold.OnChangeEnded = func(float64) {
+		if !c.scenes.syncing {
+			c.saveSceneThreshold()
+		}
+	}
 	c.sceneStatus = widget.NewLabel("")
 	setStatusLabel(c.sceneStatus, "")
 	c.waveStatus = widget.NewLabel("")
@@ -234,6 +242,10 @@ func (c *Controller) createWidgets() {
 	}
 	c.trimHint = widget.NewLabel("")
 	c.trimHint.TextStyle = fyne.TextStyle{Italic: true}
+	// The reason trimming is unavailable gets its own line above the
+	// enable row, hidden while empty: beside the enable check it forced the
+	// whole row (and with it the window) several hundred pixels wider.
+	setStatusLabel(c.trimHint, "")
 	c.trimAdd = widget.NewButton("Add segment", c.addTrimSegment)
 	c.trimDelete = widget.NewButton("Delete segment", c.deleteTrimSegment)
 	c.trimDuration = widget.NewLabel("")

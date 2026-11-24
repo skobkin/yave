@@ -105,9 +105,20 @@ type Controller struct {
 
 	// Optional Trim-tab playback (see playback.go): its state and the
 	// transport buttons that sit next to the enable check.
-	play              playbackState
-	trimPlay          *widget.Button
-	trimPlaySelection *widget.Button
+	play playbackState
+	// transport is the Trim tab's playback bar; transports lists every bar
+	// built (the full-screen overlay adds one). trimPlay and
+	// trimPlaySelection alias the main bar's buttons.
+	transport         *transportBar
+	transports        []*transportBar
+	trimPlay          *tipButton
+	trimPlaySelection *tipButton
+	// volumePercent and muted are the playback volume state (persisted in
+	// the config); syncingVolume suppresses slider callbacks while the
+	// controller sets the sliders.
+	volumePercent int
+	muted         bool
+	syncingVolume bool
 
 	// tips draws button tooltips over the window content (Fyne has none);
 	// the trim zoom buttons drive the timeline's visible window.

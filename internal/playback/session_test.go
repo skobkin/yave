@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,22 +42,28 @@ type fakeSink struct {
 	err      error
 	started  chan struct{}
 	consumed chan int64
+	// gain is the initial gain Start was given; playing is the stream it
+	// returned, which records later volume changes.
+	gain    float64
+	playing *fakePlayback
 }
 
 func newFakeSink() *fakeSink {
 	return &fakeSink{started: make(chan struct{}), consumed: make(chan int64, 1)}
 }
 
-func (f *fakeSink) Start(r io.Reader) (AudioPlayback, error) {
+func (f *fakeSink) Start(r io.Reader, gain float64) (AudioPlayback, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
+	f.gain = gain
+	f.playing = &fakePlayback{}
 	close(f.started)
 	go func() {
 		n, _ := io.Copy(io.Discard, r) //nolint:errcheck // test sink drains until the decoder ends
 		f.consumed <- n
 	}()
-	return &fakePlayback{}, nil
+	return f.playing, nil
 }
 
 func collect(t *testing.T, s *Session) []Frame {
@@ -241,5 +248,91 @@ func TestStartValidatesOptions(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no-such-ffmpeg")
 	if _, err := Start(context.Background(), Options{FFmpegPath: missing, Input: "in.mkv"}, nil); err == nil {
 		t.Error("an unlaunchable FFmpeg must fail Start")
+	}
+}
+
+func TestSessionStartsTheSinkAtTheInitialGain(t *testing.T) {
+	half := 0.25
+	for name, tc := range map[string]struct {
+		gain *float64
+		want float64
+	}{
+		"unity by default":            {nil, 1},
+		"a configured gain":           {&half, 0.25},
+		"muted starts silent":         {ptr(0.0), 0},
+		"a negative gain is silenced": {ptr(-3.0), 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ffmpeg := writeFakeFFmpeg(t, threeFrames, "head -c 4000 /dev/zero")
+			sink := newFakeSink()
+			s, err := Start(context.Background(),
+				Options{FFmpegPath: ffmpeg, Input: "in.mkv", HasAudio: true, Gain: tc.gain}, sink)
+			if err != nil {
+				t.Fatal(err)
+			}
+			collect(t, s)
+			<-s.Done()
+			if sink.gain != tc.want {
+				t.Errorf("sink started at gain %v, want %v (applied before the first sample, not after)", sink.gain, tc.want)
+			}
+		})
+	}
+}
+
+func ptr(v float64) *float64 { return &v }
+
+func TestSessionSetVolumeReachesTheRunningStream(t *testing.T) {
+	ffmpeg := writeFakeFFmpeg(t, threeFrames, "head -c 4000 /dev/zero")
+	sink := newFakeSink()
+	s, err := Start(context.Background(), Options{FFmpegPath: ffmpeg, Input: "in.mkv", HasAudio: true}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetVolume(0.5)
+	s.SetVolume(0)
+	s.SetVolume(-2) // never negative
+	s.SetVolume(2)  // louder than unity is the backend's call
+	collect(t, s)
+	<-s.Done()
+	got := sink.playing.setVolumes()
+	want := []float64{0.5, 0, 0, 2}
+	if len(got) != len(want) {
+		t.Fatalf("volumes = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("volumes = %v, want %v", got, want)
+			break
+		}
+	}
+}
+
+func TestSessionSetVolumeWithoutAudioIsANoop(t *testing.T) {
+	ffmpeg := writeFakeFFmpeg(t, threeFrames, "head -c 4000 /dev/zero")
+	s, err := Start(context.Background(), Options{FFmpegPath: ffmpeg, Input: "in.mkv", HasAudio: false}, newFakeSink())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetVolume(0.3) // must not panic without an audio stream
+	collect(t, s)
+	<-s.Done()
+
+	// A sink that failed to open leaves the same no-op session.
+	failing := newFakeSink()
+	failing.err = errors.New("no device")
+	s, err = Start(context.Background(), Options{FFmpegPath: ffmpeg, Input: "in.mkv", HasAudio: true}, failing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetVolume(0.3)
+	collect(t, s)
+	<-s.Done()
+}
+
+func TestClampGain(t *testing.T) {
+	for in, want := range map[float64]float64{-1: 0, 0: 0, 0.4: 0.4, 1: 1, 3: 3, math.NaN(): 0} {
+		if got := clampGain(in); got != want {
+			t.Errorf("clampGain(%v) = %v, want %v", in, got, want)
+		}
 	}
 }

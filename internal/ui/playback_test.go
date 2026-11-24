@@ -14,6 +14,7 @@ import (
 
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/playback"
+	"git.skobk.in/skobkin/yave/internal/resources"
 	"git.skobk.in/skobkin/yave/internal/transcode"
 )
 
@@ -29,8 +30,14 @@ type fakePlaybackSession struct {
 	err       error
 	notice    string
 	pos       time.Duration
+	volumes   []float64
 	closeOnce sync.Once
 }
+
+// showsPlay and showsPause read the play button's state from its icon,
+// which is what the user sees now that the bar has no text.
+func showsPlay(b *tipButton) bool  { return b.Icon == resources.Icon(resources.IconPlay) }
+func showsPause(b *tipButton) bool { return b.Icon == resources.Icon(resources.IconPause) }
 
 func newFakePlaybackSession(o playback.Options) *fakePlaybackSession {
 	return &fakePlaybackSession{opts: o, frames: make(chan playback.Frame, 8), done: make(chan struct{})}
@@ -40,6 +47,18 @@ func (f *fakePlaybackSession) Frames() <-chan playback.Frame { return f.frames }
 func (f *fakePlaybackSession) Done() <-chan struct{}         { return f.done }
 func (f *fakePlaybackSession) Position() time.Duration       { return f.pos }
 func (f *fakePlaybackSession) Notice() string                { return f.notice }
+
+func (f *fakePlaybackSession) SetVolume(gain float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumes = append(f.volumes, gain)
+}
+
+func (f *fakePlaybackSession) setVolumes() []float64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]float64(nil), f.volumes...)
+}
 
 func (f *fakePlaybackSession) Err() error {
 	f.mu.Lock()
@@ -183,11 +202,16 @@ func TestPlaybackStartsAtPlayheadAndShowsFrames(t *testing.T) {
 		FFmpegPath: "/usr/bin/ffmpeg", Input: "/tmp/input.mkv",
 		From: 30 * time.Second, FrameRate: "25/1", HasAudio: true,
 	}
+	gain := s.opts.Gain
+	s.opts.Gain = nil // compared separately: it is a pointer
 	if s.opts != want {
 		t.Fatalf("playback options = %+v, want %+v", s.opts, want)
 	}
-	if !c.playbackActive() || c.trimPlay.Text != "Pause" {
-		t.Errorf("after Play: active=%v button=%q, want active with a Pause button", c.playbackActive(), c.trimPlay.Text)
+	if gain == nil || *gain != 1 {
+		t.Errorf("a default session must start at unity gain, got %v", gain)
+	}
+	if !c.playbackActive() || !showsPause(c.trimPlay) {
+		t.Errorf("after Play: active=%v button=%q, want active with a Pause button", c.playbackActive(), c.trimPlay.tip())
 	}
 
 	frame := image.NewYCbCr(image.Rect(0, 0, 2, 2), image.YCbCrSubsampleRatio420)
@@ -214,8 +238,8 @@ func TestPlaybackPauseKeepsPositionAndIgnoresLateFrames(t *testing.T) {
 	if !s.wasCancelled() {
 		t.Error("pausing must cancel the session")
 	}
-	if c.playbackActive() || c.trimPlay.Text != "Play" {
-		t.Errorf("after Pause: active=%v button=%q, want idle with a Play button", c.playbackActive(), c.trimPlay.Text)
+	if c.playbackActive() || !showsPlay(c.trimPlay) {
+		t.Errorf("after Pause: active=%v button=%q, want idle with a Play button", c.playbackActive(), c.trimPlay.tip())
 	}
 	if c.previews.pendingAt == nil || *c.previews.pendingAt != 31*time.Second {
 		t.Errorf("pausing must request the exact frame at the playhead, pendingAt=%v", c.previews.pendingAt)
@@ -256,8 +280,8 @@ func TestPlaybackNaturalEndRestoresControlsAndExactFrame(t *testing.T) {
 	s.finish(nil)
 	h.pump(t, func() bool { return !c.playbackActive() })
 
-	if c.trimPlay.Text != "Play" {
-		t.Errorf("button = %q after the end, want Play", c.trimPlay.Text)
+	if !showsPlay(c.trimPlay) {
+		t.Errorf("button = %q after the end, want Play", c.trimPlay.tip())
 	}
 	if c.previews.pendingAt == nil {
 		t.Error("the end of playback must request the exact preview at the final position")
@@ -290,8 +314,8 @@ func TestPlaybackStartFailureShowsStatus(t *testing.T) {
 	if got := h.c.previewStatus.Text; !strings.Contains(got, "Playback unavailable") {
 		t.Errorf("preview status = %q, want an unavailable notice", got)
 	}
-	if h.c.trimPlay.Text != "Play" {
-		t.Errorf("button = %q, want Play", h.c.trimPlay.Text)
+	if !showsPlay(h.c.trimPlay) {
+		t.Errorf("button = %q, want Play", h.c.trimPlay.tip())
 	}
 }
 
@@ -320,8 +344,8 @@ func TestPlaybackSeekRestartsAtNewPositionDebounced(t *testing.T) {
 	if !first.wasCancelled() {
 		t.Error("a seek must silence the running session at once")
 	}
-	if !c.playbackActive() || c.trimPlay.Text != "Pause" {
-		t.Errorf("during the seek debounce: active=%v button=%q, want still Pause", c.playbackActive(), c.trimPlay.Text)
+	if !c.playbackActive() || !showsPause(c.trimPlay) {
+		t.Errorf("during the seek debounce: active=%v button=%q, want still Pause", c.playbackActive(), c.trimPlay.tip())
 	}
 	h.pump(t, func() bool { return h.sessionCount() == 2 })
 	h.drain()
@@ -378,8 +402,8 @@ func TestPlaybackStopsOnEveryOwnerChange(t *testing.T) {
 			if !s.wasCancelled() || h.c.playbackActive() {
 				t.Errorf("playback still running after %s", tt.name)
 			}
-			if h.c.trimPlay.Text != "Play" {
-				t.Errorf("button = %q, want Play", h.c.trimPlay.Text)
+			if !showsPlay(h.c.trimPlay) {
+				t.Errorf("button = %q, want Play", h.c.trimPlay.tip())
 			}
 		})
 	}

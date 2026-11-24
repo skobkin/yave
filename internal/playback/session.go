@@ -38,6 +38,7 @@ type Session struct {
 	pos    time.Duration
 	err    error
 	notice string
+	audio  AudioPlayback // the running audio stream, nil without audio
 }
 
 // Frames delivers frames in presentation order and is closed when the
@@ -73,6 +74,18 @@ func (s *Session) Err() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.err
+}
+
+// SetVolume changes the linear volume of the running audio (1 is unity,
+// 0 silence). It is a no-op for a session without audio, and safe to call
+// at any time from any goroutine.
+func (s *Session) SetVolume(gain float64) {
+	s.mu.Lock()
+	audio := s.audio
+	s.mu.Unlock()
+	if audio != nil {
+		audio.SetVolume(clampGain(gain))
+	}
 }
 
 // Notice is a non-fatal condition worth telling the user, such as
@@ -125,6 +138,11 @@ func Start(ctx context.Context, o Options, sink AudioSink) (*Session, error) {
 		s.notice = "Playing without audio: no audio output is available."
 	default:
 		audio, playing, clk, s.notice = startAudio(audioCtx, o, sink)
+		if playing != nil {
+			s.mu.Lock()
+			s.audio = playing
+			s.mu.Unlock()
+		}
 	}
 	if clk == nil {
 		clk = newWallClock(o.From)
@@ -185,7 +203,7 @@ func startAudio(ctx context.Context, o Options, sink AudioSink) (*decoder, Audio
 		return nil, nil, nil, "Playing without audio: " + err.Error()
 	}
 	reader := &countingReader{r: dec.stdout}
-	playing, err := sink.Start(reader)
+	playing, err := sink.Start(reader, o.gain())
 	if err != nil {
 		_ = dec.stop() //nolint:errcheck // abandoning the audio path
 		return nil, nil, nil, "Playing without audio: " + err.Error()

@@ -3,6 +3,7 @@ package playback
 import (
 	"bytes"
 	"io"
+	"sync"
 	"testing"
 	"time"
 )
@@ -30,10 +31,26 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-type fakePlayback struct{ buffered int }
+type fakePlayback struct {
+	mu       sync.Mutex
+	buffered int
+	volumes  []float64
+}
 
 func (f *fakePlayback) Buffered() int { return f.buffered }
 func (f *fakePlayback) Close() error  { return nil }
+
+func (f *fakePlayback) SetVolume(gain float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumes = append(f.volumes, gain)
+}
+
+func (f *fakePlayback) setVolumes() []float64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]float64(nil), f.volumes...)
+}
 
 func TestAudioClock(t *testing.T) {
 	oneSecond := AudioSampleRate * AudioBytesPerFrame

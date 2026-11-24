@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/playback"
 )
@@ -27,6 +25,7 @@ type playbackSession interface {
 	Position() time.Duration
 	Err() error
 	Notice() string
+	SetVolume(gain float64)
 }
 
 type playbackStarter func(ctx context.Context, o playback.Options, sink playback.AudioSink) (playbackSession, error)
@@ -78,30 +77,17 @@ func (c *Controller) playbackActive() bool {
 // canPlay reports whether Play may start now: trimming is on, the
 // input has a video stream and a known duration, and no export runs.
 func (c *Controller) canPlay() bool {
-	_, hasVideo := c.media.PrimaryVideo()
-	return c.trimEnabled && c.inputPath != "" && c.media.Duration > 0 && hasVideo && c.runControl == nil
+	return c.playBlockReason() == ""
 }
 
-// updatePlaybackControls keeps the transport buttons and any running
+// updatePlaybackControls keeps the transport bars and any running
 // playback consistent with the current state. It runs from refresh().
 func (c *Controller) updatePlaybackControls() {
-	canPlay := c.canPlay()
-	if !canPlay && c.playbackActive() {
+	if !c.canPlay() && c.playbackActive() {
 		c.cancelPlayback()
 		return // cancelPlayback re-entered this function
 	}
-	if c.trimPlay == nil || c.trimPlaySelection == nil {
-		return
-	}
-	if c.playbackActive() {
-		c.trimPlay.SetText("Pause")
-		c.trimPlay.SetIcon(theme.MediaPauseIcon())
-	} else {
-		c.trimPlay.SetText("Play")
-		c.trimPlay.SetIcon(theme.MediaPlayIcon())
-	}
-	setEnabled(c.trimPlay, canPlay)
-	setEnabled(c.trimPlaySelection, canPlay && c.trimSelected < len(c.trimSelection.Segments))
+	c.updateTransports()
 }
 
 func setEnabled(w fyne.Disableable, enabled bool) {
@@ -157,6 +143,7 @@ func (c *Controller) startPlayback(from, until time.Duration) {
 	c.setPreviewStatus("")
 
 	video, _ := c.media.PrimaryVideo()
+	gain := c.playbackGain()
 	opts := playback.Options{
 		FFmpegPath: c.config.FFmpeg.FFmpegPath,
 		Input:      c.inputPath,
@@ -164,6 +151,7 @@ func (c *Controller) startPlayback(from, until time.Duration) {
 		Until:      until,
 		FrameRate:  video.FrameRate,
 		HasAudio:   len(c.media.AudioStreams) > 0,
+		Gain:       &gain,
 	}
 	session, err := c.play.starter()(context.Background(), opts, c.play.audioSink())
 	if err != nil {
@@ -263,13 +251,4 @@ func (c *Controller) cancelPlayback() {
 	c.play.seeking = false
 	c.play.gen++
 	c.updatePlaybackControls()
-}
-
-// newPlaybackButtons builds the transport buttons; they start disabled
-// and updatePlaybackControls owns their state from then on.
-func (c *Controller) newPlaybackButtons() {
-	c.trimPlay = widget.NewButtonWithIcon("Play", theme.MediaPlayIcon(), c.togglePlayback)
-	c.trimPlaySelection = widget.NewButtonWithIcon("Play selection", theme.MediaFastForwardIcon(), c.playSelection)
-	c.trimPlay.Disable()
-	c.trimPlaySelection.Disable()
 }

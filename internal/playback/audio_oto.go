@@ -22,7 +22,7 @@ func NewAudioSink() AudioSink { return otoSink{} }
 
 type otoSink struct{}
 
-func (otoSink) Start(r io.Reader) (AudioPlayback, error) {
+func (otoSink) Start(r io.Reader, gain float64) (AudioPlayback, error) {
 	otoOnce.Do(func() {
 		ctx, ready, err := oto.NewContext(&oto.NewContextOptions{
 			SampleRate:   AudioSampleRate,
@@ -40,6 +40,7 @@ func (otoSink) Start(r io.Reader) (AudioPlayback, error) {
 		return nil, otoErr
 	}
 	p := otoCtx.NewPlayer(r)
+	p.SetVolume(clampGain(gain))
 	p.Play()
 	return otoPlayback{p}, nil
 }
@@ -47,6 +48,8 @@ func (otoSink) Start(r io.Reader) (AudioPlayback, error) {
 type otoPlayback struct{ p *oto.Player }
 
 func (o otoPlayback) Buffered() int { return o.p.BufferedSize() }
+
+func (o otoPlayback) SetVolume(gain float64) { o.p.SetVolume(clampGain(gain)) }
 
 // Close stops playback and the read-ahead from the source. oto needs
 // no further release: since v3.4 the player's finalizer does it.

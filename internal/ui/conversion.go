@@ -80,7 +80,7 @@ func (c *Controller) refresh() {
 	// Trim availability follows the input: no file or an unknown
 	// duration leaves trimming off until inspection completes.
 	reason := trimUnavailableReason(c.inputPath, c.inspecting, c.media)
-	c.trimHint.SetText(reason)
+	setStatusLabel(c.trimHint, reason)
 	if reason == "" {
 		c.trimEnable.Enable()
 	} else {

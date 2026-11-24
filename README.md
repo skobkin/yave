@@ -124,10 +124,16 @@ In". When keyframes cannot be read the generic warning stays.
 
 ## Trim playback
 
-The Trim tab can play the input while you choose cut boundaries: **Play** /
-**Pause** (also Space on the timeline) plays from the playhead, **Play
-selection** plays the selected segment from In to Out, and clicking or
-dragging the timeline seeks while playing. Frames and audio are decoded by
+The Trim tab can play the input while you choose cut boundaries. The icon
+strip above the timeline has **Play / Pause** (also Space on the timeline),
+**previous / next segment** (select that segment and move the playhead to its
+start, seeking while playing; "previous" restarts the current segment unless the
+playhead is right at its start), **Play selection** (the selected segment from
+In to Out), and **mute** with a **volume** slider. Every button has a tooltip,
+which also says why a button is unavailable (no video, trimming off, an export
+running). Clicking or dragging the timeline seeks while playing. Volume and mute
+apply to live playback and are remembered in `config.yaml`
+(`ui.playback_volume`, `ui.playback_muted`). Frames and audio are decoded by
 the configured FFmpeg into a scaled preview (up to 640 px wide and 30 fps),
 so no extra media libraries are needed.
 

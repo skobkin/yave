@@ -8,6 +8,7 @@ package playback
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,26 @@ type Options struct {
 	FrameRate string
 	// HasAudio reports that the input has an audio stream to play.
 	HasAudio bool
+	// Gain is the initial linear audio volume (1 is unity, 0 silence);
+	// nil means unity.
+	Gain *float64
+}
+
+// gain returns the initial audio gain: unity unless Options set one,
+// never negative.
+func (o Options) gain() float64 {
+	if o.Gain == nil {
+		return 1
+	}
+	return clampGain(*o.Gain)
+}
+
+// clampGain keeps a gain in the range the audio backends accept.
+func clampGain(gain float64) float64 {
+	if gain < 0 || math.IsNaN(gain) {
+		return 0
+	}
+	return gain
 }
 
 func (o Options) window() (time.Duration, bool) {

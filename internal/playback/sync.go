@@ -35,9 +35,11 @@ func decide(frameAt, now time.Duration) (action, time.Duration) {
 }
 
 // AudioSink plays a PCM stream (AudioSampleRate, AudioChannels, s16le)
-// to an output device. Implementations must not block Start.
+// to an output device. Implementations must not block Start. gain is the
+// initial linear volume (1 is unity, 0 silence); it is applied before the
+// first sample plays, so a muted session never blips at full volume.
 type AudioSink interface {
-	Start(r io.Reader) (AudioPlayback, error)
+	Start(r io.Reader, gain float64) (AudioPlayback, error)
 }
 
 // AudioPlayback is one running audio stream.
@@ -45,6 +47,9 @@ type AudioPlayback interface {
 	// Buffered is the number of bytes already read from the stream but
 	// not yet played.
 	Buffered() int
+	// SetVolume changes the linear volume of the running stream (1 is
+	// unity, 0 silence).
+	SetVolume(gain float64)
 	// Close stops playback and releases the stream.
 	Close() error
 }
