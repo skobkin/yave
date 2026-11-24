@@ -171,6 +171,8 @@ func (c *Controller) resetTrimForNewInput() {
 	c.trimDuration.SetText("")
 	c.trimTimeline.SetDuration(0)
 	c.trimTimeline.SetMarkers(markerChapter, nil)
+	c.trimTimeline.SetMarkers(markerKeyframe, nil)
+	c.previews.keyframes.clear()
 	c.trimTimeline.SetThumbnails(nil)
 	c.trimTimeline.SetPlayhead(0)
 	c.previewImage.Image = nil
@@ -218,6 +220,10 @@ func boundaryEntryProblem(label string, valid bool, text string) string {
 // export-mode changes, and input changes without depending on
 // boundary-edit callbacks.
 func (c *Controller) updateTrimMessages(encoder string, audio model.AudioSettings) {
+	// Keyframe results arrive asynchronously and re-run this with the
+	// inputs of the last refresh; the stream-copy flag follows them.
+	c.trimMsgEncoder, c.trimMsgAudio = encoder, audio
+	c.trimCopyVideo = isCopyVideo(encoder)
 	var parts []string
 	if c.trimEnabled {
 		for _, problem := range []string{
@@ -234,12 +240,8 @@ func (c *Controller) updateTrimMessages(encoder string, audio model.AudioSetting
 		// ValidateTrimExport is a no-op unless joining more than one
 		// segment, so the separate-file mode adds nothing.
 		result.Merge(validation.ValidateTrimExport(c.trimSelection, c.trimExportMode, &c.media, c.caps, encoder, audio))
-		for _, issue := range result.Errors {
-			parts = append(parts, "Error: "+issue.Message)
-		}
-		for _, issue := range result.Warnings {
-			parts = append(parts, "Warning: "+issue.Message)
-		}
+		parts = append(parts, c.trimIssueLines(result)...)
+		parts = append(parts, c.keyframeNotes()...)
 	}
 	c.setTrimMessage(strings.Join(parts, "\n"))
 }
@@ -325,7 +327,7 @@ func (c *Controller) setInFromPlayhead() {
 	if !c.trimEnabled {
 		return
 	}
-	at := c.trimTimeline.Playhead()
+	at := c.keyframeSnap(c.trimTimeline.Playhead(), tlIn)
 	c.trimInValid = true
 	c.trimSelection = withSegmentBoundary(c.trimSelection, c.trimSelected, at, -1)
 	c.setBoundaryDisplay(c.trimIn, formatTimestamp(at))
@@ -344,7 +346,7 @@ func (c *Controller) setOutFromPlayhead() {
 	if !c.trimEnabled {
 		return
 	}
-	at := c.trimTimeline.Playhead()
+	at := c.keyframeSnap(c.trimTimeline.Playhead(), tlOut)
 	c.trimOutValid = true
 	c.trimSelection = withSegmentBoundary(c.trimSelection, c.trimSelected, -1, at)
 	c.setBoundaryDisplay(c.trimOut, formatTimestamp(at))
@@ -971,6 +973,8 @@ func (c *Controller) onTimelineView() {
 		c.dispatchUI(func() {
 			if c.inputGeneration == gen && c.trimEnabled {
 				c.scheduleStrip()
+				c.requestKeyframes()
+				c.refreshTrimMessages() // the "zoom in for keyframes" note follows the view
 			}
 		})
 	})
@@ -1409,6 +1413,7 @@ func (c *Controller) cancelPreviewWork() {
 func (c *Controller) cancelTrimWork() {
 	c.cancelPlayback()
 	c.cancelPreviewWork()
+	c.previews.keyframes.stop()
 	c.previews.strip.stop()
 	if c.previews.stripTimer != nil {
 		c.previews.stripTimer.Stop()
@@ -1440,6 +1445,8 @@ type trimPreviews struct {
 	// the decoded cells, keyed by sample time, reused across zoom levels.
 	strip      bgJob
 	stripTimer *time.Timer
+	// keyframes holds the stream-copy keyframe index and its fetches.
+	keyframes  keyframeState
 	stripGrid  stripGrid
 	thumbCache map[time.Duration]image.Image
 

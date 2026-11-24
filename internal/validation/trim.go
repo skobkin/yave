@@ -61,10 +61,16 @@ func ValidateTrim(trim model.TrimSelection, media *model.MediaInfo, videoEncoder
 	// keyframe boundary, so the actual cut may land before the selected
 	// end or extend past it by up to one GOP.
 	if strings.EqualFold(videoEncoder, "copy") {
-		result.warning("trim", "%s", "stream copy snaps cut boundaries to the nearest keyframes; the actual cut may differ from the selected range")
+		result.warning("trim", "%s", StreamCopyKeyframeWarning)
 	}
 	return result
 }
+
+// StreamCopyKeyframeWarning is the generic warning attached to every
+// stream-copy trim. It is exported so the UI can recognize it and show
+// the concrete cut times in its place once the input's keyframes are
+// known.
+const StreamCopyKeyframeWarning = "stream copy snaps cut boundaries to the nearest keyframes; the actual cut may differ from the selected range"
 
 // ValidateTrimExport checks export-mode rules that need the full profile
 // semantics and only make sense at run time. Join checks apply to

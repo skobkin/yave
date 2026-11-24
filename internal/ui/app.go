@@ -122,6 +122,12 @@ type Controller struct {
 	trimPrevMarker *tipButton
 	trimNextMarker *tipButton
 	trimChapters   *widget.Button
+	// trimCopyVideo mirrors whether the effective video encoder is stream
+	// copy, and trimMsgEncoder/trimMsgAudio the inputs of the last trim
+	// message, so asynchronous keyframe results can refresh the message.
+	trimCopyVideo  bool
+	trimMsgEncoder string
+	trimMsgAudio   model.AudioSettings
 	// confirmHook and chapterPickerHook replace the real dialogs in tests.
 	confirmHook       func(title, message string, onYes func())
 	chapterPickerHook func(onPicked func(picked []int))

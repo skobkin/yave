@@ -96,6 +96,15 @@ lands on markers and other segments' boundaries within about 8 pixels; hold
 **Alt** to move freely. Snapping applies to mouse gestures only — typed
 timecodes and keyboard stepping are never moved.
 
+With a stream-copy video profile, FFmpeg can only start a cut on a keyframe:
+the output begins at the keyframe at or before **In**, while the end follows
+**Out** to within a few frames. The timeline then shows keyframe ticks (grey,
+read lazily for the visible range, only while 10 minutes or less are visible),
+the In handle snaps back to a keyframe and the Out handle forward to one, and
+the generic warning is replaced by the concrete start time, for example
+"stream copy starts this cut at the keyframe 00:00:09.000, 1.000 s before
+In". When keyframes cannot be read the generic warning stays.
+
 ## Trim playback
 
 The Trim tab can play the input while you choose cut boundaries: **Play** /

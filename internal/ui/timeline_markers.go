@@ -76,6 +76,13 @@ func (t *timeline) SetMarkers(kind markerKind, markers []timelineMarker) {
 	sorted := append([]timelineMarker(nil), markers...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].At < sorted[j].At })
 	t.markers[kind] = sorted
+	t.markerHasEnd[kind] = false
+	for _, m := range sorted {
+		if m.End > m.At {
+			t.markerHasEnd[kind] = true
+			break
+		}
+	}
 	t.Refresh()
 }
 

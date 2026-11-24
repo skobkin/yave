@@ -93,6 +93,7 @@ func (c *Controller) refresh() {
 	// warning + join-export checks) recomputes here so it stays
 	// synchronized with every state change that flows through refresh().
 	c.updateTrimMessages(trimValidationInputs(p))
+	c.updateKeyframes()
 	c.updateSegmentButtons()
 	c.updateSegmentList()
 	c.updatePlaybackControls()

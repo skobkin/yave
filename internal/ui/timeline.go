@@ -97,6 +97,9 @@ type timeline struct {
 	// markers are the marker layers drawn over the strip (chapters, scene
 	// cuts, keyframes); they double as snap targets.
 	markers [markerKindCount][]timelineMarker
+	// markerHasEnd marks layers whose markers carry range ends (chapters);
+	// their ends are extra snap targets.
+	markerHasEnd [markerKindCount]bool
 	// snapEnabled turns magnetic snapping of pointer gestures on.
 	snapEnabled bool
 
