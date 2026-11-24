@@ -1645,8 +1645,8 @@ func TestSetInputResetsStaleStateSynchronously(t *testing.T) {
 	if c.inputGeneration == 0 {
 		t.Fatal("input generation must advance")
 	}
-	if !strings.Contains(c.mediaInfo.Text, "Inspecting") {
-		t.Fatalf("status = %q, want the inspecting message", c.mediaInfo.Text)
+	if !strings.Contains(c.mediaInfo.String(), "Inspecting") {
+		t.Fatalf("status = %q, want the inspecting message", c.mediaInfo.String())
 	}
 }
 

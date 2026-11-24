@@ -9,6 +9,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"image/color"
@@ -22,9 +23,12 @@ func (c *Controller) createWidgets() {
 	c.status = widget.NewLabel("Idle")
 	// A long error must not widen the window; the log keeps the full text.
 	c.status.Truncation = fyne.TextTruncateEllipsis
-	c.detection = widget.NewLabel("Detecting FFmpeg...")
-	c.detection.Wrapping = fyne.TextWrapWord
-	c.retryDetect = widget.NewButton("Retry detection", c.detect)
+	c.tips = newTooltipLayer()
+	c.detection = newInfoPanel()
+	c.setDetectionStatus("Detecting FFmpeg...")
+	c.retryDetect = newTipButton(c.tips, theme.ViewRefreshIcon(), "Retry FFmpeg detection", c.detect)
+	c.copyDetection = newTipButton(c.tips, theme.ContentCopyIcon(), "Copy full FFmpeg details",
+		func() { fyne.CurrentApp().Clipboard().SetContent(c.detectionCopy) })
 	c.detectActivity = widget.NewActivity()
 	c.detectActivity.Hide()
 	c.inputEntry = widget.NewEntry()
@@ -32,8 +36,10 @@ func (c *Controller) createWidgets() {
 	c.inputEntry.OnSubmitted = c.setInput
 	// An edited-but-unsubmitted path gates Start (see startBlockReason).
 	c.inputEntry.OnChanged = func(string) { c.refresh() }
-	c.mediaInfo = widget.NewLabel("No input selected")
-	c.mediaInfo.Wrapping = fyne.TextWrapWord
+	c.mediaInfo = newInfoPanel()
+	c.copyMediaInfo = newTipButton(c.tips, theme.ContentCopyIcon(), "Copy full media information",
+		func() { fyne.CurrentApp().Clipboard().SetContent(c.mediaInfoCopy) })
+	c.setMediaEmpty()
 
 	c.profile = widget.NewSelect(c.profileNames(), func(name string) {
 		c.switchProfile(name)
@@ -135,7 +141,6 @@ func (c *Controller) createWidgets() {
 		c.applyFrameStep(next, state)
 		return next, state == frameStepMoved
 	}
-	c.tips = newTooltipLayer()
 	c.loadVolume()
 	c.transport = c.newTransportBar(false)
 	c.trimPlay, c.trimPlaySelection = c.transport.play, c.transport.playSel

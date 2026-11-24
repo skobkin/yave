@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"fyne.io/systray"
 
+	"git.skobk.in/skobkin/yave/internal/frames"
 	"git.skobk.in/skobkin/yave/internal/model"
 	"git.skobk.in/skobkin/yave/internal/notify"
 	"git.skobk.in/skobkin/yave/internal/profiles"
@@ -66,10 +67,22 @@ type Controller struct {
 	trayCheckItem  *fyne.MenuItem
 	trayQuitItem   *fyne.MenuItem
 
-	status        *widget.Label
-	detection     *widget.Label
-	inputEntry    *widget.Entry
-	mediaInfo     *widget.Label
+	status     *widget.Label
+	detection  *infoPanel // the Input tab's FFmpeg panel
+	inputEntry *widget.Entry
+	mediaInfo  *infoPanel // the Input tab's Media panel
+	// detectionCopy and mediaInfoCopy hold the full plain text the
+	// panels' Copy buttons put on the clipboard: raw FFmpeg/ffprobe
+	// names and details the panels leave out.
+	detectionCopy string
+	mediaInfoCopy string
+	// posterImage/posterIcon are the Media panel's thumbnail and its
+	// placeholder; posterFetch extracts the thumbnail (nil disables it,
+	// as in tests) and posterCancel stops an in-flight extraction.
+	posterImage   *canvas.Image
+	posterIcon    *widget.Icon
+	posterFetch   func(ctx context.Context, ext *frames.Extractor, path string, at time.Duration, height int) (frames.Frame, error)
+	posterCancel  context.CancelFunc
 	profile       *widget.Select
 	container     *widget.Select
 	output        *widget.Entry
@@ -184,7 +197,9 @@ type Controller struct {
 	showAllFiles           *widget.Check
 	shortcutHandlers       map[fyne.KeyName]func() // Ctrl+<key> handlers, also driven by tests
 	defaultMarker          *widget.Label
-	retryDetect            *widget.Button
+	retryDetect            *tipButton
+	copyDetection          *tipButton
+	copyMediaInfo          *tipButton
 	detectActivity         *widget.Activity
 	detecting              bool
 	openFolder             *widget.Button
@@ -340,6 +355,7 @@ func New(a fyne.App, initialInput string) (*Controller, error) {
 		inputPath:  initialInput,
 	}
 	c.previews = newTrimPreviews()
+	c.posterFetch = defaultPosterFetch
 	c.runStages = (transcode.Runner{}).RunSequence
 	c.createWidgets()
 	c.window.SetContent(c.withTooltips(c.buildLayout()))

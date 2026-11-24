@@ -26,13 +26,11 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 		pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(recent)
 		menu.ShowAtPosition(pos.Add(fyne.NewPos(0, recent.Size().Height)))
 	}
-	copyInfo := widget.NewButton("Copy", func() { fyne.CurrentApp().Clipboard().SetContent(c.mediaInfo.Text) })
-	inputBox := container.NewVBox(
-		widget.NewCard("FFmpeg", "", container.NewVBox(c.detection, container.NewHBox(c.retryDetect, c.detectActivity))),
-		widget.NewCard("Input", "", container.NewBorder(nil, nil, nil, container.NewHBox(c.showAllFiles, recent, browse), c.inputEntry)),
-		widget.NewCard("Media information", "", container.NewBorder(nil, container.NewHBox(layout.NewSpacer(), copyInfo), nil, nil, c.mediaInfo)),
-	)
-	inputTab := container.NewVScroll(inputBox)
+	// Like the Trim tab, the Input tab uses no heading cards: the file
+	// row leads, the media and FFmpeg panels carry their own titles (see
+	// inputSection).
+	inputTab := c.inputSection(container.NewBorder(nil, nil, nil,
+		container.NewHBox(c.showAllFiles, recent, browse), c.inputEntry))
 
 	// The trim tab deliberately uses no heading cards: the section
 	// titles ("Trim", "Frame preview", "Boundaries") cost vertical

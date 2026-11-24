@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -67,7 +66,8 @@ func (c *Controller) setInput(path string) {
 		c.status.SetText("Idle")
 		c.hideRunActions()
 	}
-	c.mediaInfo.SetText("Inspecting input...")
+	c.cancelPoster()
+	c.setMediaInspecting()
 	c.cancelTrimWork()
 	c.resetTrimForNewInput()
 	c.refresh()
@@ -83,10 +83,11 @@ func (c *Controller) setInput(path string) {
 			c.inspecting = false
 			if err != nil {
 				c.media = model.MediaInfo{}
-				c.mediaInfo.SetText("Inspection failed: " + err.Error())
+				c.setMediaError("Inspection failed: " + err.Error())
 			} else {
 				c.media = info
-				c.mediaInfo.SetText(formatMediaInfo(info))
+				c.setMediaResult(info)
+				c.startPoster(info)
 				// Thumbnails and previews stay lazy: they start when
 				// trimming is enabled (see setTrimEnabled).
 				c.trimTimeline.SetDuration(info.Duration)
@@ -122,7 +123,7 @@ func (c *Controller) detect() {
 			c.setDetecting(false)
 			if err != nil {
 				c.caps = model.Capabilities{}
-				c.detection.SetText("Detection failed: " + err.Error())
+				c.setDetectionError("Detection failed: " + err.Error())
 				// Re-derive the derived labels (the automatic-device
 				// hint in particular): with caps emptied, a hint that
 				// still names the previous detection's resolved device
@@ -166,12 +167,7 @@ func (c *Controller) applyDetection(caps model.Capabilities) {
 		// moved the path again, rebind the preview extractor under it.
 		c.onFFmpegExecutableChanged()
 	}
-	summary := fmt.Sprintf("%s\n%s\nHardware acceleration: %s\nHardware devices: %s",
-		caps.FFmpegVersion, caps.FFprobeVersion, strings.Join(caps.HWAccels, ", "), hardwareDevicesSummary(caps))
-	if devices := vaapiDevicesSummary(caps); devices != "" {
-		summary += "\nVAAPI devices: " + devices
-	}
-	c.detection.SetText(summary)
+	c.setDetectionResult(caps)
 	c.updateEncoderOptions()
 	c.updateDeviceOptions()
 	c.updateGPUIndexOptions()

@@ -32,13 +32,13 @@ func TestDetectDropsStaleResults(t *testing.T) {
 	c.config.FFmpeg.FFmpegPath = "fast"
 	c.detect()
 
-	pumpUntil(t, updates, func() bool { return strings.Contains(c.detection.Text, "fresh") }, "fresh detection result")
+	pumpUntil(t, updates, func() bool { return strings.Contains(c.detection.String(), "fresh") }, "fresh detection result")
 	close(releaseFirst)
 	// The stale result must be dispatched but ignored.
 	f := <-updates
 	f()
-	if !strings.Contains(c.detection.Text, "fresh") {
-		t.Fatalf("detection label = %q: a stale result overwrote the newer one", c.detection.Text)
+	if !strings.Contains(c.detection.String(), "fresh") {
+		t.Fatalf("detection label = %q: a stale result overwrote the newer one", c.detection.String())
 	}
 }
 
@@ -62,8 +62,8 @@ func TestRetryDetectionRerunsDetectionAndTracksBusyState(t *testing.T) {
 	if c.retryDetect.Disabled() || c.detectActivity.Visible() {
 		t.Fatal("after detection, Retry must be enabled and the spinner hidden")
 	}
-	if !strings.Contains(c.detection.Text, "not installed") {
-		t.Fatalf("diagnostics = %q, want the failure shown", c.detection.Text)
+	if !strings.Contains(c.detection.String(), "not installed") {
+		t.Fatalf("diagnostics = %q, want the failure shown", c.detection.String())
 	}
 }
 
