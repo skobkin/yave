@@ -56,6 +56,7 @@ type fullscreenState struct {
 	active bool
 
 	content   fyne.CanvasObject // the window content to restore
+	size      fyne.Size         // the windowed canvas size to restore
 	focus     fyne.Focusable    // what had keyboard focus
 	typedKey  func(*fyne.KeyEvent)
 	shortcuts []*desktop.CustomShortcut
@@ -133,6 +134,7 @@ func (c *Controller) enterFullscreen() {
 	canvas := c.window.Canvas()
 	c.fs.focus = canvas.Focused()
 	c.fs.content = c.window.Content()
+	c.fs.size = canvas.Size()
 	c.fs.typedKey = canvas.OnTypedKey()
 	canvas.Unfocus() // the timeline's FocusLost clears its tracked modifier state
 
@@ -188,6 +190,14 @@ func (c *Controller) exitFullscreen() {
 	c.fs.shortcuts = c.fs.shortcuts[:0]
 	c.fs.actions = nil
 	c.window.SetFullScreen(false)
+	// Restore the windowed size explicitly, before the content swap
+	// lays out against it: some window managers (KWin over XWayland)
+	// restore the window without the size callback Fyne relies on, which
+	// left the canvas at the screen size — controls fell outside the
+	// window, and the screen size was remembered as the window size.
+	if c.fs.size.Width > 0 && c.fs.size.Height > 0 {
+		c.window.Resize(c.fs.size)
+	}
 	c.window.SetContent(c.fs.content)
 	focus := c.fs.focus
 	if focus == nil {
@@ -195,6 +205,7 @@ func (c *Controller) exitFullscreen() {
 	}
 	canvas.Focus(focus)
 	c.fs.content, c.fs.focus, c.fs.typedKey = nil, nil, nil
+	c.fs.size = fyne.Size{}
 	c.updatePlaybackControls()
 	if !c.playbackActive() {
 		c.requestPreview(c.trimTimeline.Playhead())

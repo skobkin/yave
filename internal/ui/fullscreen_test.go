@@ -558,3 +558,27 @@ func TestFullscreenSharesThePreviewWidgetsWithTheTrimTab(t *testing.T) {
 		t.Error("the Trim tab must show the frame that was displayed in full-screen")
 	}
 }
+
+// TestExitRestoresTheWindowedSize pins the fix for a canvas stuck at the
+// screen size after leaving full-screen: some window managers (KWin over
+// XWayland) restore the window without the size callback Fyne relies
+// on, so the layout kept the full-screen size — controls fell outside
+// the window and the screen size was remembered as the window size.
+func TestExitRestoresTheWindowedSize(t *testing.T) {
+	h := newFullscreenHarness(t)
+	c := h.c
+	c.configPath = filepath.Join(t.TempDir(), "config.yaml")
+	c.window.Resize(fyne.NewSize(900, 700))
+
+	c.enterFullscreen()
+	c.window.Resize(fyne.NewSize(1920, 1080)) // the screen, as the driver reports it
+	c.exitFullscreen()                        // no resize callback follows here
+
+	if got := c.window.Canvas().Size(); got != fyne.NewSize(900, 700) {
+		t.Fatalf("canvas after exit = %v, want the windowed 900x700", got)
+	}
+	c.rememberWindowSize()
+	if c.config.UI.WindowWidth != 900 || c.config.UI.WindowHeight != 700 {
+		t.Errorf("remembered %dx%d, want 900x700", c.config.UI.WindowWidth, c.config.UI.WindowHeight)
+	}
+}
