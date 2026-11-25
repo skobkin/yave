@@ -44,20 +44,7 @@ func (c *Controller) refresh() {
 	c.outputPath = ""
 	c.command.SetText("")
 	if c.inputPath != "" {
-		width, height := dimensions(p, c.media)
-		ext, codec, videoSettings, audioSettings := templateFields(p)
-		req := templates.Request{
-			InputPath: c.inputPath,
-			Extension: ext,
-			Profile:   p.Name,
-			Codec:     codec,
-			Width:     width,
-			Height:    height,
-			Time:      time.Now(),
-
-			VideoSettings: videoSettings,
-			AudioSettings: audioSettings,
-		}
+		req := c.templateRequest(p, time.Now())
 		// A multi-part separate export only seeds its part names from
 		// the base and never writes it: resolving with the
 		// input-collision check would mark a template like
@@ -564,14 +551,20 @@ func (c *Controller) stopCancelTimer() {
 	}
 }
 
-func (c *Controller) resolveOutput(p model.Profile, at time.Time) (string, error) {
+// templateRequest gathers the output-template values for profile p from
+// the current input.
+func (c *Controller) templateRequest(p model.Profile, at time.Time) templates.Request {
 	width, height := dimensions(p, c.media)
 	ext, codec, videoSettings, audioSettings := templateFields(p)
-	return templates.Resolve(p.OutputTemplate, templates.Request{
+	return templates.Request{
 		InputPath: c.inputPath, Extension: ext, Profile: p.Name,
 		Codec: codec, Width: width, Height: height, Time: at,
 		VideoSettings: videoSettings, AudioSettings: audioSettings,
-	})
+	}
+}
+
+func (c *Controller) resolveOutput(p model.Profile, at time.Time) (string, error) {
+	return templates.Resolve(p.OutputTemplate, c.templateRequest(p, at))
 }
 
 // resolveOutputParts resolves the naming base for a multi-part separate
@@ -581,13 +574,7 @@ func (c *Controller) resolveOutput(p model.Profile, at time.Time) (string, error
 // stays usable even though the base equals the input, and the per-part
 // targets are validated when the export is planned.
 func (c *Controller) resolveOutputParts(p model.Profile, at time.Time) (string, error) {
-	width, height := dimensions(p, c.media)
-	ext, codec, videoSettings, audioSettings := templateFields(p)
-	return templates.ResolveParts(p.OutputTemplate, templates.Request{
-		InputPath: c.inputPath, Extension: ext, Profile: p.Name,
-		Codec: codec, Width: width, Height: height, Time: at,
-		VideoSettings: videoSettings, AudioSettings: audioSettings,
-	})
+	return templates.ResolveParts(p.OutputTemplate, c.templateRequest(p, at))
 }
 
 func issueMessages(result validation.Result) []string {

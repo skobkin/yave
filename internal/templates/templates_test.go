@@ -241,3 +241,40 @@ func TestPlaceholderDescriptionsUseRealExamples(t *testing.T) {
 		t.Errorf("profile description %q does not show sanitized form %q", profile, sanitized)
 	}
 }
+
+func TestPlaceholderValuesMatchResolve(t *testing.T) {
+	request := Request{
+		InputPath: filepath.Join("videos", "my movie.mp4"), Extension: ".mkv", Profile: "HEVC 720p",
+		Codec: "libx265", Width: 1280, Height: 720, Time: time.Date(2026, 3, 12, 14, 30, 5, 0, time.Local),
+		VideoSettings: "libx265_crf28", AudioSettings: "libopus_96k",
+	}
+	values := PlaceholderValues(request)
+	for key := range Placeholders {
+		value, ok := values[key]
+		if !ok {
+			t.Errorf("no value for {%s}", key)
+			continue
+		}
+		// Each value must be what Resolve substitutes on its own.
+		resolved, err := ResolveParts(filepath.Join("out", "x_{"+key+"}"), request)
+		if err != nil {
+			t.Fatalf("resolve {%s}: %v", key, err)
+		}
+		if want := filepath.Clean(filepath.Join("out", "x_"+value)); resolved != want {
+			t.Errorf("{%s}: value %q, Resolve gave %q", key, value, resolved)
+		}
+	}
+	if values["name"] != "my_movie" || values["dir"] != "videos" || values["ext"] != "mkv" {
+		t.Errorf("unexpected values: %v", values)
+	}
+
+	partial := PlaceholderValues(Request{Extension: "mkv", Profile: "p"})
+	for _, key := range []string{"dir", "name", "input_ext", "datetime", "date", "time"} {
+		if _, ok := partial[key]; ok {
+			t.Errorf("{%s} must be absent without an input and a time", key)
+		}
+	}
+	if partial["ext"] != "mkv" {
+		t.Errorf("profile-derived values must still be there: %v", partial)
+	}
+}

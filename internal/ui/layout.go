@@ -2,8 +2,6 @@ package ui
 
 import (
 	"image/color"
-	"sort"
-	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -14,7 +12,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"git.skobk.in/skobkin/yave/internal/profiles"
-	"git.skobk.in/skobkin/yave/internal/templates"
 )
 
 func (c *Controller) buildLayout() fyne.CanvasObject {
@@ -245,57 +242,6 @@ func (c *Controller) moreMenu() *fyne.Menu {
 
 func (c *Controller) showAbout() {
 	dialog.ShowInformation("About YAVE", windowTitle()+"\nA focused desktop FFmpeg transcoding frontend.\n\nShortcuts: "+shortcutHelp, c.window)
-}
-
-func (c *Controller) outputTemplateHelpButton() *widget.Button {
-	button := widget.NewButton("?", c.showOutputTemplateHelp)
-	button.Importance = widget.LowImportance
-	return button
-}
-
-// outputTemplateHelpText renders the template-help dialog body from
-// templates.Placeholders — the single source of truth — so the help
-// cannot drift from what Resolve actually accepts. Keys are listed
-// sorted, space-padded to a common width; the example block below is
-// hand-written prose the map cannot express.
-func outputTemplateHelpText() string {
-	keys := make([]string, 0, len(templates.Placeholders))
-	width := 0
-	for key := range templates.Placeholders {
-		keys = append(keys, key)
-		if len(key) > width {
-			width = len(key)
-		}
-	}
-	sort.Strings(keys)
-
-	var b strings.Builder
-	for _, key := range keys {
-		b.WriteString("{" + key + "}")
-		b.WriteString(strings.Repeat(" ", width-len(key)+2))
-		b.WriteString(templates.Placeholders[key])
-		b.WriteString("\n")
-	}
-	b.WriteString(`
-Template:
-{dir}/{name}_{profile}.{ext}
-
-Result (profile "HEVC VAAPI 720p CQ"):
-/home/user/Videos/movie_HEVC_VAAPI_720p_CQ.mkv`)
-	return b.String()
-}
-
-func (c *Controller) showOutputTemplateHelp() {
-	help := outputTemplateHelpText()
-	text := widget.NewMultiLineEntry()
-	text.SetText(help)
-	text.SetMinRowsVisible(16)
-	text.Disable()
-
-	helpDialog := dialog.NewCustom("Output template placeholders", "Close", text, c.window)
-	text.Wrapping = fyne.TextWrapWord
-	helpDialog.Resize(fyne.NewSize(760, 600))
-	helpDialog.Show()
 }
 
 func (c *Controller) profileBar() fyne.CanvasObject {

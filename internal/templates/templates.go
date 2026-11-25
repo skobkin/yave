@@ -85,26 +85,7 @@ func resolveTemplate(template string, values Request, checkInputCollision bool) 
 	}
 
 	inputPath := filepath.Clean(values.InputPath)
-	base := filepath.Base(inputPath)
-	inputExt := strings.TrimPrefix(filepath.Ext(base), ".")
-	name := strings.TrimSuffix(base, filepath.Ext(base))
-	ext := strings.TrimPrefix(values.Extension, ".")
-
-	components := map[string]string{
-		"name":      sanitize(name),
-		"ext":       sanitize(ext),
-		"input_ext": sanitize(inputExt),
-		"datetime":  values.Time.Format("20060102-150405"),
-		"date":      values.Time.Format("20060102"),
-		"time":      values.Time.Format("150405"),
-		"profile":   sanitize(values.Profile),
-		"codec":     sanitize(values.Codec),
-		"width":     sanitizeDimension(values.Width),
-		"height":    sanitizeDimension(values.Height),
-
-		"video_settings": sanitize(values.VideoSettings),
-		"audio_settings": sanitize(values.AudioSettings),
-	}
+	components := PlaceholderValues(values)
 
 	var resolveErr error
 	resolved := placeholderPattern.ReplaceAllStringFunc(template, func(token string) string {
@@ -112,9 +93,6 @@ func resolveTemplate(template string, values Request, checkInputCollision bool) 
 		if _, known := Placeholders[key]; !known {
 			resolveErr = fmt.Errorf("unknown output placeholder %q", token)
 			return token
-		}
-		if key == "dir" {
-			return filepath.Dir(inputPath)
 		}
 		return components[key]
 	})
@@ -138,6 +116,35 @@ func resolveTemplate(template string, values Request, checkInputCollision bool) 
 		}
 	}
 	return cleaned, nil
+}
+
+// PlaceholderValues returns what each placeholder expands to for values,
+// exactly as Resolve substitutes it. The input-derived placeholders (dir,
+// name, input_ext) are absent while InputPath is empty, and the clock ones
+// (datetime, date, time) while Time is zero.
+func PlaceholderValues(values Request) map[string]string {
+	components := map[string]string{
+		"ext":            sanitize(strings.TrimPrefix(values.Extension, ".")),
+		"profile":        sanitize(values.Profile),
+		"codec":          sanitize(values.Codec),
+		"width":          sanitizeDimension(values.Width),
+		"height":         sanitizeDimension(values.Height),
+		"video_settings": sanitize(values.VideoSettings),
+		"audio_settings": sanitize(values.AudioSettings),
+	}
+	if !values.Time.IsZero() {
+		components["datetime"] = values.Time.Format("20060102-150405")
+		components["date"] = values.Time.Format("20060102")
+		components["time"] = values.Time.Format("150405")
+	}
+	if values.InputPath != "" {
+		inputPath := filepath.Clean(values.InputPath)
+		base := filepath.Base(inputPath)
+		components["dir"] = filepath.Dir(inputPath)
+		components["name"] = sanitize(strings.TrimSuffix(base, filepath.Ext(base)))
+		components["input_ext"] = sanitize(strings.TrimPrefix(filepath.Ext(base), "."))
+	}
+	return components
 }
 
 // ValidateOutput rejects an empty output and an output that resolves to the

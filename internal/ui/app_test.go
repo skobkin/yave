@@ -2014,53 +2014,8 @@ func TestRateControlHintExplainsMode(t *testing.T) {
 	}
 }
 
-// TestOutputTemplateHelpText pins that the generated help lists every
-// templates.Placeholders key in sorted order with the example block,
-// and uses spaces rather than tabs for alignment.
-func TestOutputTemplateHelpText(t *testing.T) {
-	help := outputTemplateHelpText()
-
-	keys := make([]string, 0, len(templates.Placeholders))
-	for key := range templates.Placeholders {
-		keys = append(keys, key)
-		if !strings.Contains(help, "{"+key+"}") {
-			t.Errorf("help text misses placeholder {%s}:\n%s", key, help)
-		}
-	}
-	sorted := slices.Clone(keys)
-	slices.Sort(sorted)
-
-	// The keys appear in sorted order in the text.
-	position := -1
-	for _, key := range sorted {
-		at := strings.Index(help, "{"+key+"}")
-		if at < position {
-			t.Errorf("placeholder {%s} out of order in help text", key)
-		}
-		position = at
-	}
-
-	for _, want := range []string{
-		"Template:",
-		"{dir}/{name}_{profile}.{ext}",
-		`Result (profile "HEVC VAAPI 720p CQ"):`,
-		"/home/user/Videos/movie_HEVC_VAAPI_720p_CQ.mkv",
-	} {
-		if !strings.Contains(help, want) {
-			t.Errorf("help text misses %q:\n%s", want, help)
-		}
-	}
-	if strings.Contains(help, "\t") {
-		t.Errorf("help text must align with spaces, not tabs")
-	}
-	if strings.Contains(help, "movie_HEVC_720p") {
-		t.Errorf("help text still shows the fictional profile example:\n%s", help)
-	}
-}
-
-// TestTemplateHelpExampleResolves pins the help dialog's worked
-// example to actual Resolve behavior: the exact template and input the
-// example shows must produce the exact result it claims.
+// TestTemplateHelpExampleResolves pins the {profile} description's
+// example (shown in the placeholder picker) to actual Resolve behavior.
 func TestTemplateHelpExampleResolves(t *testing.T) {
 	got, err := templates.Resolve("{dir}/{name}_{profile}.{ext}", templates.Request{
 		InputPath: "/home/user/Videos/movie.mkv",
