@@ -36,8 +36,16 @@ steps:
       - export GOLANGCI_LINT_CACHE="$CACHE_ROOT/golangci-lint"
       - export XDG_CACHE_HOME="$CACHE_ROOT/xdg"
       - mkdir -p "$GOMODCACHE" "$GOCACHE" "$GOPATH/bin" "$GOLANGCI_LINT_CACHE" "$XDG_CACHE_HOME"
-      - apk add --no-cache git build-base pkgconf mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev wayland-dev libxkbcommon-dev
-      - golangci-lint run ./...
+      # cgo is disabled on purpose: golangci-lint only type-checks, but for
+      # packages that use cgo it has to run cgo, which needs a C compiler and
+      # the X11/Wayland/GL headers. The only such import is
+      # fyne.io/fyne/v2/app in cmd/yave (Fyne's GLFW driver and go-gl), and no
+      # code of ours is cgo-gated, so ./internal/... is checked identically
+      # with and without cgo. cmd/yave is a 26-line main and is left out here;
+      # the vet, test and build steps still compile it.
+      - export CGO_ENABLED=0
+      - apk add --no-cache git
+      - golangci-lint run ./internal/...
 
   vet:
     image: golang:1.26-alpine
