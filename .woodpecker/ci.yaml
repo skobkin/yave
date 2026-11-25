@@ -57,8 +57,11 @@ steps:
       - export GOCACHE="$CACHE_ROOT/gobuild"
       - export GOPATH="$CACHE_ROOT/gopath"
       - mkdir -p "$GOMODCACHE" "$GOCACHE" "$GOPATH/bin"
-      - apk add --no-cache build-base pkgconf mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev wayland-dev libxkbcommon-dev
-      - go vet ./...
+      # No cgo, same reasoning as in the lint step: only cmd/yave pulls in
+      # Fyne's cgo GL/GLFW driver, so ./internal/... needs no C toolchain or
+      # headers. The build step below still compiles cmd/yave with cgo.
+      - export CGO_ENABLED=0
+      - go vet ./internal/...
 
   test:
     image: golang:1.26-alpine
@@ -70,8 +73,11 @@ steps:
       - export GOCACHE="$CACHE_ROOT/gobuild"
       - export GOPATH="$CACHE_ROOT/gopath"
       - mkdir -p "$GOMODCACHE" "$GOCACHE" "$GOPATH/bin"
-      - apk add --no-cache build-base pkgconf mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev wayland-dev libxkbcommon-dev
-      - go test ./...
+      # No cgo, same reasoning as in the lint step: only cmd/yave pulls in
+      # Fyne's cgo GL/GLFW driver, so ./internal/... needs no C toolchain or
+      # headers. The build step below still compiles cmd/yave with cgo.
+      - export CGO_ENABLED=0
+      - go test ./internal/...
 
   build:
     image: golang:1.26-alpine
