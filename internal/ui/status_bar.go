@@ -9,7 +9,7 @@ import (
 // statusBarLayout arranges the bottom bar on one line:
 //
 //	idle:    [status ……………………………………] [why Start is blocked] [Start] [Cancel]
-//	running: [phase] [██████ 12% ░░░░░░] [0:01 / ~0:05 · 2.9× · 31 MB] [Cancel]
+//	running: [phase] [24% ━━━━━━──────── ⏱ 0:23 / ~1:33 ⏩ 1.9× 🖴 2.5 MB] [Cancel]
 //
 // The status and hint labels truncate with an ellipsis so a long error
 // cannot widen the window, but a truncating label's MinSize is a single
@@ -18,14 +18,13 @@ import (
 // their room, and lets the status take whatever is left while idle.
 type statusBarLayout struct {
 	status  *widget.Label     // run phase, or the last result while idle
-	bar     fyne.CanvasObject // visible only while a run goes
-	info    fyne.CanvasObject // fixed-width figures cell beside the bar
+	run     fyne.CanvasObject // the progress view; visible only while a run goes
 	hint    *widget.Label     // why Start is blocked; hidden while running
 	actions fyne.CanvasObject // Start / Cancel
 }
 
 func (l *statusBarLayout) objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{l.status, l.bar, l.info, l.hint, l.actions}
+	return []fyne.CanvasObject{l.status, l.run, l.hint, l.actions}
 }
 
 // textWidth is the width a label needs to show its whole text.
@@ -47,13 +46,10 @@ func (l *statusBarLayout) Layout(_ []fyne.CanvasObject, size fyne.Size) {
 	place(l.actions, size.Width-actionsW, actionsW)
 	right := size.Width - actionsW - gap // free space ends here
 
-	if l.bar.Visible() {
-		infoW := l.info.MinSize().Width
-		place(l.info, right-infoW, infoW)
-		right -= infoW + gap
-		statusW := min(textWidth(l.status), right/3)
+	if l.run.Visible() {
+		statusW := min(textWidth(l.status), right/4)
 		place(l.status, 0, statusW)
-		place(l.bar, statusW+gap, right-statusW-gap)
+		place(l.run, statusW+gap, right-statusW-gap)
 		return
 	}
 	if hintW := min(textWidth(l.hint), right/2); hintW > 0 {
@@ -68,7 +64,8 @@ func (l *statusBarLayout) MinSize(_ []fyne.CanvasObject) fyne.Size {
 	for _, o := range l.objects() {
 		height = max(height, o.MinSize().Height)
 	}
-	// Room for the figures, the actions and a usable bar.
-	width := l.info.MinSize().Width + l.actions.MinSize().Width + 120
+	// Room for the progress view (its figures and a usable bar) and the
+	// actions.
+	width := l.run.MinSize().Width + l.actions.MinSize().Width
 	return fyne.NewSize(width, height)
 }

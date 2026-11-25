@@ -11,41 +11,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/systray"
-
-	"git.skobk.in/skobkin/yave/internal/model"
 )
-
-// runProgressText renders the figures beside the progress bar, which
-// shows the percentage itself:
-//
-//	0:01 / ~0:05 · 2.9× · 31.0 MB
-//
-// Elapsed time comes first; with a known duration and enough progress it
-// is followed by the estimated total. With an unknown duration the
-// encoded position replaces the estimate. Speed and the output size so far
-// follow when FFmpeg reports them. The bitrate is left to the log: early
-// in a run it swings wildly and reads as noise.
-func runProgressText(p model.Progress, elapsed time.Duration, durationKnown bool) string {
-	timing := formatRunClock(elapsed)
-	if durationKnown {
-		if eta, ok := estimateRemaining(p.Percentage, elapsed); ok {
-			timing += " / ~" + formatRunClock(elapsed+eta)
-		}
-	} else {
-		timing += " · " + formatRunClock(p.OutTime) + " encoded"
-	}
-	parts := []string{timing}
-	if speed := formatSpeed(p.Speed); speed != "" {
-		parts = append(parts, speed)
-	}
-	if p.TotalSize > 0 {
-		parts = append(parts, formatByteSize(p.TotalSize))
-	}
-	return strings.Join(parts, " · ")
-}
-
-// progressInfoWidthSample is the widest figures text the label must fit.
-const progressInfoWidthSample = "9:59:59 / ~9:59:59 · 999.9× · 1023.9 MB"
 
 // runPhaseText names what a running export is doing: "Converting" for a
 // single command, else the current stage's label ("Segment 2 of 3",

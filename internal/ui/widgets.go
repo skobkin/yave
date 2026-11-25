@@ -286,11 +286,8 @@ func (c *Controller) createWidgets() {
 		}
 	}
 
-	c.progress = widget.NewProgressBar()
-	c.progressInfo = widget.NewLabel("")
-	c.progressInfo.Truncation = fyne.TextTruncateEllipsis
-	c.progress.Hide()
-	c.progressInfo.Hide()
+	c.runView = newRunProgressView()
+	c.runView.setVisible(false)
 	c.log = widget.NewMultiLineEntry()
 	c.log.Disable()
 	// Word wrapping a rapidly changing FFmpeg log makes Entry repeatedly lay

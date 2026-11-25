@@ -329,16 +329,15 @@ type Controller struct {
 	// pointers, so the row's HBox must be stable across
 	// videoFormItems calls or every state change would rebuild the
 	// form (see formItemsSignature).
-	aspectFlags  *fyne.Container
-	command      *widget.Entry
-	progress     *widget.ProgressBar
-	progressInfo *widget.Label
-	log          *widget.Entry
-	start        *widget.Button
-	cancel       *widget.Button
-	tabs         *container.AppTabs
-	outputTab    *container.TabItem
-	trimTab      *container.TabItem // Space plays while it is shown
+	aspectFlags *fyne.Container
+	command     *widget.Entry
+	runView     *runProgressView
+	log         *widget.Entry
+	start       *widget.Button
+	cancel      *widget.Button
+	tabs        *container.AppTabs
+	outputTab   *container.TabItem
+	trimTab     *container.TabItem // Space plays while it is shown
 }
 
 func New(a fyne.App, initialInput string) (*Controller, error) {

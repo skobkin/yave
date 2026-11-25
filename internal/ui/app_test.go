@@ -4,7 +4,6 @@ import (
 	"errors"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -21,28 +20,23 @@ import (
 	"git.skobk.in/skobkin/yave/internal/validation"
 )
 
-func TestProgressInfoHasFixedWidthAndDoesNotResizeProgressBar(t *testing.T) {
+func TestProgressFiguresDoNotResizeTheBar(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
 
 	c := testController()
 	c.createWidgets()
-	// createWidgets hides the progress widgets by default (issue #16);
-	// show them explicitly so the bar takes part in layout measurement.
-	c.progress.Show()
-	c.progressInfo.Show()
+	c.setProgressVisible(true)
 	statusBar := c.buildStatusBar()
+	c.runView.set(runFigures{Fraction: 0.01, Percent: "1%", Time: "0:01"})
 	statusBar.Resize(fyne.NewSize(1050, statusBar.MinSize().Height))
-	initialWidth := c.progress.Size().Width
+	initialWidth := c.runView.bar.Size().Width
 
-	c.progressInfo.SetText(strings.Repeat("unexpectedly long progress text ", 5))
+	c.runView.set(runFigures{Fraction: 1, Percent: "100%", Time: runTimeSample, Speed: runSpeedSample, Size: runSizeSample})
 	statusBar.Layout.Layout(statusBar.Objects, statusBar.Size())
 
-	if c.progressInfo.Truncation != fyne.TextTruncateEllipsis {
-		t.Fatalf("progress info truncation = %v, want ellipsis", c.progressInfo.Truncation)
-	}
-	if c.progress.Size().Width != initialWidth {
-		t.Fatalf("progress width = %v after update, want %v", c.progress.Size().Width, initialWidth)
+	if got := c.runView.bar.Size().Width; got != initialWidth {
+		t.Fatalf("bar width = %v after the figures grew, want %v", got, initialWidth)
 	}
 }
 
@@ -53,11 +47,8 @@ func TestProgressAndInfoAreHiddenAfterCreateWidgets(t *testing.T) {
 	c := testController()
 	c.createWidgets()
 
-	if c.progress.Visible() {
-		t.Fatal("progress bar should be hidden after createWidgets")
-	}
-	if c.progressInfo.Visible() {
-		t.Fatal("progress info should be hidden after createWidgets")
+	if c.runView.visible() {
+		t.Fatal("the progress view should be hidden after createWidgets")
 	}
 }
 
@@ -65,26 +56,21 @@ func TestProgressVisibilityFlipsAcrossRunLifecycle(t *testing.T) {
 	app := fynetest.NewApp()
 	defer app.Quit()
 
-	c := &Controller{
-		status:       widget.NewLabel("Idle"),
-		progress:     widget.NewProgressBar(),
-		progressInfo: widget.NewLabel(""),
-		log:          widget.NewMultiLineEntry(),
-	}
+	c := testController()
 	c.createWidgets()
 
-	if c.progress.Visible() || c.progressInfo.Visible() {
-		t.Fatal("progress widgets should be hidden at idle")
+	if c.runView.visible() || c.status.TextStyle.Bold {
+		t.Fatal("idle: no progress view, plain status")
 	}
 
 	c.setProgressVisible(true)
-	if !c.progress.Visible() || !c.progressInfo.Visible() {
-		t.Fatal("progress widgets should be visible after Show")
+	if !c.runView.visible() || !c.status.TextStyle.Bold {
+		t.Fatal("running: progress view shown, phase in bold")
 	}
 
 	c.setProgressVisible(false)
-	if c.progress.Visible() || c.progressInfo.Visible() {
-		t.Fatal("progress widgets should be hidden after Hide")
+	if c.runView.visible() || c.status.TextStyle.Bold {
+		t.Fatal("finished: progress view hidden, plain status again")
 	}
 }
 
@@ -151,15 +137,14 @@ func TestShowRunErrorSelectsRunTab(t *testing.T) {
 	defer app.Quit()
 
 	c := &Controller{
-		status:       widget.NewLabel("Idle"),
-		progressInfo: widget.NewLabel("old progress"),
-		progress:     widget.NewProgressBar(),
-		log:          widget.NewMultiLineEntry(),
+		status:  widget.NewLabel("Idle"),
+		runView: newRunProgressView(),
+		log:     widget.NewMultiLineEntry(),
 	}
 	otherTab := container.NewTabItem("Input", widget.NewLabel("input"))
 	c.outputTab = container.NewTabItem("Run", widget.NewLabel("run"))
 	c.tabs = container.NewAppTabs(otherTab, c.outputTab)
-	c.progress.SetValue(0.5)
+	c.runView.set(runFigures{Fraction: 0.5, Percent: "50%", Time: "0:10"})
 
 	c.showRunError("Validation failed", "Error: input path is required")
 
@@ -169,11 +154,8 @@ func TestShowRunErrorSelectsRunTab(t *testing.T) {
 	if c.status.Text != "Validation failed" {
 		t.Fatalf("status = %q", c.status.Text)
 	}
-	if c.progressInfo.Text != "" {
-		t.Fatalf("progress info = %q, want empty", c.progressInfo.Text)
-	}
-	if c.progress.Value != 0 {
-		t.Fatalf("progress = %v, want 0", c.progress.Value)
+	if c.runView.figures != (runFigures{}) || c.runView.bar.Value != 0 {
+		t.Fatalf("progress = %+v (bar %v), want cleared", c.runView.figures, c.runView.bar.Value)
 	}
 	if c.log.Text != "Error: input path is required" {
 		t.Fatalf("output = %q", c.log.Text)
@@ -185,9 +167,8 @@ func TestSetRunResultSelectsRunTabOnFailure(t *testing.T) {
 	defer app.Quit()
 
 	c := &Controller{
-		status:       widget.NewLabel("Running"),
-		progress:     widget.NewProgressBar(),
-		progressInfo: widget.NewLabel(""),
+		status:  widget.NewLabel("Running"),
+		runView: newRunProgressView(),
 	}
 	otherTab := container.NewTabItem("Input", widget.NewLabel("input"))
 	c.outputTab = container.NewTabItem("Run", widget.NewLabel("run"))

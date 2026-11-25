@@ -5,6 +5,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	fynetest "fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 )
 
 // Regression: the status and Start-hint labels truncate, and a truncating
@@ -35,18 +36,40 @@ func TestStatusBarGivesLabelsTheirTextWidth(t *testing.T) {
 	setShown(c.startHint, false)
 	setShown(c.start, false)
 	c.status.SetText("Segment 2 of 3")
-	c.progressInfo.SetText(progressInfoWidthSample)
+	c.runView.set(runFigures{Fraction: 0.24, Percent: "24%", Time: runTimeSample, Speed: runSpeedSample, Size: runSizeSample})
 	bar.Refresh()
 	if got, need := c.status.Size().Width, textWidth(c.status); got < need {
 		t.Fatalf("phase width %v < text width %v", got, need)
 	}
 	statusEnd := c.status.Position().X + c.status.Size().Width
-	if c.progress.Position().X < statusEnd || c.progress.Size().Width < 300 {
-		t.Fatalf("bar at %v width %v must follow the phase (ends %v) and fill the row",
-			c.progress.Position().X, c.progress.Size().Width, statusEnd)
+	view := c.runView.box
+	if view.Position().X < statusEnd || c.runView.bar.Size().Width < 300 {
+		t.Fatalf("progress view at %v (bar width %v) must follow the phase (ends %v) and leave the bar room",
+			view.Position().X, c.runView.bar.Size().Width, statusEnd)
 	}
-	// textWidth adds a 1 px rounding margin the cell (a label's MinSize) lacks.
-	if c.progressInfo.Size().Width < textWidth(c.progressInfo)-1 {
-		t.Fatalf("figures cell %v narrower than %q", c.progressInfo.Size().Width, c.progressInfo.Text)
+	for _, value := range []*widget.Label{c.runView.percent, c.runView.time, c.runView.speed, c.runView.size} {
+		// textWidth adds a 1 px rounding margin a label's MinSize lacks.
+		if value.Size().Width < textWidth(value)-1 {
+			t.Errorf("cell %v narrower than %q", value.Size().Width, value.Text)
+		}
+	}
+}
+
+func TestGrowCellWidensButNeverShrinks(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+	label := widget.NewLabel("0:01")
+	g := &growCell{widest: 50}
+	if w := g.MinSize([]fyne.CanvasObject{label}).Width; w != 50 {
+		t.Fatalf("short text: width %v, want the sample's 50", w)
+	}
+	label.SetText(runTimeSample + runTimeSample)
+	wide := g.MinSize([]fyne.CanvasObject{label}).Width
+	if wide <= 50 {
+		t.Fatalf("long text must widen the cell, got %v", wide)
+	}
+	label.SetText("0:02")
+	if w := g.MinSize([]fyne.CanvasObject{label}).Width; w != wide {
+		t.Fatalf("the cell shrank back to %v from %v", w, wide)
 	}
 }

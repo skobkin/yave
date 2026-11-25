@@ -253,8 +253,7 @@ func (c *Controller) showValidationErrors(message, tab string) {
 
 func (c *Controller) showRunError(status, message string) {
 	c.status.SetText(status)
-	c.progressInfo.SetText("")
-	c.progress.SetValue(0)
+	c.runView.reset()
 	c.setLogText(message)
 	c.tabs.Select(c.outputTab)
 	c.setProgressVisible(false)
@@ -285,9 +284,8 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 	c.cancel.SetText("Cancel")
 	c.cancel.Enable()
 	c.status.SetText(runPhaseText(job.stages[0].Label, len(job.stages)))
-	c.progress.SetValue(0)
+	c.runView.reset()
 	c.setTrayProgress(0)
-	c.progressInfo.SetText("")
 	c.setProgressVisible(true)
 	c.hideRunActions()
 	c.setRunProgressTitle(0)
@@ -361,9 +359,8 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 			OnProgress: func(p model.Progress) {
 				phase := runPhaseText(job.stages[min(stagesDone, len(job.stages)-1)].Label, len(job.stages))
 				c.dispatchUI(func() {
-					c.progress.SetValue(p.Percentage)
+					c.runView.set(runFiguresFor(p, time.Since(runStarted), durationKnown))
 					c.setTrayProgress(p.Percentage)
-					c.progressInfo.SetText(runProgressText(p, time.Since(runStarted), durationKnown))
 					// "Canceling…" / "Terminating…" own the line once asked for.
 					if c.runControl == control && c.cancelStage == cancellationRunning && c.status.Text != phase {
 						c.status.SetText(phase)
@@ -456,7 +453,6 @@ func (c *Controller) setRunResult(err error, published, total int, elapsed time.
 	switch err {
 	case nil:
 		c.status.SetText(formatRunSummary(elapsed, outputs, outputSizes(outputs)))
-		c.progress.SetValue(1)
 		c.showRunActions(outputs)
 	case context.Canceled: //nolint:errorlint // context.Canceled is a sentinel; == comparison is intentional
 		c.status.SetText(partialStatus("Canceled", published, total))
@@ -479,17 +475,14 @@ func partialStatus(base string, published, total int) string {
 	return fmt.Sprintf("%s (%d of %d parts written)", base, published, total)
 }
 
-// setProgressVisible shows or hides the progress bar and its paired
-// progressInfo label together. They are visually coupled in buildStatusBar,
-// so the bar must never appear without its sibling.
+// setProgressVisible switches the status bar between a run (bold phase,
+// progress view) and idle (the last result in plain text).
 func (c *Controller) setProgressVisible(visible bool) {
-	if visible {
-		c.progress.Show()
-		c.progressInfo.Show()
-		return
+	c.runView.setVisible(visible)
+	if c.status.TextStyle.Bold != visible {
+		c.status.TextStyle.Bold = visible
+		c.status.Refresh()
 	}
-	c.progress.Hide()
-	c.progressInfo.Hide()
 }
 
 func (c *Controller) cancelConversion() {

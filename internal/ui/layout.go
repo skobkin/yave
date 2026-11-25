@@ -202,11 +202,9 @@ func trimBoundariesRow(c *Controller) fyne.CanvasObject {
 }
 
 func (c *Controller) buildStatusBar() *fyne.Container {
-	progressInfoSize := widget.NewLabel(progressInfoWidthSample).MinSize()
 	l := &statusBarLayout{
 		status:  c.status,
-		bar:     c.progress,
-		info:    container.NewGridWrap(progressInfoSize, c.progressInfo),
+		run:     c.runView.box,
 		hint:    c.startHint,
 		actions: container.NewHBox(c.start, c.cancel),
 	}

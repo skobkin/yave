@@ -8,7 +8,7 @@ import (
 	"git.skobk.in/skobkin/yave/internal/model"
 )
 
-func TestRunProgressText(t *testing.T) {
+func TestRunFiguresFor(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name    string
@@ -20,11 +20,11 @@ func TestRunProgressText(t *testing.T) {
 		{
 			"known duration: elapsed / estimated total, speed, size",
 			model.Progress{Percentage: 0.25, Speed: "2.86x", Bitrate: "3500.0kbits/s", TotalSize: 31 << 20},
-			time.Minute, true, "1:00 / ~4:00 · 2.9× · 31.0 MB",
+			time.Minute, true, "25% · 1:00 / ~4:00 · 2.9× · 31.0 MB",
 		},
 		{
 			"too early for an estimate", model.Progress{Percentage: 0.001, Speed: "N/A", Bitrate: "N/A"},
-			3 * time.Second, true, "0:03",
+			3 * time.Second, true, "0% · 0:03",
 		},
 		{
 			"unknown duration shows the encoded position", model.Progress{OutTime: 80 * time.Second, Speed: "1.5x"},
@@ -32,17 +32,29 @@ func TestRunProgressText(t *testing.T) {
 		},
 		{
 			"complete has no estimate", model.Progress{Percentage: 1},
-			time.Hour + time.Minute, true, "1:01:00",
+			time.Hour + time.Minute, true, "100% · 1:01:00",
 		},
 		{
 			"unparsable speed is shown as reported", model.Progress{Speed: "fast"},
-			time.Second, true, "0:01 · fast",
+			time.Second, true, "0% · 0:01 · fast",
 		},
 	}
 	for _, tt := range tests {
-		if got := runProgressText(tt.p, tt.elapsed, tt.known); got != tt.want {
+		if got := runFiguresFor(tt.p, tt.elapsed, tt.known).String(); got != tt.want {
 			t.Errorf("%s:\n got %q\nwant %q", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestRunFiguresFractionIsClamped(t *testing.T) {
+	t.Parallel()
+	for _, pct := range []float64{-1, 2, math.NaN()} {
+		if f := runFiguresFor(model.Progress{Percentage: pct}, time.Second, true).Fraction; f < 0 || f > 1 || f != f {
+			t.Errorf("fraction for %v = %v", pct, f)
+		}
+	}
+	if f := runFiguresFor(model.Progress{Percentage: 0.5}, time.Second, false); f.Fraction != 0 || f.Percent != "" {
+		t.Errorf("an unknown duration has no fraction or percent: %+v", f)
 	}
 }
 
