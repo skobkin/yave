@@ -98,52 +98,57 @@ func (c *wallClock) Now() time.Duration {
 type countingReader struct {
 	r io.Reader
 
-	mu    sync.Mutex
-	n     int64
-	eof   bool
-	eofAt time.Time
+	mu  sync.Mutex
+	n   int64
+	eof bool
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.mu.Lock()
 	c.n += int64(n)
-	if err != nil && !c.eof {
-		c.eof, c.eofAt = true, time.Now()
+	if err != nil {
+		c.eof = true
 	}
 	c.mu.Unlock()
 	return n, err
 }
 
-func (c *countingReader) snapshot() (n int64, eof bool, eofAt time.Time) {
+func (c *countingReader) snapshot() (n int64, eof bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.n, c.eof, c.eofAt
+	return c.n, c.eof
 }
 
 // audioClock derives the media position from the audio device: bytes
 // handed to the sink minus what it still buffers. Once the audio
-// stream has ended (shorter than the video, or the window's end) it
-// continues on the wall clock from that point so video never stalls.
+// stream has ended (shorter than the video, or the window's end) and
+// the sink has played all of it, it continues on the wall clock from
+// that moment so video never stalls. The sink reads ahead, so the
+// moment the source ended is too early to extend from: the clock would
+// jump forward by the read-ahead and drop the last frames.
 type audioClock struct {
 	from    time.Duration
 	reader  *countingReader
 	playing AudioPlayback
 	now     func() time.Time
+
+	mu        sync.Mutex
+	drainedAt time.Time // when everything read was first seen played
 }
 
 func (c *audioClock) Now() time.Duration {
-	n, eof, eofAt := c.reader.snapshot()
-	played := n - int64(c.playing.Buffered())
-	if played < 0 {
-		played = 0
+	n, eof := c.reader.snapshot()
+	buffered := int64(c.playing.Buffered())
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if eof && buffered == 0 {
+		if c.drainedAt.IsZero() {
+			c.drainedAt = c.now()
+		}
+		return c.from + bytesToDuration(n) + c.now().Sub(c.drainedAt)
 	}
-	pos := c.from + bytesToDuration(played)
-	if eof && c.playing.Buffered() == 0 {
-		// Everything has played; extend with real time since the end.
-		return c.from + bytesToDuration(n) + c.now().Sub(eofAt)
-	}
-	return pos
+	return c.from + bytesToDuration(max(n-buffered, 0))
 }
 
 func bytesToDuration(n int64) time.Duration {

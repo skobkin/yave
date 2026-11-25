@@ -81,12 +81,21 @@ func TestAudioClockContinuesOnWallClockAfterEOF(t *testing.T) {
 	if _, err := io.ReadAll(reader); err != nil {
 		t.Fatal(err)
 	}
-	_, _, eofAt := reader.snapshot()
-	clk := &audioClock{
-		from: 0, reader: reader, playing: &fakePlayback{},
-		now: func() time.Time { return eofAt.Add(300 * time.Millisecond) },
+	base := time.Unix(1000, 0)
+	now := base
+	// The sink read the whole stream ahead; half of it is still to play.
+	playing := &fakePlayback{buffered: oneSecond / 2}
+	clk := &audioClock{from: 0, reader: reader, playing: playing, now: func() time.Time { return now }}
+	now = base.Add(5 * time.Second) // long after the source ended
+	if got, want := clk.Now(), 500*time.Millisecond; got != want {
+		t.Errorf("Now() while the sink still plays = %v, want %v (no jump to the source's end)", got, want)
 	}
+	playing.buffered = 0
+	if got, want := clk.Now(), time.Second; got != want {
+		t.Errorf("Now() once played out = %v, want %v", got, want)
+	}
+	now = now.Add(300 * time.Millisecond)
 	if got, want := clk.Now(), 1300*time.Millisecond; got != want {
-		t.Errorf("Now() after audio EOF = %v, want %v", got, want)
+		t.Errorf("Now() 300ms after playing out = %v, want %v", got, want)
 	}
 }

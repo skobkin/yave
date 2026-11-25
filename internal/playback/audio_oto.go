@@ -14,12 +14,11 @@ var (
 	otoErr  error
 )
 
-// NewAudioSink returns the platform audio output backed by oto. The
-// output device is opened lazily on the first Start — one context per
-// process, as oto requires — and a failure to open it is reported by
-// Start, so callers can fall back to video-only playback.
-func NewAudioSink() AudioSink { return otoSink{} }
-
+// otoSink is the audio output backed by oto: the platform output outside
+// Linux, and the fallback there without a PulseAudio server. The output
+// device is opened lazily on the first Start — one context per process,
+// as oto requires — and a failure to open it is reported by Start, so
+// callers can fall back to video-only playback.
 type otoSink struct{}
 
 func (otoSink) Start(r io.Reader, gain float64) (AudioPlayback, error) {
