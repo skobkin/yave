@@ -124,8 +124,7 @@ func (c *Controller) createWidgets() {
 	c.aspectFlags = container.NewHBox(c.keepAspect, c.noUpscale)
 	c.rebuildVideoForm()
 
-	c.command = widget.NewMultiLineEntry()
-	c.command.Disable()
+	c.command = newReadOnlyText()
 	c.command.Wrapping = fyne.TextWrapWord
 	c.command.SetMinRowsVisible(3)
 
@@ -288,8 +287,7 @@ func (c *Controller) createWidgets() {
 
 	c.runView = newRunProgressView()
 	c.runView.setVisible(false)
-	c.log = widget.NewMultiLineEntry()
-	c.log.Disable()
+	c.log = newReadOnlyText()
 	// Word wrapping a rapidly changing FFmpeg log makes Entry repeatedly lay
 	// out thousands of fragments on the UI thread. Horizontal scrolling is a
 	// much better tradeoff for machine-generated output.

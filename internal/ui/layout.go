@@ -176,11 +176,11 @@ func (c *Controller) outputTabContent() fyne.CanvasObject {
 		c.runResult,
 		widget.NewSeparator(),
 		container.NewHBox(heading("Command"), layout.NewSpacer(), c.copyCommand),
-		c.command,
+		readOnlyText(c.command),
 		widget.NewSeparator(),
 		container.NewHBox(heading("Log"), layout.NewSpacer(), c.logFollow, c.openLog),
 	)
-	return container.NewBorder(top, nil, nil, nil, c.log)
+	return container.NewBorder(top, nil, nil, nil, readOnlyText(c.log))
 }
 
 // trimBoundariesRow lays the boundary fields out on a single line: In
