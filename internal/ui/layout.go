@@ -61,40 +61,18 @@ func (c *Controller) buildLayout() fyne.CanvasObject {
 	trimTab := container.NewBorder(nil, controls, nil, nil, trimPreviewSection(c))
 	c.trimControlsBox, c.trimTabBox = controls, trimTab
 
-	outputTab := container.NewVBox(
-		widget.NewForm(
-			widget.NewFormItem("Container", c.container),
-			widget.NewFormItem("Output template", container.NewBorder(
-				nil, nil, nil, c.outputTemplateHelpButton(), c.output,
-			)),
-		),
-		widget.NewCard("Resolved output", "", c.outputPreview),
-	)
-
 	videoTab := container.NewVScroll(container.NewVBox(streamIncludeRow(c.includeVideo, c.includeVideoHint), c.videoFormBox))
 
 	audioTab := container.NewVScroll(container.NewVBox(streamIncludeRow(c.includeAudio, c.includeAudioHint), c.audioFormBox))
 
-	runTab := container.NewBorder(
-		container.NewVBox(
-			container.NewHBox(widget.NewLabel("Command"), layout.NewSpacer(), c.copyCommand),
-			c.command,
-			container.NewHBox(widget.NewLabel("Output"), layout.NewSpacer(), c.openFolder, c.playOutput, c.logFollow, c.openLog),
-			c.runResult,
-		),
-		nil, nil, nil,
-		c.log,
-	)
-
-	c.runTab = container.NewTabItem("Run", runTab)
+	c.outputTab = container.NewTabItem("Output", c.outputTabContent())
 	c.trimTab = container.NewTabItem("Trim", trimTab)
 	c.tabs = container.NewAppTabs(
 		container.NewTabItem("Input", inputTab),
 		c.trimTab,
-		container.NewTabItem("Output", outputTab),
 		container.NewTabItem("Video", videoTab),
 		container.NewTabItem("Audio & Subtitles", audioTab),
-		c.runTab,
+		c.outputTab,
 	)
 	return container.NewBorder(c.profileBar(), c.buildStatusBar(), nil, nil, c.tabs)
 }
@@ -175,6 +153,37 @@ func trimScenesRow(c *Controller) fyne.CanvasObject {
 	c.trimScenesBox = container.NewHBox(c.sceneDetect, c.sceneThresholdBox, c.sceneStatus)
 	c.trimScenesBox.Hide()
 	return c.trimScenesBox
+}
+
+// outputTabContent is the last tab: where the result goes and how it is
+// produced. It merges the former Output tab (container, file name
+// template, resolved path) with the former Run tab (command, post-run
+// actions, log), which alone held too little to earn a tab each. The
+// settings lead so the container and template stay where users look for
+// them; the log takes all remaining height.
+func (c *Controller) outputTabContent() fyne.CanvasObject {
+	heading := func(text string) *widget.Label {
+		return widget.NewLabelWithStyle(text, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	}
+	settings := widget.NewForm(
+		widget.NewFormItem("Container", c.container),
+		widget.NewFormItem("Output template", container.NewBorder(
+			nil, nil, nil, c.outputTemplateHelpButton(), c.output,
+		)),
+		widget.NewFormItem("Writes to", container.NewBorder(
+			nil, nil, nil, container.NewHBox(c.openFolder, c.playOutput), c.outputPreview,
+		)),
+	)
+	top := container.NewVBox(
+		settings,
+		c.runResult,
+		widget.NewSeparator(),
+		container.NewHBox(heading("Command"), layout.NewSpacer(), c.copyCommand),
+		c.command,
+		widget.NewSeparator(),
+		container.NewHBox(heading("Log"), layout.NewSpacer(), c.logFollow, c.openLog),
+	)
+	return container.NewBorder(top, nil, nil, nil, c.log)
 }
 
 // trimBoundariesRow lays the boundary fields out on a single line: In

@@ -269,7 +269,7 @@ func (c *Controller) showRunError(status, message string) {
 	c.progressInfo.SetText("")
 	c.progress.SetValue(0)
 	c.setLogText(message)
-	c.tabs.Select(c.runTab)
+	c.tabs.Select(c.outputTab)
 	c.setProgressVisible(false)
 }
 
@@ -475,7 +475,7 @@ func (c *Controller) setRunResult(err error, published, total int, elapsed time.
 		c.status.SetText(partialStatus("Canceled", published, total))
 	default:
 		c.status.SetText(partialStatus("Failed: "+err.Error(), published, total))
-		c.tabs.Select(c.runTab)
+		c.tabs.Select(c.outputTab)
 	}
 	c.setProgressVisible(false)
 }

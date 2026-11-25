@@ -6,7 +6,7 @@ import (
 )
 
 // shortcutHelp lists the window-level shortcuts (shown in About).
-const shortcutHelp = "Ctrl+O open input · Ctrl+Enter start · Ctrl+S save profile · Ctrl+1…6 switch tabs · Space play/pause on the Trim tab"
+const shortcutHelp = "Ctrl+O open input · Ctrl+Enter start · Ctrl+S save profile · Ctrl+1…5 switch tabs · Space play/pause on the Trim tab"
 
 // modalOpen reports whether a dialog or popup is on top of the window.
 func (c *Controller) modalOpen() bool {
@@ -32,7 +32,7 @@ func (c *Controller) registerShortcuts() {
 	add(fyne.KeyReturn, c.startFromShortcut)
 	add(fyne.KeyEnter, c.startFromShortcut)
 	add(fyne.KeyS, c.saveCurrentProfile)
-	for i, key := range []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6} {
+	for i, key := range []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5} {
 		add(key, func() { c.selectTabIndex(i) })
 	}
 	// Space plays and pauses on the Trim tab when no widget has the focus

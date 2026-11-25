@@ -157,13 +157,13 @@ func TestShowRunErrorSelectsRunTab(t *testing.T) {
 		log:          widget.NewMultiLineEntry(),
 	}
 	otherTab := container.NewTabItem("Input", widget.NewLabel("input"))
-	c.runTab = container.NewTabItem("Run", widget.NewLabel("run"))
-	c.tabs = container.NewAppTabs(otherTab, c.runTab)
+	c.outputTab = container.NewTabItem("Run", widget.NewLabel("run"))
+	c.tabs = container.NewAppTabs(otherTab, c.outputTab)
 	c.progress.SetValue(0.5)
 
 	c.showRunError("Validation failed", "Error: input path is required")
 
-	if c.tabs.Selected() != c.runTab {
+	if c.tabs.Selected() != c.outputTab {
 		t.Fatal("Run tab was not selected")
 	}
 	if c.status.Text != "Validation failed" {
@@ -190,12 +190,12 @@ func TestSetRunResultSelectsRunTabOnFailure(t *testing.T) {
 		progressInfo: widget.NewLabel(""),
 	}
 	otherTab := container.NewTabItem("Input", widget.NewLabel("input"))
-	c.runTab = container.NewTabItem("Run", widget.NewLabel("run"))
-	c.tabs = container.NewAppTabs(otherTab, c.runTab)
+	c.outputTab = container.NewTabItem("Run", widget.NewLabel("run"))
+	c.tabs = container.NewAppTabs(otherTab, c.outputTab)
 
 	c.setRunResult(errors.New("FFmpeg failed: exit status 1"), 0, 1, 0, nil)
 
-	if c.tabs.Selected() != c.runTab {
+	if c.tabs.Selected() != c.outputTab {
 		t.Fatal("Run tab was not selected")
 	}
 	if c.status.Text != "Failed: FFmpeg failed: exit status 1" {

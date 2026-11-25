@@ -337,7 +337,7 @@ type Controller struct {
 	start        *widget.Button
 	cancel       *widget.Button
 	tabs         *container.AppTabs
-	runTab       *container.TabItem
+	outputTab    *container.TabItem
 	trimTab      *container.TabItem // Space plays while it is shown
 }
 

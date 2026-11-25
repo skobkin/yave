@@ -26,7 +26,7 @@ func fire(c *Controller, key fyne.KeyName) {
 
 func TestShortcutsSwitchTabs(t *testing.T) {
 	c := shortcutController(t)
-	for i, key := range []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6} {
+	for i, key := range []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5} {
 		fire(c, key)
 		if got := c.tabs.SelectedIndex(); got != i {
 			t.Fatalf("Ctrl+%d selected tab %d, want %d", i+1, got, i)

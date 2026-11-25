@@ -61,8 +61,8 @@ func exportTestController(t *testing.T) (*Controller, string, <-chan func()) {
 	c.profile.Selected = "test"
 	c.container.Selected = model.ContainerMKV
 	c.output.Text = "{dir}/{name}_test.{ext}"
-	c.runTab = container.NewTabItem("Run", widget.NewLabel("run"))
-	c.tabs = container.NewAppTabs(container.NewTabItem("Input", widget.NewLabel("input")), c.runTab)
+	c.outputTab = container.NewTabItem("Run", widget.NewLabel("run"))
+	c.tabs = container.NewAppTabs(container.NewTabItem("Input", widget.NewLabel("input")), c.outputTab)
 	return c, dir, updates
 }
 

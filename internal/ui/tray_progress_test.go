@@ -66,7 +66,7 @@ func TestSetRunResultResetsTrayProgressForEveryOutcome(t *testing.T) {
 				status:       widget.NewLabel("Running"),
 				progress:     progress,
 				progressInfo: progressInfo,
-				runTab:       runTab,
+				outputTab:    runTab,
 				tabs: container.NewAppTabs(
 					container.NewTabItem("Input", widget.NewLabel("input")),
 					runTab,
