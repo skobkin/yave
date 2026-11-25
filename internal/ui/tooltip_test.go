@@ -63,6 +63,28 @@ func TestTooltipScheduleAndCancel(t *testing.T) {
 	}
 }
 
+// Regression: Container.Show does not repaint, so on an idle window the
+// bubble stayed invisible until something unrelated redrew the canvas.
+func TestTooltipShowRepaintsTheBubble(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+	l := newTooltipLayer()
+	var repainted []fyne.CanvasObject
+	l.repaint = func(o fyne.CanvasObject) { repainted = append(repainted, o) }
+	anchor := newTipButton(l, nil, "Zoom in", func() {})
+	win := test.NewWindow(l.wrap(anchor))
+	defer win.Close()
+	win.Resize(fyne.NewSize(300, 200))
+
+	l.show(anchor, "Zoom in")
+	if l.bubble.Hidden {
+		t.Fatal("bubble must be shown")
+	}
+	if len(repainted) != 1 || repainted[0] != l.bubble {
+		t.Fatalf("show must repaint the bubble, repainted %v", repainted)
+	}
+}
+
 func TestTipButtonHoverSchedulesAndMouseOutHides(t *testing.T) {
 	app := test.NewApp()
 	defer app.Quit()

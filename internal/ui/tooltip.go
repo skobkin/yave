@@ -35,6 +35,8 @@ type tooltipLayer struct {
 
 	// dispatch runs a function on the UI thread; nil uses fyne.Do.
 	dispatch func(func())
+	// repaint redraws the shown bubble; nil uses its canvas's Refresh.
+	repaint func(fyne.CanvasObject)
 }
 
 func newTooltipLayer() *tooltipLayer {
@@ -106,6 +108,15 @@ func (l *tooltipLayer) show(anchor fyne.CanvasObject, text string) {
 		driver.AbsolutePositionForObject(anchor).Subtract(origin), anchor.Size(), size, l.layer.Size())
 	l.bubble.Move(pos)
 	l.bubble.Show()
+	// Container.Show, unlike Hide, does not repaint, and the label's
+	// SetText marked nothing dirty while the bubble was hidden (a hidden
+	// object has no canvas). Without an explicit refresh the bubble would
+	// appear only at the next unrelated redraw — on an idle window, never.
+	repaint := l.repaint
+	if repaint == nil {
+		repaint = c.Refresh
+	}
+	repaint(l.bubble)
 }
 
 // tooltipPlacement positions a bubble below its anchor, left-aligned with
