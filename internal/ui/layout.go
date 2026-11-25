@@ -197,11 +197,14 @@ func trimBoundariesRow(c *Controller) fyne.CanvasObject {
 
 func (c *Controller) buildStatusBar() *fyne.Container {
 	progressInfoSize := widget.NewLabel(progressInfoWidthSample).MinSize()
-	progressInfo := container.NewGridWrap(progressInfoSize, c.progressInfo)
-	status := container.NewHBox(c.status, progressInfo)
-	actions := container.NewHBox(c.startHint, c.start, c.cancel)
-
-	return container.NewBorder(nil, nil, status, actions, c.progress)
+	l := &statusBarLayout{
+		status:  c.status,
+		bar:     c.progress,
+		info:    container.NewGridWrap(progressInfoSize, c.progressInfo),
+		hint:    c.startHint,
+		actions: container.NewHBox(c.start, c.cancel),
+	}
+	return container.New(l, l.objects()...)
 }
 
 // moreMenu lists the rarely used profile actions and the application

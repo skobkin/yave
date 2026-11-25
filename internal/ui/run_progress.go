@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,34 +15,72 @@ import (
 	"git.skobk.in/skobkin/yave/internal/model"
 )
 
-// runProgressText renders the status line of a running export: percent
-// and ETA when the total duration is known (else the encoded position),
-// elapsed time, speed, bitrate and the current stage of a staged export.
-func runProgressText(p model.Progress, elapsed time.Duration, stage, stages int, durationKnown bool) string {
-	var parts []string
+// runProgressText renders the figures beside the progress bar, which
+// shows the percentage itself:
+//
+//	0:01 / ~0:05 · 2.9× · 31.0 MB
+//
+// Elapsed time comes first; with a known duration and enough progress it
+// is followed by the estimated total. With an unknown duration the
+// encoded position replaces the estimate. Speed and the output size so far
+// follow when FFmpeg reports them. The bitrate is left to the log: early
+// in a run it swings wildly and reads as noise.
+func runProgressText(p model.Progress, elapsed time.Duration, durationKnown bool) string {
+	timing := formatRunClock(elapsed)
 	if durationKnown {
-		parts = append(parts, fmt.Sprintf("%d%%", percentValue(p.Percentage)))
 		if eta, ok := estimateRemaining(p.Percentage, elapsed); ok {
-			parts = append(parts, "ETA "+formatClock(eta))
+			timing += " / ~" + formatRunClock(elapsed+eta)
 		}
 	} else {
-		parts = append(parts, formatClock(p.OutTime))
+		timing += " · " + formatRunClock(p.OutTime) + " encoded"
 	}
-	parts = append(parts, formatClock(elapsed)+" elapsed")
-	if speed := strings.TrimSpace(p.Speed); speed != "" && speed != "N/A" {
+	parts := []string{timing}
+	if speed := formatSpeed(p.Speed); speed != "" {
 		parts = append(parts, speed)
 	}
-	if bitrate := strings.TrimSpace(p.Bitrate); bitrate != "" && bitrate != "N/A" {
-		parts = append(parts, bitrate)
+	if p.TotalSize > 0 {
+		parts = append(parts, formatByteSize(p.TotalSize))
 	}
-	if stages > 1 && stage >= 1 {
-		parts = append(parts, fmt.Sprintf("stage %d/%d", min(stage, stages), stages))
-	}
-	return strings.Join(parts, " | ")
+	return strings.Join(parts, " · ")
 }
 
-// progressInfoWidthSample is the widest status line the label must fit.
-const progressInfoWidthSample = "100% | ETA 99h59m59s | 99h59m59s elapsed | 999.9x | 99999.9kbits/s | stage 9/9"
+// progressInfoWidthSample is the widest figures text the label must fit.
+const progressInfoWidthSample = "9:59:59 / ~9:59:59 · 999.9× · 1023.9 MB"
+
+// runPhaseText names what a running export is doing: "Converting" for a
+// single command, else the current stage's label ("Segment 2 of 3",
+// "Joining segments").
+func runPhaseText(label string, stages int) string {
+	if stages <= 1 || label == "" {
+		return "Converting"
+	}
+	return strings.ToUpper(label[:1]) + label[1:]
+}
+
+// formatRunClock renders a duration like a player clock: 0:05, 12:34,
+// 1:02:03. Negative values clamp to zero.
+func formatRunClock(d time.Duration) string {
+	d = max(d, 0).Round(time.Second)
+	h, m, s := int(d/time.Hour), int(d/time.Minute)%60, int(d/time.Second)%60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%d:%02d", m, s)
+}
+
+// formatSpeed turns FFmpeg's "2.86x" into "2.9×"; "N/A" and empty values
+// give "", anything unparsable is shown as reported.
+func formatSpeed(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "N/A" {
+		return ""
+	}
+	value, err := strconv.ParseFloat(strings.TrimSuffix(raw, "x"), 64)
+	if err != nil {
+		return raw
+	}
+	return strconv.FormatFloat(value, 'f', 1, 64) + "×"
+}
 
 // percentValue converts a 0..1 fraction to a whole percent, clamped so an
 // out-of-range or NaN value never shows nonsense.

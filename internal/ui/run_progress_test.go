@@ -11,37 +11,55 @@ import (
 func TestRunProgressText(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name          string
-		p             model.Progress
-		elapsed       time.Duration
-		stage, stages int
-		known         bool
-		want          string
+		name    string
+		p       model.Progress
+		elapsed time.Duration
+		known   bool
+		want    string
 	}{
 		{
-			"known duration with ETA", model.Progress{Percentage: 0.25, Speed: "2.0x", Bitrate: "3500.0kbits/s"},
-			time.Minute, 1, 1, true, "25% | ETA 3m00s | 1m00s elapsed | 2.0x | 3500.0kbits/s",
+			"known duration: elapsed / estimated total, speed, size",
+			model.Progress{Percentage: 0.25, Speed: "2.86x", Bitrate: "3500.0kbits/s", TotalSize: 31 << 20},
+			time.Minute, true, "1:00 / ~4:00 · 2.9× · 31.0 MB",
 		},
 		{
-			"staged export", model.Progress{Percentage: 0.5, Speed: "1.0x"},
-			2 * time.Minute, 2, 3, true, "50% | ETA 2m00s | 2m00s elapsed | 1.0x | stage 2/3",
+			"too early for an estimate", model.Progress{Percentage: 0.001, Speed: "N/A", Bitrate: "N/A"},
+			3 * time.Second, true, "0:03",
 		},
 		{
-			"too early for an ETA", model.Progress{Percentage: 0.001, Speed: "N/A", Bitrate: "N/A"},
-			3 * time.Second, 1, 1, true, "0% | 3s elapsed",
+			"unknown duration shows the encoded position", model.Progress{OutTime: 80 * time.Second, Speed: "1.5x"},
+			10 * time.Second, false, "0:10 · 1:20 encoded · 1.5×",
 		},
 		{
-			"unknown duration shows position, no percent", model.Progress{OutTime: 80 * time.Second, Speed: "1.5x"},
-			10 * time.Second, 1, 1, false, "1m20s | 10s elapsed | 1.5x",
+			"complete has no estimate", model.Progress{Percentage: 1},
+			time.Hour + time.Minute, true, "1:01:00",
 		},
 		{
-			"complete has no ETA", model.Progress{Percentage: 1},
-			time.Hour + time.Minute, 1, 1, true, "100% | 1h01m00s elapsed",
+			"unparsable speed is shown as reported", model.Progress{Speed: "fast"},
+			time.Second, true, "0:01 · fast",
 		},
 	}
 	for _, tt := range tests {
-		if got := runProgressText(tt.p, tt.elapsed, tt.stage, tt.stages, tt.known); got != tt.want {
+		if got := runProgressText(tt.p, tt.elapsed, tt.known); got != tt.want {
 			t.Errorf("%s:\n got %q\nwant %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestRunPhaseText(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		label  string
+		stages int
+		want   string
+	}{
+		{"conversion", 1, "Converting"},
+		{"segment 2 of 3", 3, "Segment 2 of 3"},
+		{"joining segments", 4, "Joining segments"},
+		{"", 2, "Converting"},
+	} {
+		if got := runPhaseText(tt.label, tt.stages); got != tt.want {
+			t.Errorf("runPhaseText(%q, %d) = %q, want %q", tt.label, tt.stages, got, tt.want)
 		}
 	}
 }

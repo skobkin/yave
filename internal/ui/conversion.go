@@ -110,6 +110,10 @@ func (c *Controller) refresh() {
 	} else {
 		c.start.Disable()
 	}
+	// While a run goes only Cancel is offered; a greyed Start beside it
+	// said nothing.
+	setShown(c.start, c.runControl == nil)
+	setShown(c.startHint, c.runControl == nil)
 }
 
 func (c *Controller) startConversion() {
@@ -289,9 +293,11 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 	c.cancelStage = cancellationRunning
 	c.cancelSince = time.Time{}
 	c.start.Disable()
+	setShown(c.start, false)
+	setShown(c.startHint, false)
 	c.cancel.SetText("Cancel")
 	c.cancel.Enable()
-	c.status.SetText("Running")
+	c.status.SetText(runPhaseText(job.stages[0].Label, len(job.stages)))
 	c.progress.SetValue(0)
 	c.setTrayProgress(0)
 	c.progressInfo.SetText("")
@@ -366,11 +372,15 @@ func (c *Controller) runJob(job *trimExportJob, messages []string) {
 				runLog.AppendLine(line)
 			},
 			OnProgress: func(p model.Progress) {
-				stage := stagesDone + 1
+				phase := runPhaseText(job.stages[min(stagesDone, len(job.stages)-1)].Label, len(job.stages))
 				c.dispatchUI(func() {
 					c.progress.SetValue(p.Percentage)
 					c.setTrayProgress(p.Percentage)
-					c.progressInfo.SetText(runProgressText(p, time.Since(runStarted), stage, len(job.stages), durationKnown))
+					c.progressInfo.SetText(runProgressText(p, time.Since(runStarted), durationKnown))
+					// "Canceling…" / "Terminating…" own the line once asked for.
+					if c.runControl == control && c.cancelStage == cancellationRunning && c.status.Text != phase {
+						c.status.SetText(phase)
+					}
 					c.setRunProgressTitle(percentValue(p.Percentage))
 				})
 			},

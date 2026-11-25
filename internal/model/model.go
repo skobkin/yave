@@ -337,6 +337,7 @@ type Progress struct {
 	OutTime    time.Duration
 	Speed      string
 	Bitrate    string
+	TotalSize  int64 // bytes written to the current output so far; 0 when unknown
 	Elapsed    time.Duration
 	Percentage float64
 	State      string

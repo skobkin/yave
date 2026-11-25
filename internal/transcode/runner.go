@@ -426,6 +426,10 @@ func ParseProgress(values map[string]string, duration time.Duration) model.Progr
 		State:   values["progress"],
 	}
 	p.Frame, _ = strconv.ParseInt(values["frame"], 10, 64)
+	// "N/A" (and anything else unparsable) leaves the size unknown.
+	if size, err := strconv.ParseInt(values["total_size"], 10, 64); err == nil && size > 0 {
+		p.TotalSize = size
+	}
 	if raw := values["out_time_us"]; raw != "" {
 		if micros, err := strconv.ParseInt(raw, 10, 64); err == nil {
 			p.OutTime = time.Duration(micros) * time.Microsecond

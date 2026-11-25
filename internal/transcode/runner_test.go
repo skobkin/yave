@@ -168,10 +168,14 @@ func TestParseProgress(t *testing.T) {
 		"out_time_us": "5000000",
 		"speed":       "2.0x",
 		"bitrate":     "900kbits/s",
+		"total_size":  "3145728",
 		"progress":    "continue",
 	}, 10*time.Second)
-	if p.Frame != 120 || p.OutTime != 5*time.Second || p.Percentage != 0.5 {
+	if p.Frame != 120 || p.OutTime != 5*time.Second || p.Percentage != 0.5 || p.TotalSize != 3145728 {
 		t.Fatalf("unexpected progress: %+v", p)
+	}
+	if p := ParseProgress(map[string]string{"total_size": "N/A"}, 0); p.TotalSize != 0 {
+		t.Fatalf("an N/A size must stay unknown, got %d", p.TotalSize)
 	}
 }
 

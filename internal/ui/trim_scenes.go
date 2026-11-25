@@ -127,6 +127,16 @@ func setVisible(o *fyne.Container, visible bool) {
 	}
 }
 
+// setShown shows or hides a widget, touching it only on a change.
+func setShown(o fyne.CanvasObject, visible bool) {
+	switch {
+	case visible && !o.Visible():
+		o.Show()
+	case !visible && o.Visible():
+		o.Hide()
+	}
+}
+
 func (c *Controller) setSceneStatus(text string) {
 	if c.sceneStatus != nil {
 		setStatusLabel(c.sceneStatus, text)
