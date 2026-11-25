@@ -215,8 +215,29 @@ func TestTrimEmptyBoundaryBlocksConversion(t *testing.T) {
 		t.Fatal("the last valid selection must survive for display")
 	}
 	c.updateTrimMessages("libx265", model.AudioSettings{})
-	if !strings.Contains(c.trimMessage.Text, "In timecode is required") {
-		t.Fatalf("validation message must surface the empty boundary: %q", c.trimMessage.Text)
+	if !c.trimInMark.Visible() {
+		t.Fatal("the empty In entry must be outlined as invalid")
+	}
+	if c.trimOutMark.Visible() {
+		t.Fatal("the valid Out entry must not be outlined")
+	}
+	if strings.Contains(c.trimMessage.Text, "timecode") {
+		t.Fatalf("an entry problem must not push a message line over the timeline: %q", c.trimMessage.Text)
+	}
+
+	c.trimIn.SetText("00:00:01")
+	c.setTrimBoundary("in", c.trimIn.Text)
+	c.updateTrimMessages("libx265", model.AudioSettings{})
+	if c.trimInMark.Visible() {
+		t.Fatal("a corrected entry must lose its outline")
+	}
+
+	c.trimIn.SetText("bad")
+	c.setTrimBoundary("in", c.trimIn.Text)
+	c.trimEnabled = false
+	c.updateTrimMessages("libx265", model.AudioSettings{})
+	if c.trimInMark.Visible() {
+		t.Fatal("trimming off must hide the outline")
 	}
 }
 

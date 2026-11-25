@@ -220,6 +220,8 @@ type Controller struct {
 	trimTimeline           *timeline
 	trimIn                 *widget.Entry
 	trimOut                *widget.Entry
+	trimInMark             *canvas.Rectangle // red outline over an invalid In entry
+	trimOutMark            *canvas.Rectangle // red outline over an invalid Out entry
 	trimSetIn              *widget.Button
 	trimSetOut             *widget.Button
 	trimReset              *widget.Button
@@ -227,7 +229,7 @@ type Controller struct {
 	trimAdd                *widget.Button
 	trimDelete             *widget.Button
 	trimDuration           *widget.Label
-	trimMessage            *widget.Label // trim validation: entry errors + copy warning
+	trimMessage            *widget.Label // trim validation and stream-copy notes; bad entries are outlined instead
 	previewStatus          *widget.Label // extraction/indexing status, separate from validation
 	previewTimeLabel       *widget.Label // timestamp of the displayed preview frame
 	hoverTimeLabel         *widget.Label // hovered timestamp, shown while hovering

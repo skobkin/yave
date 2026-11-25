@@ -188,8 +188,8 @@ func trimBoundariesRow(c *Controller) fyne.CanvasObject {
 	cellHeight := fyne.Max(c.trimIn.MinSize().Height, c.trimSetIn.MinSize().Height)
 	entryCell := fyne.NewSize(trimEntryWidth, cellHeight)
 	return container.NewHBox(
-		widget.NewLabel("In"), container.NewGridWrap(entryCell, c.trimIn), c.trimSetIn,
-		widget.NewLabel("Out"), container.NewGridWrap(entryCell, c.trimOut), c.trimSetOut,
+		widget.NewLabel("In"), container.NewGridWrap(entryCell, container.NewStack(c.trimIn, c.trimInMark)), c.trimSetIn,
+		widget.NewLabel("Out"), container.NewGridWrap(entryCell, container.NewStack(c.trimOut, c.trimOutMark)), c.trimSetOut,
 		widget.NewLabel("Duration"), c.trimDuration,
 		c.trimReset,
 	)

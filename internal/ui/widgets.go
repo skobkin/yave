@@ -225,6 +225,7 @@ func (c *Controller) createWidgets() {
 	})
 	c.trimOut.Validator = timestampValidator
 	c.trimOut.SetPlaceHolder("MM:SS.mmm or seconds")
+	c.trimInMark, c.trimOutMark = newInvalidMark(), newInvalidMark()
 	c.trimSetIn = widget.NewButton("Set In", c.setInFromPlayhead)
 	c.trimSetOut = widget.NewButton("Set Out", c.setOutFromPlayhead)
 	c.trimReset = widget.NewButton("Reset", func() {

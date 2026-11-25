@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"slices"
 	"sort"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -228,16 +230,14 @@ func (c *Controller) updateTrimMessages(encoder string, audio model.AudioSetting
 	// inputs of the last refresh; the stream-copy flag follows them.
 	c.trimMsgEncoder, c.trimMsgAudio = encoder, audio
 	c.trimCopyVideo = isCopyVideo(encoder)
+	// A bad In/Out entry is outlined in red rather than described here:
+	// a message line would push the timeline down on every keystroke of
+	// an edit in progress. Start stays blocked with the full wording
+	// (trimEntryIssues).
+	setInvalidMark(c.trimInMark, c.trimEnabled && !c.trimInValid)
+	setInvalidMark(c.trimOutMark, c.trimEnabled && !c.trimOutValid)
 	var parts []string
 	if c.trimEnabled {
-		for _, problem := range []string{
-			boundaryEntryProblem("In", c.trimInValid, c.trimIn.Text),
-			boundaryEntryProblem("Out", c.trimOutValid, c.trimOut.Text),
-		} {
-			if problem != "" {
-				parts = append(parts, problem)
-			}
-		}
 		result := validation.ValidateTrim(c.trimSelection, &c.media, encoder)
 		// Join-mode export checks (video-copy rejection, copied-FLAC
 		// encoder availability, audio-copy gap warning) merge here:
@@ -248,6 +248,32 @@ func (c *Controller) updateTrimMessages(encoder string, audio model.AudioSetting
 		parts = append(parts, c.keyframeNotes()...)
 	}
 	c.setTrimMessage(strings.Join(parts, "\n"))
+}
+
+// newInvalidMark builds the red outline drawn over a boundary entry whose
+// text does not parse. Fyne's own validation border appears only once
+// the entry loses focus; this one shows while typing. A rectangle has no
+// pointer handlers, so clicks pass through to the entry below.
+func newInvalidMark() *canvas.Rectangle {
+	r := canvas.NewRectangle(color.Transparent)
+	r.StrokeWidth = theme.InputBorderSize()
+	r.CornerRadius = theme.InputRadiusSize()
+	r.Hide()
+	return r
+}
+
+// setInvalidMark shows or hides an entry's invalid outline.
+func setInvalidMark(r *canvas.Rectangle, invalid bool) {
+	if r == nil || invalid == r.Visible() {
+		return
+	}
+	if invalid {
+		r.StrokeColor = theme.Color(theme.ColorNameError) // current theme variant
+		r.Show()
+	} else {
+		r.Hide()
+	}
+	r.Refresh()
 }
 
 // trimEntryIssues appends the blocking issues for invalid timecode
