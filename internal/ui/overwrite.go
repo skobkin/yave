@@ -50,7 +50,11 @@ func (c *Controller) showOverwriteDialog(existing []string, onOverwrite, onRenam
 	scroll := container.NewVScroll(label)
 	scroll.SetMinSize(fyne.NewSize(520, 160))
 
-	var d dialog.Dialog
+	// All three choices share the dialog's own button row, dismiss first
+	// as in every Fyne dialog, then the destructive choice, then the safe
+	// highlighted one.
+	d := dialog.NewCustomWithoutButtons("Overwrite output?", scroll, c.window)
+	cancel := widget.NewButton("Cancel", d.Hide)
 	overwrite := widget.NewButton("Overwrite", func() {
 		d.Hide()
 		onOverwrite()
@@ -61,8 +65,9 @@ func (c *Controller) showOverwriteDialog(existing []string, onOverwrite, onRenam
 		onRename()
 	})
 	rename.Importance = widget.HighImportance
-	d = dialog.NewCustom("Overwrite output?", "Cancel", container.NewBorder(nil,
-		container.NewHBox(overwrite, rename), nil, nil, scroll), c.window)
-	d.Resize(fyne.NewSize(600, 320))
+	d.SetButtons([]fyne.CanvasObject{cancel, overwrite, rename})
+	// Only the width is set: the height follows the content, so there is
+	// no empty band between the message and the buttons.
+	d.Resize(fyne.NewSize(600, d.MinSize().Height))
 	d.Show()
 }
