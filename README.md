@@ -7,7 +7,28 @@ FFmpeg commands, progress reporting, logs, and cancellation. On multi-GPU
 systems YAVE probes each render node through libva and automatically picks a
 VAAPI device that can actually encode the selected codec.
 
-![YAVE main window](docs/images/ui_main_video.webp)
+![YAVE main window: Input tab](docs/images/ui_input.webp)
+
+<details>
+<summary>More screenshots: Trim, Video, Audio &amp; Subtitles, Output</summary>
+
+### Trim
+
+![Trim tab](docs/images/ui_trim.webp)
+
+### Video
+
+![Video tab](docs/images/ui_video.webp)
+
+### Audio & Subtitles
+
+![Audio & Subtitles tab](docs/images/ui_audio.webp)
+
+### Output
+
+![Output tab](docs/images/ui_output.webp)
+
+</details>
 
 ## Requirements
 
